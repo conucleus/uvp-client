@@ -55,7 +55,7 @@ export function registerJobsCommands(program: Command): void {
 
   jobs
     .command('retry <jobId>')
-    .description('retry a detected, failed, callback-pending, submitted, or confirmed state-machine watcher job (confirmed retries resubmit for reorg recovery)')
+    .description('retry a detected, failed, callback-pending, submitted, completed, or confirmed state-machine watcher job (confirmed retries resubmit for reorg recovery; completed re-runs a void-handler job)')
     .requiredOption('--jobs-file <path>', 'state-machine watcher jobs JSON file')
     .requiredOption('--rpc-url <url>', 'EVM RPC URL')
     .option('--state-machine <address>', 'UVPStateMachine contract address; optional when config stateMachines[] is set')

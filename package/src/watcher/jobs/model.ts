@@ -10,6 +10,7 @@ export type StateMachineJobStatus =
   | 'matched'
   | 'submitted'
   | 'confirmed'
+  | 'completed'
   | 'failed'
   | 'ignored'
   | 'dead_letter';
@@ -130,7 +131,13 @@ export function isTerminalJobStatus(status: StateMachineJobStatus): boolean {
   // That is deliberately NON-terminal: until the chain confirms success the job
   // stays open so a later scan or manual retry can observe the real outcome
   // instead of trusting the broadcast (a reverted tx must never freeze as done).
+  // 'matched' is also non-terminal by design: it is either the in-flight run
+  // placeholder (claim held) or a converged dry-run pass waiting for a real
+  // pass. 'completed' IS terminal: a real-mode handler finished successfully
+  // with zero signals — a void execution is done, and re-running it on every
+  // later scan would replay the handler's external side effects forever.
   return status === 'confirmed'
+    || status === 'completed'
     || status === 'failed'
     || status === 'ignored'
     || status === 'dead_letter';

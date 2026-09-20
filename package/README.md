@@ -35,6 +35,8 @@ pnpm --filter @uvp-eth/executor-kit build
 and nothing republishes it automatically when `src/` changes: run the build
 before invoking the installed `uvp-executor` bin. Workspace consumers import
 the TypeScript sources through the package `exports` and never need `dist`.
+Packing (`pnpm pack` / `npm publish`) runs the build first via the `prepack`
+script, so a tarball never ships a `dist/` older than the `src/` beside it.
 
 ## Source Layout
 
@@ -374,6 +376,21 @@ Watcher job semantics:
   broadcast whose outcome is unknown leaves the job open (`submitted`) for the
   later-scan receipt recheck instead of dead-lettering it; only a receipt
   actually observed as reverted terminalizes the failure.
+- A re-run — manual `jobs retry` or a later scan of an open job — reconciles
+  the handler's returned signal set against recorded delivery evidence BY
+  CONTENT IDENTITY (the deterministic `submitSignal` calldata of each signal),
+  never by position in the returned array: delivered signals are answered from
+  their recorded evidence and never rebroadcast, and a signal that survives
+  into a retry can never inherit a delivered sibling's evidence (nor be
+  credited with it). Handlers should return their full signal set on every
+  run; an incremental subset that drops already-delivered signals is equally
+  safe.
+- A real-mode handler run that completes successfully with zero signals ends
+  terminal `completed`: a void execution is finished, not pending — its
+  handler's external side effects ran exactly once, later scans and restarts
+  never re-claim it, and `jobs retry` is the channel to re-open it when the
+  operator declares the void outcome wrong. Dry-run passes (void or not)
+  converge non-terminal in `matched` until a real pass or a manual retry runs.
 - Failures are classified from explicit machine-readable error codes first,
   then from well-known real-world error texts and contract revert data
   (for example `SignalAlreadyExists()`, `AccessControlUnauthorizedAccount`,
@@ -390,8 +407,9 @@ Watcher job semantics:
   delivered. (A handler that itself THROWS the duplicate classification still
   ends the job as terminal `ignored`: the handler is asserting a failure, not
   relaying a chain answer.) `jobs retry` also accepts `detected` jobs (crash
-  recovery: detection was persisted but the job never got a run) and
-  `confirmed` jobs: the retry resubmits every signal, which is the manual
+  recovery: detection was persisted but the job never got a run), `completed`
+  jobs (the operator declares the void-handler outcome wrong and re-runs it),
+  and `confirmed` jobs: the retry resubmits every signal, which is the manual
   recovery channel when a reorg flipped a confirmation off the canonical
   chain (the contract's `SignalAlreadyExists` dedupe on
   `(planId, orderId, sourceId, signalId)` absorbs the duplicate when the

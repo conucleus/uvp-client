@@ -1489,7 +1489,14 @@ describe('state machine chain watcher', () => {
         updatedAt: '2026-04-28T00:00:00.000Z',
         lastSignalAttemptAt: '2026-04-28T00:00:00.000Z',
         submissions: [
-          { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true } },
+          {
+            signalIndex: 0,
+            attempt: 1,
+            dryRun: false,
+            txHash: TX_HASH,
+            request: seedRequest('buyer', PAYLOAD_HASH),
+            error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true },
+          },
         ],
       });
 
@@ -1516,6 +1523,7 @@ describe('state machine chain watcher', () => {
           attempt,
           dryRun: false,
           txHash: TX_HASH,
+          request: seedRequest('buyer', PAYLOAD_HASH),
           error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true } as const,
         })),
       });
@@ -1575,6 +1583,7 @@ describe('state machine chain watcher', () => {
           attempt,
           dryRun: false,
           txHash: TX_HASH,
+          request: seedRequest('buyer', PAYLOAD_HASH),
           error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true } as const,
         })),
       });
@@ -1593,9 +1602,10 @@ describe('state machine chain watcher', () => {
     // must not resubmit signals whose delivery is already evidenced — the
     // chain would answer the already delivered one with SignalAlreadyExists
     // and the job would park in terminal `ignored`, which `jobs retry`
-    // rejects — a dead-locked job. Delivery evidence now means the receipt:
-    // the seeded signal-0 broadcast carries no observed receipt, so the retry
-    // re-checks it (mined success) and adopts it without rebroadcasting.
+    // rejects — a dead-locked job. Delivery evidence is reconciled by content
+    // identity: the seeded signal-0 broadcast carries no observed receipt, so
+    // the retry re-checks it (mined success) and adopts it without
+    // rebroadcasting.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -1644,10 +1654,11 @@ describe('state machine chain watcher', () => {
         updatedAt: '2026-04-28T00:00:01.000Z',
         attempts: 3,
         submissions: [
-          { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH },
+          { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, request: seedRequest('buyer') },
           {
             signalIndex: 1,
             attempt: 3,
+            request: seedRequest('seller'),
             error: { kind: 'rpc_network', message: 'fetch failed', retryable: true },
           },
         ],
@@ -1715,6 +1726,67 @@ describe('state machine chain watcher', () => {
       expect(submissions[0]?.error?.kind).toBe('duplicate_signal');
       expect(submissions[0]?.signalIndex).toBe(0);
       expect(submissions[1]).toMatchObject({ signalIndex: 1, dryRun: false, txHash: TX_HASH });
+    } finally {
+      await stub.close();
+      delete process.env[KEY_ENV];
+    }
+  });
+
+  it('reconciles an incremental retry return set by content identity instead of slot inheritance', async () => {
+    // Run 1 returned [A, B]: A confirmed, B failed and exhausted the run. The
+    // retry handler returns only [B]. Positional delivery bookkeeping
+    // credited B with A's slot-0 evidence: zero new broadcasts and a terminal
+    // `confirmed` while B never reached the chain — a silently lost on-chain
+    // signal behind a success ledger. Evidence attribution is by submitSignal
+    // calldata: B must broadcast its own request, whoever sat at slot 0
+    // before it.
+    process.env[KEY_ENV] = TEST_PRIVATE_KEY;
+    const stub = await startJsonRpcStub({
+      // Run 1: A broadcasts (call 1); B's three in-run attempts fail.
+      sendRawTransactionErrors: [2, 3, 4],
+    });
+    try {
+      let pendingOnly = false;
+      const buyerSignal = (orderId: Hex) => ({
+        planId: PLAN_ID, orderId, source: 'buyer', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH,
+      });
+      const sellerSignal = (orderId: Hex) => ({
+        planId: PLAN_ID, orderId, source: 'seller', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH,
+      });
+      const watcher = createStateMachineWatcher({
+        rpcUrl: stub.url,
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        privateKeyEnv: KEY_ENV,
+        publicClient: fakeReceiptClient(31_337, { status: 'success' }),
+        artifact: artifactIndex(),
+        retry: { maxAttempts: 3, baseDelayMs: 0 },
+        handlers: {
+          '*': (event) => pendingOnly
+            ? [sellerSignal(event.orderId)]
+            : [buyerSignal(event.orderId), sellerSignal(event.orderId)],
+        },
+      });
+
+      const first = await watcher.handleLog(hookReadyLog());
+      expect(first.job?.status).toBe('failed');
+      const sendsAfterRun1 = stub.methods.filter((method) => method === 'eth_sendRawTransaction').length;
+
+      // The incremental retry set: only the pending signal B comes back.
+      pendingOnly = true;
+      const retried = await retryStateMachineJob(watcher, first.job!.id, { operator: 'ops@example.com' });
+
+      // Exactly one new broadcast — B's own — and the ledger matches the
+      // chain: B's delivery is recorded under B's content identity.
+      expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction').length).toBe(sendsAfterRun1 + 1);
+      expect(retried.status).toBe('handled');
+      expect(retried.job?.status).toBe('confirmed');
+      expect(retried.submissions).toHaveLength(1);
+      const sellerIdentity = seedRequest('seller', PAYLOAD_HASH).data;
+      expect(retried.submissions[0]?.request.data).toBe(sellerIdentity);
+      const sellerDelivered = (retried.job?.submissions ?? []).filter(
+        (submission) => submission.request?.data === sellerIdentity && submission.confirmed === true);
+      expect(sellerDelivered).toHaveLength(1);
     } finally {
       await stub.close();
       delete process.env[KEY_ENV];
@@ -2006,6 +2078,108 @@ describe('state machine chain watcher', () => {
     expect(retried.job?.submissions).toHaveLength(1);
   });
 
+  it('converges a real-mode void-handler job to terminal completed and never re-runs it', async () => {
+    // A handler that finishes successfully with zero signals is a finished
+    // execution. Landing it non-terminal (`matched`) made every later scan
+    // re-claim and re-run the handler — its external side effects fired once
+    // per poll round, forever, across restarts, with only the chain's dedupe
+    // as a safety net (which cannot see off-chain effects at all).
+    let handlerRuns = 0;
+    const store = new InMemoryStateMachineJobStore();
+    const buildWatcher = (extra: Record<string, unknown> = {}) => createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      jobStore: store,
+      artifact: artifactIndex(),
+      handlers: {
+        '*': () => {
+          handlerRuns += 1;
+        },
+      },
+      ...extra,
+    });
+    const watcher = buildWatcher();
+
+    const first = await watcher.handleLog(hookReadyLog());
+    expect(first.job?.status).toBe('completed');
+    expect(handlerRuns).toBe(1);
+
+    // Terminal: a rescan does not even claim the job again.
+    const rescan = await watcher.handleLog(hookReadyLog());
+    expect(rescan.status).toBe('ignored');
+    expect(handlerRuns).toBe(1);
+
+    // Restart: a fresh watcher over the same persisted store must not
+    // re-claim the terminal job on the later-scan pass.
+    const restarted = buildWatcher({
+      fromBlock: 20,
+      publicClient: {
+        async getChainId() {
+          return 31_337;
+        },
+        async getBlockNumber() {
+          return 22n;
+        },
+        async getLogs() {
+          return [];
+        },
+      },
+    });
+    const poll = await restarted.pollOnce();
+    expect(poll.results).toHaveLength(0);
+    expect(handlerRuns).toBe(1);
+
+    // The manual retry stays the recovery channel when the void outcome is
+    // declared wrong (the handler now emits signals).
+    const jobId = first.job?.id;
+    if (!jobId) {
+      throw new Error('expected job id');
+    }
+    const retried = await retryStateMachineJob(watcher, jobId, { operator: 'ops@example.com' });
+    expect(handlerRuns).toBe(2);
+    expect(retried.job?.status).toBe('completed');
+  });
+
+  it('skips a concluded dry-run void pass without re-running the handler, and a real pass still runs it', async () => {
+    // The dry-run convergence guard asks whether a run CONCLUDED leaving the
+    // job matched, not whether simulated submissions exist: a void dry-run
+    // pass records nothing, and re-running it would replay the handler's side
+    // effects on every rescan all the same.
+    let handlerRuns = 0;
+    const store = new InMemoryStateMachineJobStore();
+    const buildWatcher = (dryRun?: boolean) => createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      jobStore: store,
+      artifact: artifactIndex(),
+      handlers: {
+        '*': () => {
+          handlerRuns += 1;
+        },
+      },
+      ...(dryRun ? { dryRun: true } : {}),
+    });
+
+    const dryRun = buildWatcher(true);
+    const first = await dryRun.handleLog(hookReadyLog());
+    expect(first.job?.status).toBe('matched');
+    expect(handlerRuns).toBe(1);
+    const replay = await dryRun.handleLog(hookReadyLog());
+    expect(replay.status).toBe('ignored');
+    expect(handlerRuns).toBe(1);
+
+    // Flipping dry-run off re-opens the same job for its real pass, which
+    // then converges terminally.
+    const real = buildWatcher();
+    const realRun = await real.handleLog(hookReadyLog());
+    expect(realRun.job?.status).toBe('completed');
+    expect(handlerRuns).toBe(2);
+  });
+
   it('records handler-context submitSignal broadcasts in the job audit trail', async () => {
     // The handler-context submitSignal channel must go through the job
     // submissions bookkeeping: a bypassing broadcast txHash would silently
@@ -2188,14 +2362,14 @@ describe('state machine chain watcher', () => {
       const second = await watcher.handleLog(hookReadyLog());
       // The context channel consults the prior broadcast's receipt before
       // sending again, so the mined success is adopted without a second
-      // transaction, and the run finishes. Recovery and recheck keep the
-      // prior broadcast's signal index, so both adopted records sit on slot -1.
+      // transaction, and the run finishes. The adopted record keeps the prior
+      // broadcast's signal index (slot -1) — one recovery record per fact,
+      // not one per scan that observed it.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(second.job?.status).toBe('confirmed');
       const submissions = second.job?.submissions ?? [];
-      expect(submissions).toHaveLength(3);
+      expect(submissions).toHaveLength(2);
       expect(submissions[1]).toMatchObject({ signalIndex: -1, dryRun: false, txHash: TX_HASH, confirmed: true });
-      expect(submissions[2]).toMatchObject({ signalIndex: -1, dryRun: false, txHash: TX_HASH, confirmed: true });
     } finally {
       await stub.close();
       delete process.env[KEY_ENV];
@@ -2647,7 +2821,14 @@ describe('state machine chain watcher', () => {
         status: 'submitted',
         updatedAt: new Date(at).toISOString(),
         submissions: [
-          { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true } },
+          {
+            signalIndex: 0,
+            attempt: 1,
+            dryRun: false,
+            txHash: TX_HASH,
+            request: seedRequest('buyer', PAYLOAD_HASH),
+            error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true },
+          },
         ],
       });
 
@@ -3996,6 +4177,25 @@ function artifactIndex() {
   };
 }
 
+/**
+ * Deterministic submitSignal calldata for a seeded buyer/seller signal: the
+ * content identity the watcher attributes cross-run delivery evidence by.
+ * Seeds must carry it — a record without its request cannot attribute
+ * evidence to a signal and forces a (dedupe-answered) resubmit instead.
+ */
+function seedRequest(source: 'buyer' | 'seller', payloadHash?: Hex) {
+  return buildSubmitStateMachineSignalCall(
+    { rpcUrl: 'http://127.0.0.1:8545', stateMachineAddress: STATE_MACHINE, chainId: 31_337 },
+    {
+      planId: PLAN_ID,
+      orderId: ORDER_ID,
+      source,
+      signalName: 'exec.main.cmp',
+      ...(payloadHash !== undefined ? { payloadHash } : {}),
+    },
+  );
+}
+
 type JsonRpcRequest = { readonly id?: unknown; readonly method?: string };
 
 /**
@@ -4005,6 +4205,8 @@ type JsonRpcRequest = { readonly id?: unknown; readonly method?: string };
  */
 async function startJsonRpcStub(options: {
   readonly estimateGasError?: { readonly code: number; readonly message: string; readonly times?: number };
+  /** 1-based eth_sendRawTransaction call indexes that fail with a network error. */
+  readonly sendRawTransactionErrors?: readonly number[];
 } = {}): Promise<{
   readonly url: string;
   readonly methods: string[];
@@ -4013,6 +4215,7 @@ async function startJsonRpcStub(options: {
   const methods: string[] = [];
   let estimateGasErrors = 0;
   const estimateGasErrorLimit = options.estimateGasError?.times ?? Number.POSITIVE_INFINITY;
+  let sendRawCalls = 0;
   const handlers: Record<string, () => unknown> = {
     eth_call: () => '0x',
     eth_estimateGas: () => '0x5208',
@@ -4064,6 +4267,16 @@ async function startJsonRpcStub(options: {
             id: body.id ?? id ?? 1,
             error: options.estimateGasError,
           };
+        }
+        if (body.method === 'eth_sendRawTransaction') {
+          sendRawCalls += 1;
+          if (options.sendRawTransactionErrors?.includes(sendRawCalls)) {
+            return {
+              jsonrpc: '2.0',
+              id: body.id ?? id ?? 1,
+              error: { code: -32603, message: 'Request timed out.' },
+            };
+          }
         }
         return {
           jsonrpc: '2.0',

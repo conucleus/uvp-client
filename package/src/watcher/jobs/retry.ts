@@ -83,7 +83,7 @@ export async function retryStateMachineJob(
   // explicit new run, so an exhausted retryable failure must get a fresh
   // budget; otherwise every failed job is immediately dead-lettered and the
   // documented `jobs retry` escape hatch is a dead channel.
-  if (job.attempts >= job.maxAttempts && job.status !== 'failed' && job.status !== 'confirmed') {
+  if (job.attempts >= job.maxAttempts && job.status !== 'failed' && job.status !== 'confirmed' && job.status !== 'completed') {
     if (job.status === 'submitted') {
       // Same refusal caliber as deadLetterStateMachineJob: a broadcast without
       // a confirmed receipt must be neither retried (blind replay risks a
@@ -184,6 +184,9 @@ function isRetriableStateMachineJobStatus(status: StateMachineJobStatus): boolea
   // a confirmation off the canonical chain while the job stays terminal
   // forever otherwise. The retry resubmits and the on-chain idempotency key
   // absorbs a duplicate when the signal actually survived.
+  // `completed` (a real-mode void-handler run) follows the same logic: the
+  // operator declares the void outcome wrong — the handler now emits signals —
+  // and the retry re-runs it.
   // `detected` is the crash-recovery channel: a process death between
   // upsertDetected and processing left the job with no run at all — refusing
   // it here (and only the later-scan pass being able to revive it) made a
@@ -192,6 +195,7 @@ function isRetriableStateMachineJobStatus(status: StateMachineJobStatus): boolea
     || status === 'failed'
     || status === 'matched'
     || status === 'submitted'
+    || status === 'completed'
     || status === 'confirmed';
 }
 

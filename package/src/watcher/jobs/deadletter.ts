@@ -28,7 +28,11 @@ export async function deadLetterStateMachineJob(
   if (!job) {
     throw new ValidationError(`job ${normalizedJobId} not found`);
   }
-  if (job.status === 'confirmed' || job.status === 'submitted') {
+  // Success states are not dead-letterable: `confirmed` (deliveries proven)
+  // and `completed` (a void-handler run that finished with nothing to
+  // broadcast) both ended in a terminal success, and `submitted` still has an
+  // unresolved broadcast whose receipt must be verified first.
+  if (job.status === 'confirmed' || job.status === 'completed' || job.status === 'submitted') {
     throw new ValidationError(`job ${normalizedJobId} cannot be dead-lettered from status ${job.status}`);
   }
   if (isHeldRunClaim(job.claim)) {

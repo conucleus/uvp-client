@@ -137,6 +137,10 @@ function stateMachineJobStatusToExecutorStatus(status: StateMachineJobStatus): E
     case 'submitted':
       return 'submitted';
     case 'confirmed':
+    // A completed void-handler run is a finished success on the product
+    // surface; the DTO vocabulary has no separate "done, nothing to deliver"
+    // slot, and minting one is not a product-facing fact.
+    case 'completed':
       return 'confirmed';
     case 'dead_letter':
       return 'dead_letter';

@@ -25,6 +25,7 @@ import {
   type NormalizedSubmitConfig,
   type StateMachinePublicClient,
   type StateMachineSignal,
+  type SubmitStateMachineSignalCall,
   type SubmitStateMachineSignalConfig,
 } from '../signal/build.js';
 import {
@@ -47,7 +48,8 @@ import {
   appendJobSubmission,
   broadcastTxHashFromError,
   carriesKnownRevert,
-  deliveredSignalIndexesFromSubmissions,
+  deliveredRequestDatasFromSubmissions,
+  isDeliveredSubmission,
   isUnconfirmedBroadcast,
   jobStatusForError,
   nextSubmissionAttempt,
@@ -55,7 +57,7 @@ import {
   statusForCompletedRun,
   statusForTerminalError,
   toJobSubmission,
-  unconfirmedBroadcastCount,
+  unresolvedBroadcasts,
 } from './execution/receipt.js';
 import {
   DEFAULT_RESEND_BACKOFF_BASE_DELAY_MS,
@@ -489,14 +491,17 @@ export class StateMachineWatcher {
         job,
       };
     }
-    // A finished dry-run pass is converged: re-running its handler would replay
+    // A `matched` job with no run claim is a concluded run's leftover. Under
+    // dry-run that pass already converged: re-running its handler would replay
     // handler side effects and pile simulated submissions onto the audit trail
-    // on every rescan. Flipping dry-run off, or a manual retry (which re-opens
-    // the job as `detected`), still re-runs the job for real.
+    // on every rescan — with or without recorded submissions (a void handler
+    // records none). Flipping dry-run off, or a manual retry (which re-opens
+    // the job as `detected`), still re-runs the job for real; a crashed
+    // mid-run job keeps its (dead) claim and is taken over instead of skipped.
     if (
-      this.config.dryRun
-      && job.status === 'matched'
-      && job.submissions.some((submission) => submission.dryRun === true)
+      job.status === 'matched'
+      && job.claim === undefined
+      && this.config.dryRun
     ) {
       return {
         status: 'ignored',
@@ -573,6 +578,7 @@ export class StateMachineWatcher {
     const submitSignalWithJobRetry = async (
       signal: StateMachineSignal,
       signalIndex: number,
+      identityRequest: SubmitStateMachineSignalCall,
     ): Promise<SubmitStateMachineSignalResult | DeferredBroadcastOutcome> => {
       let lastError: ClassifiedExecutorKitError | undefined;
       for (let attemptForSignal = 1; attemptForSignal <= this.config.retry.maxAttempts; attemptForSignal += 1) {
@@ -595,11 +601,15 @@ export class StateMachineWatcher {
           lastError = classified;
           // Fail-closed audit trail: a tx that was broadcast before the failure
           // (receipt reverted or receipt wait threw) must stay visible on the
-          // job, mirroring how chain-services failedResult carries txHash.
+          // job, mirroring how chain-services failedResult carries txHash. The
+          // request stays on the record too: cross-run delivery evidence is
+          // attributed by content identity, and an evidence-less record cannot
+          // be attributed to anything.
           const broadcastTxHash = broadcastTxHashFromError(error);
           jobSubmissions.push({
             signalIndex,
             attempt: attemptForSignal,
+            request: identityRequest,
             ...(broadcastTxHash ? { txHash: broadcastTxHash } : {}),
             error: classified,
           });
@@ -677,9 +687,7 @@ export class StateMachineWatcher {
         const priorRecords = jobSubmissions.filter((submission) => submission.request?.data === identityRequest.data);
         const deliveredPrior = options?.resubmitDelivered
           ? undefined
-          : priorRecords.find((submission) =>
-            submission.error?.kind === 'duplicate_signal'
-            || (!submission.error && submission.dryRun === false && submission.confirmed === true));
+          : priorRecords.find(isDeliveredSubmission);
         if (deliveredPrior?.txHash !== undefined && !deliveredPrior.dryRun) {
           // The chain already carries this signal by this job's own recorded
           // evidence; rebroadcasting could only collect another revert. Under
@@ -693,7 +701,7 @@ export class StateMachineWatcher {
           };
         }
         const unresolvedPrior = priorRecords
-          .filter((submission) => isUnconfirmedBroadcast(submission, submission.signalIndex))
+          .filter((submission) => isUnconfirmedBroadcast(submission))
           .at(-1);
         if (unresolvedPrior?.txHash !== undefined) {
           // Replay guard, same as the returned-signal lane: the prior
@@ -716,7 +724,7 @@ export class StateMachineWatcher {
             return recovered;
           }
           const priorUnconfirmed = priorRecords
-            .filter((submission) => isUnconfirmedBroadcast(submission, submission.signalIndex)).length;
+            .filter((submission) => isUnconfirmedBroadcast(submission)).length;
           const requiredDelayMs = resendBackoffDelayMs(this.config.resendBackoff, priorUnconfirmed);
           const lastAttemptAtMs = Date.parse(currentJob.lastSignalAttemptAt ?? '');
           if (
@@ -827,7 +835,6 @@ export class StateMachineWatcher {
     }
 
     const submissions: SubmitStateMachineSignalResult[] = [];
-    const signals = normalizeHandlerResult(handlerResult);
     // Records appended from this point on are "this run"; the offset separates
     // them from prior-run history for the terminal-status computation.
     const priorSubmissionCount = jobSubmissions.length;
@@ -851,16 +858,23 @@ export class StateMachineWatcher {
         job = withPlanId;
       }
     }
-    // Resume support: a signal whose delivery is evidenced (receipt-confirmed
-    // submission or duplicate_signal dedupe fact) is already on chain.
-    // Re-running the job — manual `jobs retry` or a later scan of an open
-    // job — must continue with the next pending signal instead of replaying
-    // delivered ones; replaying them would dead-lock multi-signal jobs in
-    // `ignored` on the first duplicate. Unconfirmed broadcasts are NOT here:
-    // the recheck below resolves them by receipt first.
-    const deliveredSignalIndexes = options?.resubmitDelivered
-      ? new Set<number>()
-      : deliveredSignalIndexesFromSubmissions(currentJob.submissions);
+    // Resume support, by content identity: a signal whose delivery is
+    // evidenced (receipt-confirmed submission or duplicate_signal dedupe fact)
+    // is already on chain. A re-run — manual `jobs retry` or a later scan of
+    // an open job — reconciles the handler's returned set against that
+    // evidence through each signal's deterministic calldata, so the run
+    // continues with the pending signals instead of rebroadcasting delivered
+    // ones. Handlers should return their full signal set every run, but an
+    // incremental subset is equally safe: identity, not position, decides what
+    // is delivered — a surviving signal can never inherit a delivered
+    // sibling's evidence, and a pending one can never be credited with it.
+    const resolvedSignals = normalizeHandlerResult(handlerResult).map((signal): StateMachineSignal => ({
+      ...signal,
+      ...(signal.planId === undefined && fallbackPlanId !== undefined ? { planId: fallbackPlanId } : {}),
+    }));
+    const deliveredRequestDatas = options?.resubmitDelivered
+      ? new Set<string>()
+      : deliveredRequestDatasFromSubmissions(currentJob.submissions);
     // Receipt recheck for every broadcast whose outcome is still unknown — the
     // returned-signal lane, the handler-context `submitSignal` lane, and
     // signals the handler no longer emits. A mined success settles the signal
@@ -868,10 +882,7 @@ export class StateMachineWatcher {
     // put the tx on chain (a `waitForReceipt:false` revert must not stay open
     // forever); a receipt that cannot be obtained leaves the signal open for
     // the next scan under the resend backoff.
-    for (const submission of [...currentJob.submissions]) {
-      if (submission.txHash === undefined || !isUnconfirmedBroadcast(submission, submission.signalIndex)) {
-        continue;
-      }
+    for (const submission of unresolvedBroadcasts(currentJob.submissions)) {
       let receiptStatus: 'success' | 'reverted' | undefined;
       try {
         receiptStatus = await this.lookupBroadcastReceipt(eventSubmitConfig, submission.txHash);
@@ -916,24 +927,49 @@ export class StateMachineWatcher {
           txHash: submission.txHash,
           confirmed: receiptStatus === 'success',
         });
+        deliveredRequestDatas.add(submission.request.data);
       }
-      deliveredSignalIndexes.add(submission.signalIndex);
       currentJob = await this.updateJob(job.id, {
         updatedAt: this.config.now(),
         submissions: jobSubmissions,
         clearLastError: true,
       });
     }
-    for (const [index, signal] of signals.entries()) {
-      if (deliveredSignalIndexes.has(index)) {
+    const identityDatas: string[] = [];
+    for (const [index, resolvedSignal] of resolvedSignals.entries()) {
+      // The identity build sits inside the run's failure handling on purpose: a
+      // structurally unbuildable signal (e.g. no resolvable planId) must fail
+      // THIS job through the classified terminal path, not escape the run.
+      let identityRequest: SubmitStateMachineSignalCall;
+      try {
+        identityRequest = buildSubmitStateMachineSignalCall(eventSubmitConfig, resolvedSignal);
+      } catch (error) {
+        const classified = error instanceof ClassifiedStateMachineError
+          ? error.classified
+          : classifyExecutorKitError(error);
+        const failed = await this.concludeRun(job.id, {
+          status: statusForTerminalError(error, classified, jobSubmissions),
+          updatedAt: this.config.now(),
+          attempts,
+          submissions: jobSubmissions,
+          lastError: classified,
+        });
+        return {
+          status: 'handled',
+          event,
+          matchedKey: resolved.key,
+          submissions,
+          job: failed,
+          error: classified,
+        };
+      }
+      identityDatas.push(identityRequest.data);
+      if (deliveredRequestDatas.has(identityRequest.data)) {
         continue;
       }
       try {
-        const resolvedSignal: StateMachineSignal = {
-          ...signal,
-          ...(signal.planId === undefined && fallbackPlanId !== undefined ? { planId: fallbackPlanId } : {}),
-        };
-        const priorUnconfirmedBroadcasts = unconfirmedBroadcastCount(currentJob.submissions, index);
+        const priorUnconfirmedBroadcasts = unresolvedBroadcasts(currentJob.submissions)
+          .filter((submission) => submission.request?.data === identityRequest.data).length;
         if (priorUnconfirmedBroadcasts > 0 && options?.bypassResendBackoff !== true) {
           // resend backoff: a rescan must not put the same transaction on
           // chain once per poll round — a growing, capped wait anchored to
@@ -949,7 +985,7 @@ export class StateMachineWatcher {
             continue;
           }
         }
-        const result = await submitSignalWithJobRetry(resolvedSignal, index);
+        const result = await submitSignalWithJobRetry(resolvedSignal, index, identityRequest);
         if ('deferredBroadcast' in result) {
           // The in-run replay guard deferred this signal (broadcast outcome
           // unknown, receipt unavailable): keep the job open for later scans.
@@ -958,7 +994,7 @@ export class StateMachineWatcher {
         }
         submissions.push(result);
         if (!result.dryRun) {
-          deliveredSignalIndexes.add(index);
+          deliveredRequestDatas.add(identityRequest.data);
         }
       } catch (error) {
         const classified = error instanceof ClassifiedStateMachineError
@@ -968,7 +1004,7 @@ export class StateMachineWatcher {
           // The chain already carries this signal: a deterministic dedupe fact,
           // not a failure. Count it as delivered and keep the remaining
           // signals progressing instead of parking the whole job.
-          deliveredSignalIndexes.add(index);
+          deliveredRequestDatas.add(identityRequest.data);
           continue;
         }
         const failed = await this.concludeRun(job.id, {
@@ -991,8 +1027,8 @@ export class StateMachineWatcher {
 
     const finalStatus = statusForCompletedRun({
       dryRun: this.config.dryRun,
-      deliveredSignalIndexes,
-      signals,
+      identityDatas,
+      deliveredRequestDatas,
       jobSubmissions,
       thisRunSubmissions: jobSubmissions.slice(priorSubmissionCount),
     });

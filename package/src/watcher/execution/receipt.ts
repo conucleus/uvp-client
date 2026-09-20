@@ -65,8 +65,13 @@ function* walkSubmissionErrorChain(error: unknown): Generator<Error> {
 }
 
 /**
- * Terminal status for a run that processed (or resumed) its signals, over both
- * submission lanes:
+ * Terminal status for a run that processed (or resumed) its signals. The
+ * returned-signal lane is reconciled BY CONTENT IDENTITY (the deterministic
+ * submitSignal calldata of each returned signal), never by position: a re-run
+ * may return a different subset than the failed run (e.g. only the pending
+ * signals), and a surviving signal must never inherit a delivered sibling's
+ * slot evidence — or the reverse, a pending signal being credited with a
+ * delivered sibling's proof.
  *
  * - `confirmed`: every signal — returned and handler-context — is delivered by
  *   evidence (an observed success receipt, or the chain's own
@@ -78,12 +83,18 @@ function* walkSubmissionErrorChain(error: unknown): Generator<Error> {
  *   broadcast (an unresolved broadcast keeps the job in the revisit lane
  *   whatever the handler now returns) and runs whose delivery evidence is a
  *   duplicate fact plus nothing else observed this run;
- * - `matched`: dry-runs and handler-only runs with nothing to broadcast.
+ * - `completed`: a real-mode handler run that finished successfully with
+ *   nothing to broadcast and nothing unresolved — a void handler is a finished
+ *   execution, not a job waiting for a recheck;
+ * - `matched`: dry-run passes (they converge non-terminal until a real pass or
+ *   a manual retry runs).
  */
 export function statusForCompletedRun(input: {
   readonly dryRun: boolean;
-  readonly deliveredSignalIndexes: ReadonlySet<number>;
-  readonly signals: readonly StateMachineSignal[];
+  /** Content identities (submitSignal calldata) of the signals the handler returned this run. */
+  readonly identityDatas: readonly string[];
+  /** Identities marked delivered — or merely broadcast — during this run. */
+  readonly deliveredRequestDatas: ReadonlySet<string>;
   readonly jobSubmissions: readonly StateMachineJobSubmission[];
   readonly thisRunSubmissions: readonly StateMachineJobSubmission[];
 }): StateMachineJobStatus {
@@ -91,79 +102,99 @@ export function statusForCompletedRun(input: {
     return 'matched';
   }
   // Delivery evidence is recomputed from the records, not taken from the
-  // in-run index set: that set also marks merely-sent signals (a
+  // in-run set: that set also marks merely-sent signals (a
   // waitForReceipt:false broadcast) which are not evidence of anything.
-  const provenDelivered = deliveredSignalIndexesFromSubmissions(input.jobSubmissions);
+  const provenDelivered = deliveredRequestDatasFromSubmissions(input.jobSubmissions);
+  // Context indexes are allocated monotonically across runs, so counting them
+  // per index stays content-safe here (the returned lane cannot make the same
+  // claim, which is why it counts identities instead).
+  const contextDelivered = new Set(
+    input.jobSubmissions
+      .filter((submission) => submission.signalIndex < 0 && isDeliveredSubmission(submission))
+      .map((submission) => submission.signalIndex),
+  );
   const contextSignalCount = new Set(
     input.jobSubmissions.filter((submission) => submission.signalIndex < 0).map((submission) => submission.signalIndex),
   ).size;
-  const deliveredContextCount = [...provenDelivered].filter((index) => index < 0).length;
-  const returnedComplete = input.signals.every((_signal, index) => provenDelivered.has(index));
-  const contextComplete = deliveredContextCount >= contextSignalCount;
-  const unprovenBroadcasts = input.jobSubmissions.filter((submission) =>
-    submission.dryRun !== true
-    && submission.txHash !== undefined
-    && submission.confirmed !== true
-    && submission.error?.kind !== 'duplicate_signal'
-    && !provenDelivered.has(submission.signalIndex),
-  ).length;
+  const returnedComplete = input.identityDatas.every((data) => provenDelivered.has(data));
+  const contextComplete = contextDelivered.size >= contextSignalCount;
+  const unprovenBroadcasts = unresolvedBroadcasts(input.jobSubmissions).length;
   const hasRealBroadcast = input.jobSubmissions.some((submission) => submission.dryRun !== true);
   if (
     returnedComplete
     && contextComplete
-    && input.signals.length + contextSignalCount > 0
+    && input.identityDatas.length + contextSignalCount > 0
     && unprovenBroadcasts === 0
   ) {
     return 'confirmed';
   }
-  if (input.thisRunSubmissions.length > 0 || input.deliveredSignalIndexes.size > 0 || hasRealBroadcast) {
+  if (input.thisRunSubmissions.length > 0 || input.deliveredRequestDatas.size > 0 || hasRealBroadcast) {
     return 'submitted';
   }
-  return 'matched';
+  return 'completed';
 }
 
 /**
- * Signal indexes that must not be (re)submitted: each has a prior real
- * (non-dry-run) submission whose delivery is evidenced — a duplicate_signal
- * response proving the chain already carries the signal, or a broadcast whose
- * receipt was observed as success. A broadcast without an observed receipt
+ * A record whose delivery is evidenced: a duplicate_signal response proving
+ * the chain already carries the signal, or a real broadcast whose receipt was
+ * observed as success. A broadcast without an observed receipt
  * (waitForReceipt:false) and a reverted receipt do NOT count: they are exactly
- * the facts later scans must re-check instead of trusting. Dry-run submissions
+ * the facts later scans must re-check instead of trusting. Dry-run records
  * never count — flipping dry-run off must still broadcast everything.
  */
-export function deliveredSignalIndexesFromSubmissions(
+export function isDeliveredSubmission(submission: StateMachineJobSubmission): boolean {
+  return submission.error?.kind === 'duplicate_signal'
+    || (!submission.error && submission.dryRun === false && submission.confirmed === true);
+}
+
+/**
+ * Content identities (submitSignal calldata) with delivery evidence, from the
+ * records. A record without a stored request cannot attribute its evidence to
+ * a content identity and does not contribute: the signal it belonged to is
+ * resubmitted and the chain's SignalAlreadyExists dedupe answers it — with
+ * the request recorded that time.
+ */
+export function deliveredRequestDatasFromSubmissions(
   submissions: readonly StateMachineJobSubmission[],
-): Set<number> {
-  const delivered = new Set<number>();
+): Set<string> {
+  const delivered = new Set<string>();
   for (const submission of submissions) {
-    if (submission.error?.kind === 'duplicate_signal'
-      || (!submission.error && submission.dryRun === false && submission.confirmed === true)) {
-      delivered.add(submission.signalIndex);
+    if (submission.request?.data !== undefined && isDeliveredSubmission(submission)) {
+      delivered.add(submission.request.data);
     }
   }
   return delivered;
 }
 
-/** A real broadcast of this signal whose outcome is still unknown. */
-export function isUnconfirmedBroadcast(submission: StateMachineJobSubmission, signalIndex: number): boolean {
-  return submission.signalIndex === signalIndex
-    && submission.dryRun !== true
+/** A real broadcast whose own outcome is still unknown. */
+export function isUnconfirmedBroadcast(submission: StateMachineJobSubmission): boolean {
+  return submission.dryRun !== true
     && submission.txHash !== undefined
-    && submission.error?.kind !== 'duplicate_signal'
-    && submission.confirmed !== true;
+    && submission.confirmed !== true
+    && submission.error?.kind !== 'duplicate_signal';
 }
 
 /**
- * Broadcast-but-unconfirmed attempts for one signal — both attempts that
- * failed after broadcasting (receipt wait threw) and attempts that returned
- * without a receipt (waitForReceipt:false). These are the recheck/resend
- * candidates: resolved by the receipt first, rebroadcast under backoff second.
+ * Broadcasts whose outcome is still unresolved: not confirmed by their own
+ * receipt, not answered by the chain's duplicate verdict, with no later
+ * record confirming the same transaction hash and no delivery evidence for
+ * their content identity. These are the recheck/resend candidates: resolved
+ * by the receipt first, rebroadcast under backoff second.
  */
-export function unconfirmedBroadcastCount(
+export function unresolvedBroadcasts(
   submissions: readonly StateMachineJobSubmission[],
-  signalIndex: number,
-): number {
-  return submissions.filter((submission) => isUnconfirmedBroadcast(submission, signalIndex)).length;
+): readonly (StateMachineJobSubmission & { readonly txHash: Hex })[] {
+  const provenDelivered = deliveredRequestDatasFromSubmissions(submissions);
+  const confirmedTxHashes = new Set(
+    submissions
+      .filter((submission) => submission.confirmed === true && submission.txHash !== undefined)
+      .map((submission) => submission.txHash),
+  );
+  return submissions.filter((submission): submission is StateMachineJobSubmission & { readonly txHash: Hex } =>
+    submission.txHash !== undefined
+    && isUnconfirmedBroadcast(submission)
+    && !confirmedTxHashes.has(submission.txHash)
+    && !(submission.request?.data !== undefined && provenDelivered.has(submission.request.data)));
 }
 
 /**
@@ -221,20 +252,10 @@ export function statusForTerminalError(
   classified: ClassifiedExecutorKitError,
   jobSubmissions: readonly StateMachineJobSubmission[],
 ): StateMachineJobStatus {
-  if (!carriesKnownRevert(error) && hasUnresolvedBroadcast(jobSubmissions)) {
+  if (!carriesKnownRevert(error) && unresolvedBroadcasts(jobSubmissions).length > 0) {
     return 'submitted';
   }
   return jobStatusForError(classified);
-}
-
-function hasUnresolvedBroadcast(submissions: readonly StateMachineJobSubmission[]): boolean {
-  const provenDelivered = deliveredSignalIndexesFromSubmissions(submissions);
-  return submissions.some((submission) =>
-    submission.dryRun !== true
-    && submission.txHash !== undefined
-    && submission.confirmed !== true
-    && submission.error?.kind !== 'duplicate_signal'
-    && !provenDelivered.has(submission.signalIndex));
 }
 
 /** True when the error chain proves a receipt was observed as 'reverted'. */
