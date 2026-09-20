@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+  push:
+    branches:
+      - dev
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: uvp-executor-kit
+
+      # package/package.json 依赖 @uvp-eth/protocol-bindings workspace:*，
+      # 本仓 pnpm-workspace.yaml 不含它——独立安装必须以姊妹仓形态供包。
+      # 跨仓私有 checkout 沿用伞仓 CI_SUBMODULE_TOKEN 模式；ref 用默认
+      # 分支，同 uvp-core 仓既有 ci.yml 检出 uvp-protocol 的形态。
+      - name: Checkout uvp-protocol (protocol-bindings)
+        uses: actions/checkout@v4
+        with:
+          repository: conucleus/uvp-protocol
+          path: uvp-protocol
+          fetch-depth: 1
+          token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+
+      # 复现伞仓 workspace 形态：本包 + 跨仓 workspace 依赖包合成一个
+      # 安装根；命令仍照伞仓对该包的跑法（typecheck/test/build）。
+      - name: Compose workspace root
+        run: |
+          cat > pnpm-workspace.yaml <<'EOF'
+          packages:
+            - "uvp-executor-kit/package"
+            - "uvp-protocol/packages/protocol-bindings"
+          EOF
+          printf '{"name":"ci-workspace","private":true,"packageManager":"pnpm@9.15.0"}' > package.json
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # 子仓无 pnpm-lock.yaml（锁定在伞仓根），不能开 pnpm 缓存。
+
+      - name: Install dependencies
+        # 伞仓用 --frozen-lockfile；子仓无 lockfile，显式 --no-frozen-lockfile。
+        run: pnpm install --no-frozen-lockfile
+        timeout-minutes: 5
+
+      - name: Typecheck
+        run: pnpm --filter @uvp-eth/executor-kit run typecheck
+        timeout-minutes: 8
+
+      - name: Test
+        run: pnpm --filter @uvp-eth/executor-kit run test
+        timeout-minutes: 10
+
+      - name: Build
+        run: pnpm --filter @uvp-eth/executor-kit run build
+        timeout-minutes: 12
