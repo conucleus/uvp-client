@@ -96,8 +96,8 @@ export interface StateMachineCapabilityTables {
 }
 
 /**
- * 抽出 artifact 索引里内嵌的两张能力词表。两表皆缺（或皆空）时返回
- * undefined：调用方按全零缺省提交，兼容不带词表的旧 artifact。
+ * 抽出 artifact 索引里内嵌的两张能力词表。两表皆缺（或皆空）意味着 plan
+ * 无词表：不存在成员证明可言，返回 undefined 让调用方按全零缺省提交。
  */
 export function capabilityTablesOf(
   artifact?: {
@@ -119,8 +119,9 @@ export function capabilityTablesOf(
 /**
  * 现场造证：能力树是 plan 冻结的，成员证明可由词表镜像随时重算。信号
  * 命中能力表（relation=0 属主）时补 attribution，并按属主阶段补
- * selectorBinding；词表外或不携词表时原样返回（全零缺省）。显式携带
- * 证明的信号不被覆盖。
+ * selectorBinding。镜像未命中时不猜测、原样返回（全零缺省）：携词表的
+ * plan 上链会被 InvalidSignalCapability 响亮拒绝，零词表 plan 才按
+ * source==stage 回退解析。显式携带证明的信号不被覆盖。
  */
 export function withCapabilityProofs(
   signal: StateMachineSignal,
