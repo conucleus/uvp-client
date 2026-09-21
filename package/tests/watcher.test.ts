@@ -2036,6 +2036,64 @@ describe('state machine chain watcher', () => {
     expect(watcher.describe().nextBlock).toBe('22');
   });
 
+  it('does not re-enter a scanned raw without a block number in the same round\'s later-scan pass', async () => {
+    // Providers and persisted raws can omit the block number, so the pass's
+    // height comparison cannot tell the raw sits inside this round's window —
+    // without the event-id dedupe the pass re-ran the job the scan loop had
+    // just handled, firing the handler's off-chain effects twice in one round.
+    process.env[KEY_ENV] = TEST_PRIVATE_KEY;
+    const stub = await startJsonRpcStub();
+    try {
+      let handlerRuns = 0;
+      const rawWithoutBlock = { ...hookReadyLog(), blockNumber: undefined };
+      const watcher = createStateMachineWatcher({
+        rpcUrl: stub.url,
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        privateKeyEnv: KEY_ENV,
+        waitForReceipt: false,
+        fromBlock: 12,
+        publicClient: {
+          async getChainId() {
+            return 31_337;
+          },
+          async getBlockNumber() {
+            return 20n;
+          },
+          async getLogs() {
+            return [rawWithoutBlock];
+          },
+          async getTransactionReceipt() {
+            return null;
+          },
+        },
+        artifact: artifactIndex(),
+        handlers: {
+          '*': (event) => {
+            handlerRuns += 1;
+            return {
+              planId: PLAN_ID,
+              orderId: event.orderId,
+              source: 'buyer',
+              signalName: 'exec.main.cmp',
+              payloadHash: PAYLOAD_HASH,
+            };
+          },
+        },
+      });
+
+      const poll = await watcher.pollOnce();
+
+      expect(handlerRuns).toBe(1);
+      expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
+      expect(poll.results.filter((result) => result.event !== undefined)).toHaveLength(1);
+      expect(poll.results[0]?.job?.status).toBe('submitted');
+    } finally {
+      await stub.close();
+      delete process.env[KEY_ENV];
+    }
+  });
+
   it('rechecks the receipt of an unconfirmed broadcast when a later scan revisits the job', async () => {
     // A waitForReceipt:false broadcast returned without error and was
     // permanently counted as delivered — a reverted tx could never be
@@ -3124,6 +3182,35 @@ describe('state machine chain watcher', () => {
       await stub.close();
       delete process.env[KEY_ENV];
     }
+  });
+
+  it('keeps dry-run submissions off the resend backoff anchor', async () => {
+    // The anchor throttles real rebroadcasts; a dry-run pass never broadcast
+    // anything, so anchoring on it would stall the first real rebroadcast once
+    // the operator flips dry-run off.
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      dryRun: true,
+      artifact: artifactIndex(),
+      handlers: {
+        '*': (event) => ({
+          planId: PLAN_ID,
+          orderId: event.orderId,
+          source: 'buyer',
+          signalName: 'exec.main.cmp',
+          payloadHash: PAYLOAD_HASH,
+        }),
+      },
+    });
+
+    const result = await watcher.handleLog(hookReadyLog());
+
+    expect(result.job?.submissions).toHaveLength(1);
+    expect(result.job?.submissions[0]?.dryRun).toBe(true);
+    expect(result.job?.lastSignalAttemptAt).toBeUndefined();
   });
 
   it('resends immediately when the backoff anchor is missing instead of starving the signal', async () => {

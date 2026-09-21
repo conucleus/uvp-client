@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, it } from 'node:test';
+import type { Hex } from 'viem';
 import {
   acquireWatcherStateDirLock,
   createStateMachineWatcher,
@@ -15,6 +16,7 @@ import {
   InMemoryStateMachineJobStore,
   retryStateMachineJob,
   stateMachineJobId,
+  type StateMachineJobPatch,
 } from '../src/watcher/index.js';
 import { main } from '../src/cli.js';
 
@@ -575,5 +577,132 @@ describe('watcher 任务级运行认领', () => {
     });
     assert.equal(released?.status, 'failed');
     assert.equal(released?.claim, undefined, 'the conclusive status write releases the claim');
+  });
+
+  it('missing-handler 终态写入不得清掉并发活认领：旁路执行器让位，任务保持 matched', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-run-claim-missing-'));
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolveStarted) => { entered = resolveStarted; });
+    const blocked = new Promise<void>((resolveBlocked) => { release = resolveBlocked; });
+    const store = new FileStateMachineJobStore(join(dir, 'jobs.json'));
+    const build = (handlers: Record<string, () => Promise<void>>) => createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:1',
+      stateMachineAddress: machine,
+      chainId: 31_337,
+      walletAddress: wallet,
+      privateKeyEnv: 'UVP_RUN_CLAIM_UNUSED_KEY',
+      dryRun: true,
+      jobStore: store,
+      handlers,
+    });
+    try {
+      const running = build({ '*': async () => { entered(); await blocked; } });
+      // 旁路执行器没有该事件的 handler：扫描同一日志会走 missing-handler
+      // 终态写入路径。
+      const bystander = build({});
+      const log = await hookReadyLog();
+      const active = running.handleLog(log);
+      await started;
+
+      const bystanded = await bystander.handleLog(log);
+      assert.equal(bystanded.status, 'skipped', 'a live claim must beat the missing-handler verdict');
+      assert.equal(bystanded.error, undefined, 'the bystander must not stamp its classification onto the concurrent run');
+
+      const jobId = stateMachineJobId(decodeHookReadyLog(log));
+      const duringRun = await store.get(jobId);
+      assert.equal(duringRun?.status, 'matched', 'the verdict must not flip the running job terminal');
+      assert.ok(duringRun?.claim, 'the verdict must not clear the live claim');
+      assert.equal(duringRun?.lastError, undefined, 'the verdict must not stamp its error onto the running job');
+
+      release();
+      const settled = await active;
+      assert.equal(settled.job?.status, 'matched', 'the blocked run still concludes its own dry-run outcome');
+    } finally {
+      release?.();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('undecodable log 的隔离写入不得清掉并发活认领', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-run-claim-isolate-'));
+    const store = new FileStateMachineJobStore(join(dir, 'jobs.json'));
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:1',
+      stateMachineAddress: machine,
+      chainId: 31_337,
+      walletAddress: wallet,
+      privateKeyEnv: 'UVP_RUN_CLAIM_UNUSED_KEY',
+      dryRun: true,
+      jobStore: store,
+      handlers: {},
+    });
+    try {
+      const log = await hookReadyLog();
+      const broken = { ...log, data: '0xdeadbeef' as Hex };
+      const first = await watcher.handleLog(broken);
+      assert.equal(first.status, 'ignored');
+      assert.ok(first.job?.id, 'precondition: the undecodable log is isolated as a job');
+      const jobId = first.job.id;
+
+      // 模拟并发执行器接管同一任务：重开并认领（matched + 本进程活认领）。
+      await store.update(jobId, {
+        status: 'matched',
+        updatedAt: new Date().toISOString(),
+        claim: { pid: process.pid, at: new Date().toISOString() },
+      });
+
+      const second = await watcher.handleLog(broken);
+      assert.equal(second.status, 'skipped', 'a live claim must beat the undecodable-log isolation verdict');
+      assert.equal(second.decodeFailure, true);
+
+      const stored = await store.get(jobId);
+      assert.equal(stored?.status, 'matched', 'the isolation verdict must not flip the running job terminal');
+      assert.ok(stored?.claim, 'the isolation verdict must not clear the live claim');
+      assert.equal((await store.list()).length, 1, 'the same log must not create a second job');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('missing-handler 裁决在 CAS 失败时让位：并发落下的操作员裁决不被覆盖', async () => {
+    // 读后写竞态窗口：裁决读取到的是 detected（无认领），写入前操作员
+    // dead-letter 先落地。裁决的 CAS 守卫必须拒写并报告存储中的任务，
+    // 而不是把 dead_letter 覆盖成 ignored。
+    class RacingVerdictStore extends InMemoryStateMachineJobStore {
+      private raced = false;
+
+      override async update(jobId: Hex, patch: StateMachineJobPatch) {
+        if (!this.raced && patch.status === 'ignored') {
+          this.raced = true;
+          await super.update(jobId, {
+            status: 'dead_letter',
+            updatedAt: new Date().toISOString(),
+            lastError: { kind: 'unknown', message: 'operator verdict', retryable: false },
+            claim: null,
+          });
+        }
+        return super.update(jobId, patch);
+      }
+    }
+
+    const store = new RacingVerdictStore();
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:1',
+      stateMachineAddress: machine,
+      chainId: 31_337,
+      walletAddress: wallet,
+      privateKeyEnv: 'UVP_RUN_CLAIM_UNUSED_KEY',
+      dryRun: true,
+      jobStore: store,
+      handlers: {},
+    });
+
+    const result = await watcher.handleLog(await hookReadyLog());
+
+    assert.equal(result.status, 'ignored', 'the stored terminal verdict decides the scan-level status');
+    assert.equal(result.error, undefined, 'the lost race must not misattribute its own classification');
+    assert.equal(result.job?.status, 'dead_letter', 'the operator verdict must survive the verdict write');
+    assert.equal(result.job?.lastError?.message, 'operator verdict');
   });
 });

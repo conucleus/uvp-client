@@ -7,6 +7,7 @@ import { buildProductSubmitTypedData } from '@uvp-eth/protocol-bindings';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WATCHER_STATE_DIR,
+  EXECUTOR_RUNTIME_ENV,
   chainPollExecutionFailed,
   executionOutcomeFailed,
   main,
@@ -503,6 +504,94 @@ describe('honest execution exit codes', () => {
       expect(process.exitCode).toBe(1);
     } finally {
       process.exitCode = previousExitCode;
+      console.log = originalLog;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('registers --runtime-env/--confirmations on jobs retry and enforces the shared finality gate', async () => {
+    // jobs retry 与 chain-* 共用同一 watcher 构造：这两个旗标不在 retry 入口
+    // 注册时，重试要么被拒为未知旗标，要么静默丢失执行参数并绕过非 local
+    // finality 强检。
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-retry-flags-'));
+    const jobsFile = join(dir, 'jobs.json');
+    const configPath = join(dir, 'executor.json');
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (message?: unknown) => {
+      logs.push(String(message));
+    };
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const previousRuntimeEnv = process.env[EXECUTOR_RUNTIME_ENV];
+    delete process.env[EXECUTOR_RUNTIME_ENV];
+    try {
+      await writeFile(jobsFile, JSON.stringify({
+        version: 1,
+        jobs: [{
+          id: RETRY_JOB_ID,
+          eventId: RETRY_EVENT_ID,
+          orderId: RETRY_ORDER_ID,
+          planId: RETRY_PLAN_ID,
+          hookId: RETRY_HOOK_ID,
+          stageId: RETRY_STAGE_ID,
+          stageIdentifier: 'exec.main',
+          hookName: 'START',
+          status: 'failed',
+          attempts: 1,
+          maxAttempts: 3,
+          detectedAt: '2026-04-28T00:00:00.000Z',
+          updatedAt: '2026-04-28T00:00:01.000Z',
+          submissions: [],
+          raw: RETRY_RAW_LOG,
+        }],
+      }));
+      await writeFile(configPath, JSON.stringify({
+        supplierId: 'logistics-provider-a',
+        walletAddress: RETRY_WALLET,
+        chainId: 31_337,
+        stateMachineAddress: RETRY_STATE_MACHINE,
+        artifact: {
+          hooksByHookId: {
+            [RETRY_HOOK_ID]: { stageIdentifier: 'exec.main', hookName: 'START' },
+          },
+        },
+        handlers: {
+          '*': {
+            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+          },
+        },
+      }));
+
+      const retryArgv = (extra: readonly string[]): string[] => [
+        'node', 'uvp-executor', 'jobs', 'retry', RETRY_JOB_ID,
+        '--jobs-file', jobsFile,
+        '--rpc-url', 'http://127.0.0.1:8545',
+        '--state-machine', RETRY_STATE_MACHINE,
+        '--chain-id', '31337',
+        '--config', configPath,
+        '--operator', 'ops@example.com',
+        '--wallet-address', RETRY_WALLET,
+        '--dry-run',
+        ...extra,
+      ];
+
+      // 非 local 运行环境未显式给 finality 缓冲：与 chain-* 同一条强检拒绝。
+      await expect(main(retryArgv(['--runtime-env', 'staging'])))
+        .rejects.toThrow(/confirmations must be explicitly configured/);
+
+      // 显式补齐后同一入口照常重投，参数真实进入 watcher 构造。
+      await main(retryArgv(['--runtime-env', 'staging', '--confirmations', '3']));
+      const output = JSON.parse(logs[0] ?? '{}') as { retry?: { status?: string; job?: { status?: string } } };
+      expect(output.retry?.status).toBe('handled');
+      expect(output.retry?.job?.status).toBe('matched');
+    } finally {
+      process.exitCode = previousExitCode;
+      if (previousRuntimeEnv === undefined) {
+        delete process.env[EXECUTOR_RUNTIME_ENV];
+      } else {
+        process.env[EXECUTOR_RUNTIME_ENV] = previousRuntimeEnv;
+      }
       console.log = originalLog;
       await rm(dir, { recursive: true, force: true });
     }

@@ -76,9 +76,6 @@ export function registerJobsCommands(program: Command): void {
       // retry 本身不驱动扫描，但它与 chain-* 共用同一 watcher 构造与
       // 非 local finality 强检；透传同一对旗标让入口遵守同一条门禁规则，
       // 而不是为单一入口放宽共享的规范化强检。
-      // README 承诺 file 模式下不停机手工重投：retry 不取 state-dir 启动锁
-      // （与运行中的 watcher 共存）。并发安全由任务级运行认领承担：正在被
-      // 其它执行器运行的任务会被拒绝，只有空闲或持有者已崩溃的任务可接管。
       const { watcher } = await buildStateMachineWatcherFromCli(options, { holdStateDirLock: false });
       const result = await retryStateMachineJob(watcher, jobId, {
         operator: options.operator,
