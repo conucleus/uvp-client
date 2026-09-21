@@ -31,6 +31,8 @@ import {
   type StateMachineRawLog,
 } from '../src/watcher/index.js';
 import { ValidationError } from '../src/validation.js';
+import { statusForCompletedRun } from '../src/watcher/execution/receipt.js';
+import type { StateMachineJobSubmission } from '../src/watcher/jobs/model.js';
 
 const STATE_MACHINE = '0x0000000000000000000000000000000000000001';
 const STATE_MACHINE_V2 = '0x0000000000000000000000000000000000000009';
@@ -41,6 +43,7 @@ const HOOK_ID = `0x${'22'.repeat(32)}` as Hex;
 const STAGE_ID = `0x${'55'.repeat(32)}` as Hex;
 const HOOK_NAME_ID = `0x${'66'.repeat(32)}` as Hex;
 const TX_HASH = `0x${'33'.repeat(32)}` as Hex;
+const TX_HASH_2 = `0x${'35'.repeat(32)}` as Hex;
 const PAYLOAD_HASH = `0x${'44'.repeat(32)}` as Hex;
 const BUYER_SOURCE_ID = keccak256(stringToBytes('buyer'));
 const EXEC_MAIN_CMP_ID = keccak256(stringToBytes('exec.main.cmp'));
@@ -2781,6 +2784,167 @@ describe('state machine chain watcher', () => {
     }
   });
 
+  it('terminally converges an incremental empty return once every signal is delivered', async () => {
+    // README blesses the incremental subset return: a handler may return only
+    // its pending signals, and when everything is already delivered that set
+    // is legitimately empty. Landing that run in the open `submitted` lane
+    // re-claimed and re-ran the handler (its off-chain effects) on every scan
+    // forever while no receipt was ever going to change the outcome — the
+    // ledger said "all delivered" and the status machine never terminated.
+    process.env[KEY_ENV] = TEST_PRIVATE_KEY;
+    const stub = await startJsonRpcStub();
+    try {
+      let pendingOnly = false;
+      let handlerRuns = 0;
+      const watcher = createStateMachineWatcher({
+        rpcUrl: stub.url,
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        privateKeyEnv: KEY_ENV,
+        waitForReceipt: false,
+        publicClient: {
+          async getChainId() {
+            return 31_337;
+          },
+          async getBlockNumber() {
+            return 12n;
+          },
+          async getLogs() {
+            return [];
+          },
+          async getTransactionReceipt() {
+            return pendingOnly ? { status: 'success' } : null;
+          },
+        },
+        artifact: artifactIndex(),
+        handlers: {
+          '*': (event) => {
+            handlerRuns += 1;
+            return pendingOnly
+              ? []
+              : ([
+                { planId: PLAN_ID, orderId: event.orderId, source: 'buyer', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH },
+                { planId: PLAN_ID, orderId: event.orderId, source: 'seller', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH },
+              ]);
+          },
+        },
+      });
+
+      // Run 1: both signals broadcast, receipts unavailable — open lane.
+      const first = await watcher.handleLog(hookReadyLog());
+      expect(first.job?.status).toBe('submitted');
+      expect(handlerRuns).toBe(1);
+
+      // Run 2: both receipts now observed as success; the handler's
+      // incremental return is empty because nothing is pending. The job must
+      // terminate instead of re-opening for a re-run every scan.
+      pendingOnly = true;
+      const second = await watcher.handleLog(hookReadyLog());
+      expect(handlerRuns).toBe(2);
+      expect(second.job?.status).toBe('confirmed');
+      expect(second.job?.lastError).toBeUndefined();
+
+      // Terminal: a third scan does not re-run the handler at all.
+      const third = await watcher.handleLog(hookReadyLog());
+      expect(third.status).toBe('ignored');
+      expect(handlerRuns).toBe(2);
+    } finally {
+      await stub.close();
+      delete process.env[KEY_ENV];
+    }
+  });
+
+  it('terminally converges a context signal whose resend confirmed while the original receipt stays unknown', async () => {
+    // One logical context signal can occupy several indexes across runs: the
+    // first broadcast's receipt may stay unknown forever, so a later scan
+    // rebroadcasts under a fresh index and THAT transaction confirms. From
+    // then on the signal is delivered by content identity, but counting
+    // delivered indexes against allocated indexes kept the job in the open
+    // `submitted` lane forever (the old index's receipt is never coming), and
+    // the handler re-ran on every scan.
+    process.env[KEY_ENV] = TEST_PRIVATE_KEY;
+    const stub = await startJsonRpcStub({
+      sendRawTransactionTxHashes: [TX_HASH, TX_HASH_2],
+    });
+    try {
+      let handlerRuns = 0;
+      let receiptForSecondBroadcast = false;
+      const watcher = createStateMachineWatcher({
+        rpcUrl: stub.url,
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        privateKeyEnv: KEY_ENV,
+        waitForReceipt: false,
+        resendBackoff: { baseDelayMs: 0, maxDelayMs: 0 },
+        publicClient: {
+          async getChainId() {
+            return 31_337;
+          },
+          async getBlockNumber() {
+            return 12n;
+          },
+          async getLogs() {
+            return [];
+          },
+          async getTransactionReceipt({ hash }) {
+            // The first broadcast's receipt is permanently unavailable; the
+            // resend's receipt resolves once the run asks for it.
+            if (hash === TX_HASH_2) {
+              return receiptForSecondBroadcast ? { status: 'success' } : null;
+            }
+            return null;
+          },
+        },
+        artifact: artifactIndex(),
+        handlers: {
+          '*': async (event, context) => {
+            handlerRuns += 1;
+            await context.submitSignal({
+              planId: PLAN_ID,
+              orderId: event.orderId,
+              source: 'buyer',
+              signalName: 'exec.main.cmp',
+              payloadHash: PAYLOAD_HASH,
+            });
+          },
+        },
+      });
+
+      // Run 1: context broadcast (tx 1) with an unavailable receipt — the job
+      // stays open for the later-scan recheck.
+      const first = await watcher.handleLog(hookReadyLog());
+      expect(first.job?.status).toBe('submitted');
+      expect(handlerRuns).toBe(1);
+      const firstSubmissions = first.job?.submissions ?? [];
+      expect(firstSubmissions.map((submission) => submission.signalIndex)).toEqual([-1]);
+
+      // Run 2: the receipt is still unknown, the resend backoff is disabled —
+      // the same logical signal is rebroadcast under a new index.
+      const second = await watcher.handleLog(hookReadyLog());
+      expect(handlerRuns).toBe(2);
+      expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2);
+      expect(second.job?.status).toBe('submitted');
+      expect(second.job?.submissions.map((submission) => submission.signalIndex)).toEqual([-1, -2]);
+
+      // Run 3: the resend's receipt confirms. The signal is delivered by its
+      // content identity — the job must terminate even though the old index's
+      // receipt is never observed.
+      receiptForSecondBroadcast = true;
+      const third = await watcher.handleLog(hookReadyLog());
+      expect(handlerRuns).toBe(3);
+      expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2);
+      expect(third.job?.status).toBe('confirmed');
+
+      // Terminal: a fourth scan does not re-run the handler.
+      const fourth = await watcher.handleLog(hookReadyLog());
+      expect(fourth.status).toBe('ignored');
+      expect(handlerRuns).toBe(3);
+    } finally {
+      await stub.close();
+      delete process.env[KEY_ENV];
+    }
+  });
+
   it('resends immediately when the backoff anchor is missing instead of starving the signal', async () => {
     // the anchor fell back to updatedAt, which is rewritten on unrelated
     // bookkeeping every round — jobs persisted before lastSignalAttemptAt
@@ -4144,6 +4308,88 @@ describe('submitSignal receipt visibility', () => {
   });
 });
 
+describe('run terminal-status computation', () => {
+  const buyerRequest = seedRequest('buyer', PAYLOAD_HASH);
+  const sellerRequest = seedRequest('seller', PAYLOAD_HASH);
+
+  it('confirms the incremental empty return when every recorded signal is delivered', () => {
+    // The handler returns its pending subset; when everything is already
+    // delivered that subset is empty and the vacuous every() must not sink
+    // the run into the open lane — the delivery history is the payload.
+    const status = statusForCompletedRun({
+      dryRun: false,
+      identityDatas: [],
+      jobSubmissions: [
+        { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest, confirmed: true },
+        { signalIndex: 1, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: sellerRequest, confirmed: true },
+      ],
+    });
+    expect(status).toBe('confirmed');
+  });
+
+  it('keeps the zero-history void run terminal completed', () => {
+    // Nothing was ever delivered and nothing is pending: a void handler is a
+    // finished execution, not a job waiting for a recheck.
+    expect(statusForCompletedRun({
+      dryRun: false,
+      identityDatas: [],
+      jobSubmissions: [],
+    })).toBe('completed');
+    // A void return after attempts that never reached the chain terminates
+    // the same way: no broadcast is outstanding, so nothing can still land.
+    expect(statusForCompletedRun({
+      dryRun: false,
+      identityDatas: [],
+      jobSubmissions: [
+        { signalIndex: 0, attempt: 1, request: buyerRequest, error: { kind: 'rpc_network', message: 'fetch failed', retryable: true } },
+      ],
+    })).toBe('completed');
+  });
+
+  it('keeps dry-run passes non-terminal', () => {
+    expect(statusForCompletedRun({
+      dryRun: true,
+      identityDatas: [buyerRequest.data],
+      jobSubmissions: [{ signalIndex: 0, attempt: 1, dryRun: true, request: buyerRequest }],
+    })).toBe('matched');
+  });
+
+  it('completes a context signal by content identity when its resend confirmed on another index', () => {
+    // One logical context signal, two indexes: the original broadcast's
+    // receipt is permanently unknown, the rebroadcast confirmed. The content
+    // identity is delivered, so the job terminates no matter how many indexes
+    // the signal accumulated.
+    const status = statusForCompletedRun({
+      dryRun: false,
+      identityDatas: [],
+      jobSubmissions: [
+        { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest },
+        { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: buyerRequest, confirmed: true },
+      ],
+    });
+    expect(status).toBe('confirmed');
+  });
+
+  it('keeps a distinct undelivered context signal open regardless of index arithmetic', () => {
+    const contextProbe = (submissions: readonly StateMachineJobSubmission[]): string => statusForCompletedRun({
+      dryRun: false,
+      identityDatas: [],
+      jobSubmissions: submissions,
+    });
+    // A second logical context signal that never landed keeps the job open.
+    expect(contextProbe([
+      { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest, confirmed: true },
+      { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: sellerRequest },
+    ])).toBe('submitted');
+    // The healthy shape stays confirmed: distinct signals, each delivered on
+    // its own index.
+    expect(contextProbe([
+      { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest, confirmed: true },
+      { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: sellerRequest, confirmed: true },
+    ])).toBe('confirmed');
+  });
+});
+
 function hookReadyLog(address = STATE_MACHINE, planId: Hex = PLAN_ID): StateMachineRawLog {
   return {
     address,
@@ -4207,6 +4453,8 @@ async function startJsonRpcStub(options: {
   readonly estimateGasError?: { readonly code: number; readonly message: string; readonly times?: number };
   /** 1-based eth_sendRawTransaction call indexes that fail with a network error. */
   readonly sendRawTransactionErrors?: readonly number[];
+  /** Per-send tx hashes (1-based); sends past the list fall back to TX_HASH. */
+  readonly sendRawTransactionTxHashes?: readonly Hex[];
 } = {}): Promise<{
   readonly url: string;
   readonly methods: string[];
@@ -4221,7 +4469,7 @@ async function startJsonRpcStub(options: {
     eth_estimateGas: () => '0x5208',
     eth_gasPrice: () => '0x3b9aca00',
     eth_getTransactionCount: () => '0x0',
-    eth_sendRawTransaction: () => TX_HASH,
+    eth_sendRawTransaction: () => options.sendRawTransactionTxHashes?.[sendRawCalls - 1] ?? TX_HASH,
     eth_blockNumber: () => '0xc',
     eth_chainId: () => '0x7a69',
     eth_maxPriorityFeePerGas: () => '0x3b9aca00',

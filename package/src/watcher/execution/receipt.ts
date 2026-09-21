@@ -65,38 +65,41 @@ function* walkSubmissionErrorChain(error: unknown): Generator<Error> {
 }
 
 /**
- * Terminal status for a run that processed (or resumed) its signals. The
- * returned-signal lane is reconciled BY CONTENT IDENTITY (the deterministic
- * submitSignal calldata of each returned signal), never by position: a re-run
- * may return a different subset than the failed run (e.g. only the pending
+ * Terminal status for a run that processed (or resumed) its signals. Both
+ * signal lanes are reconciled BY CONTENT IDENTITY (the deterministic
+ * submitSignal calldata of each signal), never by position: a re-run may
+ * return a different subset than the failed run (e.g. only the pending
  * signals), and a surviving signal must never inherit a delivered sibling's
  * slot evidence — or the reverse, a pending signal being credited with a
  * delivered sibling's proof.
  *
- * - `confirmed`: every signal — returned and handler-context — is delivered by
- *   evidence (an observed success receipt, or the chain's own
- *   `SignalAlreadyExists` verdict on the four-tuple), and no recorded
- *   broadcast is left without such evidence — an unobserved receipt never
- *   counts, not even from this run;
- * - `submitted`: any real broadcast happened or remains unresolved — including
- *   a handler that stopped emitting signals an earlier run had already
- *   broadcast (an unresolved broadcast keeps the job in the revisit lane
- *   whatever the handler now returns) and runs whose delivery evidence is a
- *   duplicate fact plus nothing else observed this run;
- * - `completed`: a real-mode handler run that finished successfully with
- *   nothing to broadcast and nothing unresolved — a void handler is a finished
- *   execution, not a job waiting for a recheck;
- * - `matched`: dry-run passes (they converge non-terminal until a real pass or
- *   a manual retry runs).
+ * - `confirmed`: every signal — returned this run, and ever really broadcast
+ *   through the handler-context lane — is delivered by evidence (an observed
+ *   success receipt, or the chain's own `SignalAlreadyExists` verdict on the
+ *   four-tuple), and no recorded broadcast is left without such evidence —
+ *   an unobserved receipt never counts, not even from this run. The
+ *   incremental empty return (README-blessed: the handler returns only its
+ *   pending signals, which is exactly the empty set once everything is
+ *   delivered) lands here — the delivery history, not the return-set size,
+ *   carries the payload;
+ * - `submitted`: anything is still pending — a returned signal without
+ *   delivery evidence, a context-channel signal identity without delivery
+ *   evidence, or any broadcast whose outcome is unresolved (including a
+ *   handler that stopped emitting signals an earlier run had broadcast: an
+ *   unresolved broadcast keeps the job in the revisit lane whatever the
+ *   handler now returns);
+ * - `completed`: a real-mode run that finished with nothing delivered and
+ *   nothing pending — a void handler is a finished execution, not a job
+ *   waiting for a recheck; a void return after attempts that never reached
+ *   the chain ends the same way, because no broadcast is outstanding;
+ * - `matched`: dry-run passes (they converge non-terminal until a real pass
+ *   or a manual retry runs).
  */
 export function statusForCompletedRun(input: {
   readonly dryRun: boolean;
   /** Content identities (submitSignal calldata) of the signals the handler returned this run. */
   readonly identityDatas: readonly string[];
-  /** Identities marked delivered — or merely broadcast — during this run. */
-  readonly deliveredRequestDatas: ReadonlySet<string>;
   readonly jobSubmissions: readonly StateMachineJobSubmission[];
-  readonly thisRunSubmissions: readonly StateMachineJobSubmission[];
 }): StateMachineJobStatus {
   if (input.dryRun) {
     return 'matched';
@@ -105,33 +108,31 @@ export function statusForCompletedRun(input: {
   // in-run set: that set also marks merely-sent signals (a
   // waitForReceipt:false broadcast) which are not evidence of anything.
   const provenDelivered = deliveredRequestDatasFromSubmissions(input.jobSubmissions);
-  // Context indexes are allocated monotonically across runs, so counting them
-  // per index stays content-safe here (the returned lane cannot make the same
-  // claim, which is why it counts identities instead).
-  const contextDelivered = new Set(
-    input.jobSubmissions
-      .filter((submission) => submission.signalIndex < 0 && isDeliveredSubmission(submission))
-      .map((submission) => submission.signalIndex),
+  // The context lane reconciles by the same content identity as
+  // unresolvedBroadcasts. One logical context signal may occupy several
+  // indexes across runs — its first broadcast's receipt can stay unknown
+  // forever, so a later scan rebroadcasts under a fresh index — and index
+  // counting then mistakes "the old slot's receipt is never coming" for "a
+  // signal is still pending". Monotonic index allocation prevents index
+  // REUSE, not one signal accumulating indexes; indexes stay in the records
+  // for presentation, delivery is a property of the calldata identity.
+  const contextPending = input.jobSubmissions.some(
+    (submission) => submission.signalIndex < 0
+      && submission.dryRun !== true
+      && submission.txHash !== undefined
+      && submission.request?.data !== undefined
+      && !provenDelivered.has(submission.request.data),
   );
-  const contextSignalCount = new Set(
-    input.jobSubmissions.filter((submission) => submission.signalIndex < 0).map((submission) => submission.signalIndex),
-  ).size;
   const returnedComplete = input.identityDatas.every((data) => provenDelivered.has(data));
-  const contextComplete = contextDelivered.size >= contextSignalCount;
   const unprovenBroadcasts = unresolvedBroadcasts(input.jobSubmissions).length;
-  const hasRealBroadcast = input.jobSubmissions.some((submission) => submission.dryRun !== true);
-  if (
-    returnedComplete
-    && contextComplete
-    && input.identityDatas.length + contextSignalCount > 0
-    && unprovenBroadcasts === 0
-  ) {
-    return 'confirmed';
+  if (returnedComplete && !contextPending && unprovenBroadcasts === 0) {
+    // Terminal. Which terminal depends on whether any signal was actually
+    // delivered: a delivery history means the complete-and-evidenced shape is
+    // `confirmed`; zero delivery with nothing pending is the void `completed`
+    // — there is no receipt left to wait for in either case.
+    return provenDelivered.size > 0 ? 'confirmed' : 'completed';
   }
-  if (input.thisRunSubmissions.length > 0 || input.deliveredRequestDatas.size > 0 || hasRealBroadcast) {
-    return 'submitted';
-  }
-  return 'completed';
+  return 'submitted';
 }
 
 /**

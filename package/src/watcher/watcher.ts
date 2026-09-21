@@ -835,9 +835,6 @@ export class StateMachineWatcher {
     }
 
     const submissions: SubmitStateMachineSignalResult[] = [];
-    // Records appended from this point on are "this run"; the offset separates
-    // them from prior-run history for the terminal-status computation.
-    const priorSubmissionCount = jobSubmissions.length;
     // The plan-scoped submitSignal ABI requires the order planId, resolved per
     // signal: an explicit pin (handler-supplied or the config
     // `signals[].planId` field) wins; otherwise the planId decoded from the
@@ -1028,9 +1025,7 @@ export class StateMachineWatcher {
     const finalStatus = statusForCompletedRun({
       dryRun: this.config.dryRun,
       identityDatas,
-      deliveredRequestDatas,
       jobSubmissions,
-      thisRunSubmissions: jobSubmissions.slice(priorSubmissionCount),
     });
     if (deferredResend) {
       // A deferred signal keeps the job open. Preserve updatedAt: rewriting
