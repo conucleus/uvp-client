@@ -3160,8 +3160,8 @@ describe('state machine chain watcher', () => {
         now: new Date(at).toISOString(),
         maxAttempts: 3,
       });
-      // No lastSignalAttemptAt at all; updatedAt is as fresh as "now" — the old
-      // updatedAt fallback deferred this rebroadcast on every round.
+      // No lastSignalAttemptAt at all; updatedAt is as fresh as "now" — an
+      // updatedAt fallback would defer this rebroadcast on every round.
       await watcher.config.jobStore.update(seeded.id, {
         status: 'submitted',
         updatedAt: new Date(at).toISOString(),
@@ -3336,7 +3336,7 @@ describe('state machine chain watcher', () => {
   });
 
   it('clears stale adopted anchors when the overshoot correction rewinds to fromBlock', async () => {
-    // the overshoot fallback kept checkpoints from beyond the chain
+    // an overshoot fallback would keep checkpoints from beyond the chain
     // head, so the next round's continuity check mismatched by construction
     // and fired a false reorg rollback.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-overshoot-'));

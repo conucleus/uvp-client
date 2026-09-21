@@ -350,8 +350,8 @@ export async function signPreparedSignalContainer(
   const configuredWallet = normalizeAddressChecksummed(input.walletAddress ?? signerAddress, 'walletAddress');
   const submitter = normalizeAddressChecksummed(prepared.typedData.message.submitter, 'typedData.message.submitter');
 
-  // 签名前闸门单源（protocol-bindings validateTypedDataForSigning，P1-1
-  // 安全面）：判定语义收敛到上游，本仓只把 reason 映射为既有文案。本仓独有
+  // 签名前闸门单源（protocol-bindings validateTypedDataForSigning）：
+  // 判定语义收敛到上游，本仓只把 reason 映射为既有文案。本仓独有
   // 的“私钥签名者与配置钱包一致”检查经 connectedAddress 承载——上游为
   // 浏览器钱包“当前连接地址”预留的同一语义位，私钥路径等价复用。
   // expectedDomain 锚参数化传入：未提供 chainId/verifyingContract 时不比对。

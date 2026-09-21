@@ -502,8 +502,8 @@ export interface VerifyWebhookSignatureOptions {
  * before parsing JSON and reject false, malformed, missing, or stale
  * signatures. Constant-time comparison prevents timing leaks.
  *
- * Fail-closed on absent timestamp/nonce: a legacy body-only signature is
- * exactly the permanently replayable shape this scheme exists to kill.
+ * Fail-closed on absent timestamp/nonce: a body-only signature is exactly
+ * the permanently replayable shape this scheme exists to kill.
  */
 export function verifyWebhookSignature(
   body: string | Uint8Array,
