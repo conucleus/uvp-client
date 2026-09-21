@@ -364,9 +364,9 @@ describe('executor CLI', () => {
 
 describe('honest execution exit codes', () => {
   it('rejects --state-machine alongside config stateMachines[] instead of silently ignoring the flag', async () => {
-    // L15: with both present, config stateMachines[] silently overrode the
-    // flag for the scan set — the operator believed machine A was watched
-    // while only the config set was scanned. Coexistence is now a hard error.
+    // With both present, config stateMachines[] silently overrode the flag
+    // for the scan set — the operator believed machine A was watched while
+    // only the config set was scanned, so coexistence is a hard error.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-flag-conflict-'));
     const configPath = join(dir, 'executor.json');
     try {
