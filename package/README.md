@@ -40,9 +40,9 @@ script, so a tarball never ships a `dist/` older than the `src/` beside it.
 
 ## Source Layout
 
-The watcher code is organized by scan-and-delivery lifecycle (B2 治理结构); all
-modules below are internal wiring behind the unchanged SDK surface re-exported
-by `src/index.ts`:
+The watcher code is organized by scan-and-delivery lifecycle; all modules
+below are internal wiring behind the SDK surface re-exported by
+`src/index.ts`:
 
 ```text
 package/src/
@@ -54,7 +54,7 @@ package/src/
 │   ├── output.ts              # ExecutorJobDTO 等 DTO 映射与退出码适配
 │   └── watcher.ts             # CLI 装配 watcher（state-dir 锁、存储选择、runtime env）
 ├── watcher/
-│   ├── index.ts               # watcher 域公共面（原 src/watcher.ts 的导出集）
+│   ├── index.ts               # watcher 域公共出口（纯重导出面）
 │   ├── watcher.ts             # 扫描与执行编排（StateMachineWatcher 及配置归一化）
 │   ├── scan/logs.ts           # 日志扫描：区块分段与日志排序
 │   ├── scan/reorg.ts          # 重组回退：finality 缓冲、checkpoint 锚点、回滚证据
@@ -187,6 +187,17 @@ configurable parameters (`--confirmations`, `--reorg-window`,
   release would park the job in this process forever — the release path gets
   the same recovery guarantee the dead-holder pid check gives crashed
   processes.
+- **Stuck-claim alerts and the pid-reuse override**: pid liveness is the only
+  claim-aliveness signal, and the OS can hand a crashed executor's pid to an
+  unrelated process — the dead claim then reads alive forever and blocks
+  later scans, `jobs retry`, and `jobs dead-letter` alike. A job whose claim
+  stays held by a live-looking foreign pid across consecutive poll rounds is
+  reported through the error channel (once per hold streak) with the pid to
+  verify; when the pid turns out not to be the executor,
+  `uvp-executor jobs dead-letter <jobId> --force --operator <id> --reason <why>`
+  is the explicit operator override that clears the claim and archives the
+  job for triage, with the operator and reason recorded in the job's manual
+  action audit trail.
 
 Build or submit one state-machine signal:
 
@@ -351,6 +362,13 @@ uvp-executor jobs dead-letter <jobId> \
   --jobs-file .uvp-executor-jobs.json \
   --operator ops@example.com \
   --reason "manual review required"
+# Override a run claim that reads alive because the OS reused the crashed
+# holder's pid (verify the pid first):
+uvp-executor jobs dead-letter <jobId> \
+  --jobs-file .uvp-executor-jobs.json \
+  --operator ops@example.com \
+  --reason "holder pid verified reused; executor crashed" \
+  --force
 ```
 
 Watcher job semantics:

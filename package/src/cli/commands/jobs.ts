@@ -93,11 +93,13 @@ export function registerJobsCommands(program: Command): void {
     .requiredOption('--jobs-file <path>', 'state-machine watcher jobs JSON file')
     .requiredOption('--operator <id>', 'operator id recorded in the job audit trail')
     .requiredOption('--reason <text>', 'dead-letter reason')
+    .option('--force', 'override a run claim that reads alive; use only after verifying the pid is not the executor (a crashed holder\'s pid can be reused by the OS and then blocks retries, dead-lettering, and later scans forever)')
     .action(async (jobId: string, options: JobsDeadLetterOptions) => {
       const store = new FileStateMachineJobStore(options.jobsFile);
       const job = await deadLetterStateMachineJob(store, jobId, {
         operator: options.operator,
         reason: options.reason,
+        ...(options.force ? { force: true } : {}),
       });
       console.log(stringifyForTransport({ job: stateMachineJobToExecutorJobDTO(job), rawJob: job }));
     });

@@ -227,6 +227,72 @@ describe('executor CLI', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+  it('dead-letters a job stuck behind a live-looking claim only with --force', async () => {
+    // pid liveness cannot distinguish a live holder from a crashed one whose
+    // pid the OS reused; the CLI must refuse the silent override and expose
+    // the explicit escape hatch with the operator on record.
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-jobs-force-'));
+    const jobsFile = join(dir, 'jobs.json');
+    const jobId = `0x${'aa'.repeat(32)}`;
+    const foreignPid = process.ppid ?? 1;
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (message?: unknown) => {
+      logs.push(String(message));
+    };
+
+    try {
+      await writeFile(jobsFile, JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: jobId,
+            eventId: `0x${'bb'.repeat(32)}`,
+            orderId: RETRY_ORDER_ID,
+            hookId: RETRY_HOOK_ID,
+            stageId: RETRY_STAGE_ID,
+            stageIdentifier: 'exec.main',
+            hookName: 'START',
+            supplierId: 'logistics-provider-a',
+            status: 'matched',
+            attempts: 0,
+            maxAttempts: 3,
+            detectedAt: '2026-04-28T00:00:00.000Z',
+            updatedAt: '2026-04-28T00:00:01.000Z',
+            submissions: [],
+            claim: { pid: foreignPid, at: '2026-04-28T00:00:01.000Z' },
+          },
+        ],
+      }));
+
+      const deadLetterArgv = (extra: readonly string[]): string[] => [
+        'node', 'uvp-executor', 'jobs', 'dead-letter', jobId,
+        '--jobs-file', jobsFile,
+        '--operator', 'ops@example.com',
+        '--reason', 'holder pid verified reused; executor crashed',
+        ...extra,
+      ];
+
+      await expect(main(deadLetterArgv([]))).rejects.toThrow(/is being processed by executor pid/);
+
+      await main(deadLetterArgv(['--force']));
+      const forced = JSON.parse(logs[0] ?? '{}') as {
+        job?: { status?: string };
+        rawJob?: { claim?: unknown; manualActions?: Array<{ action?: string; operator?: string; reason?: string }> };
+      };
+      expect(forced.job?.status).toBe('dead_letter');
+      expect(forced.rawJob?.claim).toBeUndefined();
+      expect(forced.rawJob?.manualActions?.[0]).toMatchObject({
+        action: 'dead_letter',
+        operator: 'ops@example.com',
+        reason: 'holder pid verified reused; executor crashed',
+      });
+    } finally {
+      console.log = originalLog;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects chain-signal --payload-ref instead of silently dropping it', async () => {
     // The frozen submitSignal ABI has no payloadRef field; before this guard the
     // flag was parsed, discarded, and the command reported success anyway.
@@ -822,6 +888,70 @@ describe('watcher state storage', () => {
       // The dry-run submission takes its planId from the event and succeeds, so
       // the run exits 0; the point here is that nothing was written to the
       // state dir.
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      stub.close();
+      console.log = originalLog;
+      process.exitCode = previousExitCode;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes --max-get-logs-block-span through to the watcher scan chunking', async () => {
+    // The flag must reach the watcher's getLogsBlockSpan config: a mismatched
+    // CLI field name left it silently dropped, so every run chunked at the
+    // default 9999 while describe() echoed the configured value — an operator
+    // capping provider query sizes was ignored without any signal.
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-log-span-'));
+    const configPath = join(dir, 'executor.json');
+    const logs: string[] = [];
+    const originalLog = console.log;
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    console.log = (message?: unknown) => {
+      logs.push(String(message));
+    };
+    const stub = await startChainStub();
+
+    try {
+      await writeFile(configPath, JSON.stringify({
+        supplierId: 'logistics-provider-a',
+        walletAddress: RETRY_WALLET,
+        chainId: 31_337,
+        stateMachineAddress: RETRY_STATE_MACHINE,
+        artifact: {
+          hooksByHookId: {
+            [RETRY_HOOK_ID]: { stageIdentifier: 'exec.main', hookName: 'START' },
+          },
+        },
+        handlers: {
+          '*': {
+            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+          },
+        },
+      }));
+
+      // Head 13 with the default 1-confirmation buffer scans 10..12; a span
+      // of 2 must split that range into two eth_getLogs calls instead of one.
+      await main([
+        'node', 'uvp-executor', 'chain-once',
+        '--rpc-url', stub.url,
+        '--state-machine', RETRY_STATE_MACHINE,
+        '--chain-id', '31337',
+        '--config', configPath,
+        '--wallet-address', RETRY_WALLET,
+        '--from-block', '10',
+        '--dry-run',
+        '--job-store', 'memory',
+        '--max-get-logs-block-span', '2',
+      ]);
+
+      const run = JSON.parse(logs[0] ?? '{}') as { watcher?: { getLogsBlockSpan?: number } };
+      expect(run.watcher?.getLogsBlockSpan).toBe(2);
+      expect(stub.getLogsCalls).toEqual([
+        { address: RETRY_STATE_MACHINE, fromBlock: '0xa', toBlock: '0xb' },
+        { address: RETRY_STATE_MACHINE, fromBlock: '0xc', toBlock: '0xc' },
+      ]);
       expect(process.exitCode).toBeUndefined();
     } finally {
       stub.close();

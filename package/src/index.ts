@@ -11,8 +11,8 @@ export * from './transport.js';
 export * from './validation.js';
 export * from './watcher/index.js';
 export * from './wallet.js';
-// watcher.ts 原先携带的 DTO 映射按意见书归位到对外适配文件 cli/output.ts；
-// 此处按原名重导出，SDK 公共导出面保持不变。
+// 面向运维展示的 DTO 映射归口在对外适配层 cli/output.ts；这里按原名重导出，
+// SDK 调用方只依赖包根出口，不感知内部模块划分。
 export {
   stateMachineHandlerConfigToExecutorConfigDTO,
   stateMachineJobToExecutorJobDTO,

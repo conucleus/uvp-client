@@ -200,9 +200,12 @@ export function unresolvedBroadcasts(
 
 /**
  * Append a submission record to the audit trail. Dry-run records are
- * simulations of one deterministic request per signal: a replayed dry-run must
- * not append a duplicate (the record list grew once per signal per rescan).
- * Real broadcasts are never deduped — each is a distinct on-chain fact.
+ * simulations of one deterministic request per signal, so a replayed dry-run
+ * is deduped BY CONTENT IDENTITY (the request calldata) across runs and lanes:
+ * the context lane allocates a fresh monotonically decreasing index on every
+ * run, and an index-scoped key let one replayed signal append one record per
+ * re-run forever. The index stays on records for presentation only. Real
+ * broadcasts are never deduped — each is a distinct on-chain fact.
  */
 export function appendJobSubmission(
   submissions: StateMachineJobSubmission[],
@@ -211,8 +214,9 @@ export function appendJobSubmission(
   if (candidate.dryRun === true) {
     const duplicate = submissions.some((submission) =>
       submission.dryRun === true
-      && submission.signalIndex === candidate.signalIndex
-      && submission.request?.data === candidate.request?.data);
+      && (candidate.request?.data !== undefined
+        ? submission.request?.data === candidate.request.data
+        : submission.signalIndex === candidate.signalIndex));
     if (duplicate) {
       return;
     }

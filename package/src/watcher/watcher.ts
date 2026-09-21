@@ -110,6 +110,15 @@ import {
 export const DEFAULT_STATE_MACHINE_POLL_INTERVAL_MS = 4_000;
 /** Cap on the poll-delay multiplier during consecutive-failure backoff. */
 export const POLL_FAILURE_BACKOFF_MULTIPLIER_CAP = 8;
+/**
+ * Consecutive poll rounds a foreign run claim may stay held before the watcher
+ * alerts. A healthy run releases its claim within the round that took it; a
+ * claim held this long by a live-looking pid is either a wedged run or a
+ * crashed holder whose pid the OS reused — and the pid-reuse case is otherwise
+ * silent, because every recovery channel (later scans, manual retry,
+ * dead-letter) gates on the claim reading alive.
+ */
+export const HELD_FOREIGN_CLAIM_ALERT_ROUNDS = 3;
 
 /**
  * Runtime environment declaration, same value set as chain-services
@@ -216,7 +225,11 @@ export class StateMachineWatcher {
   private nextBlock: bigint | undefined;
   private decodeFailuresTotal = 0;
   private cursorRestored = false;
-  /** True once a persisted cursor was adopted; the G-11 overshoot correction only applies to that case. */
+  /**
+   * True once a persisted cursor was adopted: only an adopted cursor can sit
+   * beyond the live chain head (a chain shrink the genesis identity could not
+   * catch), so the overshoot fallback to fromBlock is gated on this flag.
+   */
   private adoptedStoredCursor = false;
   private genesisHash: string | undefined;
   /** Canonical hash of block nextBlock - 1 from the last successful round, when readable. */
@@ -230,6 +243,15 @@ export class StateMachineWatcher {
    * pid check provides for crashed processes.
    */
   private pendingClaimReleases = new Set<Hex>();
+  /**
+   * Consecutive rounds a foreign held claim was observed per job, plus the
+   * jobs already alerted in the current hold streak. pid liveness cannot tell
+   * a live holder from a crashed one whose pid the OS reused, so a dead claim
+   * can read alive forever — the counter turns that silent deadlock into an
+   * operator alert. Both reset the moment the claim stops reading held.
+   */
+  private heldForeignClaimRounds = new Map<Hex, number>();
+  private alertedHeldForeignClaims = new Set<Hex>();
 
   constructor(config: StateMachineWatcherConfig) {
     this.config = normalizeStateMachineWatcherConfig(config);
@@ -1448,13 +1470,15 @@ export class StateMachineWatcher {
    * poll window or via manual retry). A live claim keeps the job out: that
    * run is in flight right now. Cost is bounded: handleLog resolves the
    * receipt of an unconfirmed broadcast before anything else and the resend
-   * backoff throttles rebroadcasts.
+   * backoff throttles rebroadcasts. The listing here doubles as the per-round
+   * observation for stuck foreign claims (see trackHeldForeignClaims).
    */
   private async revisitOpenJobs(
     fromBlock: bigint,
     scannedEventIds: ReadonlySet<Hex>,
   ): Promise<readonly StateMachineLogProcessResult[]> {
     const jobs = await this.config.jobStore.list();
+    this.trackHeldForeignClaims(jobs);
     const watched = new Set(this.config.stateMachines.map((deployment) => normalizeAddress(deployment.stateMachineAddress, 'stateMachines[].stateMachineAddress')));
     const open = jobs.filter((job) => {
       const strandedMatched = job.status === 'matched' && !isHeldRunClaim(job.claim);
@@ -1490,6 +1514,38 @@ export class StateMachineWatcher {
       }
     }
     return results;
+  }
+
+  /**
+   * One observation per poll round (this pass lists every job each round) of
+   * which jobs are stuck behind a foreign claim that reads alive. A claim held
+   * by this process is its own in-flight run; a foreign pid that is dead is
+   * takeover-eligible and needs no alert — only the live-looking foreign
+   * claim is ambiguous, and after HELD_FOREIGN_CLAIM_ALERT_ROUNDS consecutive
+   * rounds it is reported once per hold streak with the manual override that
+   * can break it.
+   */
+  private trackHeldForeignClaims(jobs: readonly StateMachineWatcherJob[]): void {
+    for (const job of jobs) {
+      const claim = job.claim;
+      if (claim === undefined || claim.pid === process.pid || !isHeldRunClaim(claim)) {
+        this.heldForeignClaimRounds.delete(job.id);
+        this.alertedHeldForeignClaims.delete(job.id);
+        continue;
+      }
+      const rounds = (this.heldForeignClaimRounds.get(job.id) ?? 0) + 1;
+      this.heldForeignClaimRounds.set(job.id, rounds);
+      if (rounds >= HELD_FOREIGN_CLAIM_ALERT_ROUNDS && !this.alertedHeldForeignClaims.has(job.id)) {
+        this.alertedHeldForeignClaims.add(job.id);
+        this.config.onError?.(new ExecutorKitError(
+          `job ${job.id} has stayed claimed by pid ${claim.pid} (claimed at ${claim.at}) for ${rounds} consecutive poll rounds;`
+            + ' pid liveness cannot tell a live executor from a crashed one whose pid the OS reused,'
+            + ' and such a claim blocks later scans, manual retries, and dead-lettering;'
+            + ' verify the pid on this host and, when it is not the executor, unlock the job with'
+            + ` uvp-executor jobs dead-letter ${job.id} --force --operator <id> --reason <why>`,
+        ));
+      }
+    }
   }
 
   /**

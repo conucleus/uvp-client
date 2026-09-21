@@ -183,7 +183,7 @@ export async function buildStateMachineWatcherFromCli(
       ...(options.confirmations !== undefined ? { confirmations: parseNonNegativeIntegerOption(options.confirmations, 'confirmations') } : {}),
       ...(runtimeEnvironment ? { runtimeEnvironment } : {}),
       ...(options.reorgWindow !== undefined ? { reorgWindow: parsePositiveInteger(options.reorgWindow, 'reorgWindow') } : {}),
-      ...(options.getLogsBlockSpan !== undefined ? { getLogsBlockSpan: parsePositiveInteger(options.getLogsBlockSpan, 'getLogsBlockSpan') } : {}),
+      ...(options.maxGetLogsBlockSpan !== undefined ? { getLogsBlockSpan: parsePositiveInteger(options.maxGetLogsBlockSpan, 'maxGetLogsBlockSpan') } : {}),
       onPoll: (poll) => {
         console.log(stringifyForTransport({ poll }));
       },

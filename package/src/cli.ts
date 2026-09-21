@@ -10,8 +10,8 @@ import { registerServeCommand } from './cli/commands/serve.js';
 import { registerWalletCommands } from './cli/commands/wallet.js';
 import { ExecutorKitError } from './validation.js';
 
-// 公共出口保持与拆分前的 cli.ts 完全一致（命令分发已迁入 cli/commands/，
-// watcher 装配在 cli/watcher.ts，输出/退出码适配在 cli/output.ts）。
+// 命令分发、watcher 装配与输出/退出码适配分别在 cli/commands/、cli/watcher.ts、
+// cli/output.ts；此处集中重导出它们的公共面，CLI 的编程调用方只依赖 cli.ts 一个出口。
 export { chainPollExecutionFailed, executionOutcomeFailed } from './cli/output.js';
 export {
   DEFAULT_WATCHER_STATE_DIR,

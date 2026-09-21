@@ -81,8 +81,8 @@ export const ZERO_FACT_ATTRIBUTION: SignalAttributionCallStruct = {
 };
 
 /**
- * 全零 SelectorBindingProof：selectorStageId==0 即"不携证"，合约的
- * assign 前置闸在无证时不可判定、跳过（旧口径一致）。
+ * 全零 SelectorBindingProof：selectorStageId==0 即"不携证"，合约的 assign
+ * 前置闸在无证时不可判定、跳过——缺省提交与显式无证共用同一编码。
  */
 export const ZERO_SELECTOR_BINDING: SelectorBindingCallStruct = {
   selectorStageId: ZERO_BYTES32,
@@ -322,8 +322,8 @@ function normalizeStateMachineSignal(signal: StateMachineSignal): StateMachineSi
     throw new ValidationError('planId must be a non-zero bytes32: the zero placeholder cannot satisfy the on-chain (planId, orderId) existence check');
   }
   const orderId = normalizeBytes32(signal.orderId, 'orderId');
-  // Protocol-defined sentinel, not a fallback: per the UVPStateMachine submitSignal
-  // ABI, bytes32(0) is the legitimate encoding of "no payload" (see EXEC-3 ruling).
+  // Protocol-defined sentinel, not a fallback: the UVPStateMachine submitSignal
+  // ABI defines bytes32(0) as the legitimate encoding of "no payload".
   // A producer omitting payloadHash is asserting an empty payload on chain.
   const payloadHash = signal.payloadHash ? normalizeBytes32(signal.payloadHash, 'payloadHash') : ZERO_BYTES32;
   // Signal attribution is mandatory: hashing the empty string here minted one
@@ -364,7 +364,7 @@ function normalizeStateMachineSignal(signal: StateMachineSignal): StateMachineSi
     // The emitting HookReady event anchor is off-chain correlation context
     // only. It is deliberately absent from both the call args and the default
     // key: the contract never sees it, and off-chain metadata must not
-    // participate in the idempotency verdict (EXEC kit ruling #21).
+    // participate in the idempotency verdict.
   };
 }
 

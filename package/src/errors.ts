@@ -138,11 +138,15 @@ export function classifyExecutorKitError(
   }
 
   // ValidationError stays an explicit type-based classification: local input
-  // validation must not be re-guessed from its message text.
+  // validation must not be re-guessed from its message text. Its message also
+  // skips the hex redaction pass: the kit authors these texts, and they echo
+  // public identifiers (job ids, plan/order ids, field names) the operator
+  // must be able to read — secret-shaped hex echoes arrive through
+  // third-party error texts, which keep the full redaction below.
   if (error instanceof ValidationError) {
     return {
       kind: 'validation_failure',
-      message: redactSecretLikeHex(rawMessage || 'validation_failure', keepHexes),
+      message: rawMessage || 'validation_failure',
       retryable: false,
     };
   }
@@ -204,18 +208,23 @@ function errorToMessage(error: unknown): string {
 }
 
 /**
- * Redact secret-shaped hex runs echoed by third-party error texts (viem,
- * JSON-RPC providers): bare 64-hex digits and `0x`-prefixed 64-hex values —
- * a raw private key appears in both shapes. The one exemption is a hash the
- * error object itself carries as a `txHash` property (see
+ * Redact secret-shaped hex segments echoed by third-party error texts (viem,
+ * JSON-RPC providers): any contiguous hex run of 64 or more digits — `0x`
+ * prefixed or bare — is cut in its entirety, because a raw private key is one
+ * such run and inside a longer run there is no word boundary for a
+ * length-anchored pattern to stop at. The one exemption is a hash the error
+ * object itself carries as a `txHash` property (see
  * {@link publicHashesOf}): 0x+64-hex is exactly the tx-hash shape too, so
  * shape alone cannot tell a public identifier from key material, and the
- * kit's own structured carriage is the only trustworthy provenance.
+ * kit's own structured carriage is the only trustworthy provenance. A public
+ * bytes32 identifier embedded in a longer run shares the segment with
+ * possible key material and falls with it; exactly-64 public ids ride the
+ * txHash exemption or the kit's own (unredacted) ValidationError texts.
  */
 function redactSecretLikeHex(value: string, keepHexes: ReadonlySet<string>): string {
   return value
-    .replace(/\b0x[a-fA-F0-9]{64}\b/g, (match) => (keepHexes.has(match.toLowerCase()) ? match : '[redacted-32-byte-hex]'))
-    .replace(/(?<!0x)\b[a-fA-F0-9]{64}\b/g, '[redacted-32-byte-hex]');
+    .replace(/0[xX][a-fA-F0-9]{64,}/g, (match) => (keepHexes.has(match.toLowerCase()) ? match : '[redacted-hex]'))
+    .replace(/(?<![0-9a-fA-FxX])[a-fA-F0-9]{64,}/g, '[redacted-hex]');
 }
 
 /**

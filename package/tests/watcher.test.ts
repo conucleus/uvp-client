@@ -31,8 +31,10 @@ import {
   type StateMachineRawLog,
 } from '../src/watcher/index.js';
 import { ValidationError } from '../src/validation.js';
-import { statusForCompletedRun } from '../src/watcher/execution/receipt.js';
+import { appendJobSubmission, statusForCompletedRun } from '../src/watcher/execution/receipt.js';
+import { HELD_FOREIGN_CLAIM_ALERT_ROUNDS } from '../src/watcher/watcher.js';
 import type { StateMachineJobSubmission } from '../src/watcher/jobs/model.js';
+import type { SubmitStateMachineSignalCall } from '../src/watcher/index.js';
 
 const STATE_MACHINE = '0x0000000000000000000000000000000000000001';
 const STATE_MACHINE_V2 = '0x0000000000000000000000000000000000000009';
@@ -4962,5 +4964,195 @@ describe('watcher run-claim release retry', () => {
     await watcher.pollOnce();
     const released = await store.get(jobId);
     expect(released?.claim).toBeUndefined();
+  });
+});
+
+describe('dry-run submission record dedupe', () => {
+  it('dedupes replayed dry-run records by request content across indexes', () => {
+    // The context lane allocates a fresh monotonically decreasing index every
+    // run, so an index-scoped dedupe key let each replay append one more
+    // record; the dry-run simulation of one deterministic request must key on
+    // the request's content identity alone, with the index display-only.
+    const request: SubmitStateMachineSignalCall = seedRequest('buyer');
+    const submissions: StateMachineJobSubmission[] = [];
+    appendJobSubmission(submissions, { signalIndex: -1, attempt: 1, dryRun: true, request });
+    // A later run's replay of the same logical signal lands on a fresh index.
+    appendJobSubmission(submissions, { signalIndex: -2, attempt: 1, dryRun: true, request });
+    expect(submissions).toHaveLength(1);
+
+    // Different request content is a different simulated signal: kept.
+    appendJobSubmission(submissions, {
+      signalIndex: -3,
+      attempt: 1,
+      dryRun: true,
+      request: seedRequest('seller'),
+    });
+    expect(submissions).toHaveLength(2);
+
+    // A real broadcast of the same content is a distinct on-chain fact: kept.
+    appendJobSubmission(submissions, { signalIndex: -1, attempt: 2, dryRun: false, txHash: TX_HASH, request });
+    expect(submissions).toHaveLength(3);
+  });
+
+  it('keeps a replayed dry-run context submission at one audit record across manual re-runs', async () => {
+    const store = new InMemoryStateMachineJobStore();
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      privateKeyEnv: 'UVP_TEST_PRIVATE_KEY',
+      dryRun: true,
+      artifact: artifactIndex(),
+      jobStore: store,
+      handlers: {
+        '*': async (event, context) => {
+          await context.submitSignal({
+            planId: PLAN_ID,
+            orderId: event.orderId,
+            source: 'buyer',
+            signalName: 'exec.main.cmp',
+            payloadHash: PAYLOAD_HASH,
+          });
+        },
+      },
+    });
+
+    const first = await watcher.handleLog(hookReadyLog());
+    const jobId = first.job?.id;
+    if (!jobId) {
+      throw new Error('expected a processed job');
+    }
+    expect(first.job?.submissions).toHaveLength(1);
+    expect(first.job?.submissions[0]?.signalIndex).toBe(-1);
+
+    // The manual retry re-runs the handler, which re-submits the same
+    // deterministic request under a fresh context index: the audit trail must
+    // stay at one simulated record instead of growing once per re-run.
+    const retried = await retryStateMachineJob(watcher, jobId, {
+      operator: 'ops@example.com',
+    });
+    expect(retried.job?.submissions).toHaveLength(1);
+    expect(retried.job?.submissions[0]?.signalIndex).toBe(-1);
+  });
+});
+
+describe('watcher held foreign claim alert', () => {
+  it('alerts once when a live-looking foreign claim persists across poll rounds and points at the manual override', async () => {
+    // pid liveness is the only claim-aliveness signal: after a crash the OS can
+    // hand the dead holder's pid to an unrelated process, and the claim then
+    // reads alive forever — silently blocking later scans, manual retries, and
+    // dead-lettering. The watcher must turn that deadlock into an operator
+    // alert instead of passing it in silence.
+    const store = new InMemoryStateMachineJobStore();
+    const errors: string[] = [];
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      privateKeyEnv: 'UVP_TEST_PRIVATE_KEY',
+      dryRun: true,
+      artifact: artifactIndex(),
+      jobStore: store,
+      handlers: { '*': () => undefined },
+      onError: (error) => {
+        errors.push(error instanceof Error ? error.message : String(error));
+      },
+      publicClient: {
+        async getChainId() {
+          return 31_337;
+        },
+        async getBlockNumber() {
+          return 20n;
+        },
+        async getLogs() {
+          return [];
+        },
+      },
+    });
+
+    // Seed a matched job claimed by a live foreign pid (the test process's
+    // parent): exactly the field state a crashed executor leaves behind once
+    // its pid is reused.
+    const event = decodeHookReadyLog(hookReadyLog(), artifactIndex());
+    if (!event) {
+      throw new Error('expected a decoded HookReady event');
+    }
+    const foreignPid = process.ppid ?? 1;
+    if (foreignPid === process.pid) {
+      throw new Error('test requires a foreign pid');
+    }
+    const detected = await store.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
+    const claimed = await store.update(detected.id, {
+      updatedAt: '2026-04-28T00:00:01.000Z',
+      status: 'matched',
+      matchedKey: '*',
+      claim: { pid: foreignPid, at: '2026-04-28T00:00:01.000Z' },
+    });
+    if (!claimed) {
+      throw new Error('expected the claim write to apply');
+    }
+
+    // Below the round threshold the claim is ambiguous but not yet alarming:
+    // a healthy foreign run can legitimately span a couple of rounds.
+    for (let round = 0; round < HELD_FOREIGN_CLAIM_ALERT_ROUNDS - 1; round += 1) {
+      await watcher.pollOnce();
+    }
+    expect(errors).toHaveLength(0);
+
+    await watcher.pollOnce();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`pid ${foreignPid}`);
+    expect(errors[0]).toContain('jobs dead-letter');
+    expect(errors[0]).toContain('--force');
+
+    // One alert per hold streak: later rounds stay silent instead of flooding
+    // the error channel on every poll.
+    await watcher.pollOnce();
+    await watcher.pollOnce();
+    expect(errors).toHaveLength(1);
+  });
+});
+
+describe('jobs dead-letter force', () => {
+  it('refuses a live-looking claim without --force and overrides it with the operator on record', async () => {
+    const store = new InMemoryStateMachineJobStore();
+    const event = decodeHookReadyLog(hookReadyLog(), artifactIndex());
+    if (!event) {
+      throw new Error('expected a decoded HookReady event');
+    }
+    const foreignPid = process.ppid ?? 1;
+    const detected = await store.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
+    const claimed = await store.update(detected.id, {
+      updatedAt: '2026-04-28T00:00:01.000Z',
+      status: 'matched',
+      matchedKey: '*',
+      claim: { pid: foreignPid, at: '2026-04-28T00:00:01.000Z' },
+    });
+    if (!claimed) {
+      throw new Error('expected the claim write to apply');
+    }
+
+    // Without --force the held-claim gate stands: dead-lettering under a live
+    // run would strand the running handler on a job it no longer owns.
+    await expect(deadLetterStateMachineJob(store, detected.id, {
+      operator: 'ops@example.com',
+      reason: 'stuck claim',
+    })).rejects.toThrow(/is being processed by executor pid/);
+
+    const forced = await deadLetterStateMachineJob(store, detected.id, {
+      operator: 'ops@example.com',
+      reason: 'holder pid verified reused; executor crashed',
+      force: true,
+      now: () => '2026-04-28T00:00:05.000Z',
+    });
+    expect(forced.status).toBe('dead_letter');
+    expect(forced.claim).toBeUndefined();
+    expect(forced.manualActions?.[0]).toMatchObject({
+      action: 'dead_letter',
+      operator: 'ops@example.com',
+      reason: 'holder pid verified reused; executor crashed',
+    });
   });
 });

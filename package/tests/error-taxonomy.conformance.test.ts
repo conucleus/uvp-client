@@ -205,8 +205,9 @@ describe('executor-kit classification completeness against the taxonomy', () => 
     // 0x+64-hex is both the tx-hash and the raw-private-key shape, so shape
     // alone cannot spare one and redact the other. The exemption key is
     // provenance: a txHash the error object carries as a typed property stays
-    // readable for correlation; every other 0x-prefixed or bare 64-hex run in
-    // third-party error text (including 0x-prefixed key echoes) is redacted.
+    // readable for correlation; every other 0x-prefixed or bare hex segment
+    // of 64+ digits in third-party error text (including 0x-prefixed key
+    // echoes) is cut in its entirety.
     const receiptError = classifyExecutorKitError(new SubmitSignalReceiptError(
       TX_HASH,
       `submitSignal transaction receipt wait failed for ${TX_HASH}: Request timed out.`,
@@ -218,12 +219,53 @@ describe('executor-kit classification completeness against the taxonomy', () => 
     const bareKey = 'ab'.repeat(32);
     const leaked = classifyExecutorKitError(new Error(`signing failed with key ${bareKey}`));
     expect(leaked.message).not.toContain(bareKey);
-    expect(leaked.message).toContain('[redacted-32-byte-hex]');
+    expect(leaked.message).toContain('[redacted-hex]');
 
     const prefixedKey = `0x${'ab'.repeat(32)}`;
     const prefixedLeak = classifyExecutorKitError(new Error(`provider echoed credentials: ${prefixedKey}`));
     expect(prefixedLeak.message).not.toContain(prefixedKey);
-    expect(prefixedLeak.message).toContain('[redacted-32-byte-hex]');
+    expect(prefixedLeak.message).toContain('[redacted-hex]');
+  });
+
+  it('redacts hex runs of 64+ digits as a whole segment, including longer runs without word boundaries', () => {
+    // Inside a longer contiguous hex segment there is no word boundary for a
+    // length-anchored pattern, so an exactly-64 slice of it leaked the rest;
+    // the whole segment is the redaction unit now.
+    const longPrefixed = `0x${'ab'.repeat(64)}`;
+    const prefixed = classifyExecutorKitError(new Error(`provider dump: ${longPrefixed}`));
+    expect(prefixed.message).not.toContain(longPrefixed.slice(2, 2 + 64));
+    expect(prefixed.message).not.toContain(longPrefixed);
+    expect(prefixed.message).toContain('[redacted-hex]');
+
+    const longBare = 'cd'.repeat(48);
+    const bare = classifyExecutorKitError(new Error(`memory dump: ${longBare}`));
+    expect(bare.message).not.toContain(longBare);
+    expect(bare.message).toContain('[redacted-hex]');
+
+    // Under the 64-digit threshold nothing is secret-32-byte-shaped: kept.
+    const shortEcho = `0x${'ab'.repeat(31)}`;
+    const short = classifyExecutorKitError(new Error(`bad value ${shortEcho} rejected`));
+    expect(short.message).toContain(shortEcho);
+
+    // A txHash riding in a longer run loses the exemption: it is no longer
+    // exactly the carried hash, so the whole segment falls with it.
+    const embedded = classifyExecutorKitError(new SubmitSignalReceiptError(
+      TX_HASH,
+      `dump ${TX_HASH}ff more`,
+    ));
+    expect(embedded.message).toContain('[redacted-hex]');
+    expect(embedded.message).not.toContain(TX_HASH);
+  });
+
+  it('keeps public ids readable in the kit\'s own ValidationError texts', () => {
+    // The kit authors ValidationError messages and echoes public identifiers
+    // (job ids, bytes32 fields) the operator must read; over-redacting them
+    // hid exactly the value needed to act on the error.
+    const jobId = `0x${'aa'.repeat(32)}`;
+    const classified = classifyExecutorKitError(new ValidationError(`job ${jobId} not found`));
+    expect(classified.kind).toBe('validation_failure');
+    expect(classified.message).toContain(jobId);
+    expect(classified.message).not.toContain('[redacted');
   });
 
   it('pins the state-machine job status lanes that consume the classification', () => {
