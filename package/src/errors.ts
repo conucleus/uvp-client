@@ -124,13 +124,14 @@ export function classifyExecutorKitError(
   fallbackKind: ExecutorKitErrorKind = 'unknown',
 ): ClassifiedExecutorKitError {
   const rawMessage = errorToMessage(error);
+  const keepHexes = publicHashesOf(error);
 
   const matchedCode = matchExplicitCode(error);
   if (matchedCode) {
     const entry = ERROR_CODE_TABLE[matchedCode];
     return {
       kind: entry.kind,
-      message: redactSecretLikeHex(rawMessage || matchedCode),
+      message: redactSecretLikeHex(rawMessage || matchedCode, keepHexes),
       retryable: entry.retryable,
       code: matchedCode,
     };
@@ -141,7 +142,7 @@ export function classifyExecutorKitError(
   if (error instanceof ValidationError) {
     return {
       kind: 'validation_failure',
-      message: redactSecretLikeHex(rawMessage || 'validation_failure'),
+      message: redactSecretLikeHex(rawMessage || 'validation_failure', keepHexes),
       retryable: false,
     };
   }
@@ -150,7 +151,7 @@ export function classifyExecutorKitError(
   if (matchedPattern) {
     return {
       kind: matchedPattern.kind,
-      message: redactSecretLikeHex(rawMessage || matchedPattern.kind),
+      message: redactSecretLikeHex(rawMessage || matchedPattern.kind, keepHexes),
       retryable: matchedPattern.retryable,
     };
   }
@@ -160,7 +161,7 @@ export function classifyExecutorKitError(
   // than being silently retried.
   return {
     kind: fallbackKind,
-    message: redactSecretLikeHex(rawMessage || fallbackKind),
+    message: redactSecretLikeHex(rawMessage || fallbackKind, keepHexes),
     retryable: false,
   };
 }
@@ -203,13 +204,33 @@ function errorToMessage(error: unknown): string {
 }
 
 /**
- * Redact bare 64-hex-digit runs (the shape of raw key material echoed by
- * third-party error texts). `0x`-prefixed 32-byte values are deliberately
- * spared: in this kit's messages they are public chain identifiers (tx/block
- * hashes) that operators need for correlation, and the kit itself never
- * interpolates secret material into an error message.
+ * Redact secret-shaped hex runs echoed by third-party error texts (viem,
+ * JSON-RPC providers): bare 64-hex digits and `0x`-prefixed 64-hex values —
+ * a raw private key appears in both shapes. The one exemption is a hash the
+ * error object itself carries as a `txHash` property (see
+ * {@link publicHashesOf}): 0x+64-hex is exactly the tx-hash shape too, so
+ * shape alone cannot tell a public identifier from key material, and the
+ * kit's own structured carriage is the only trustworthy provenance.
  */
-function redactSecretLikeHex(value: string): string {
+function redactSecretLikeHex(value: string, keepHexes: ReadonlySet<string>): string {
   return value
+    .replace(/\b0x[a-fA-F0-9]{64}\b/g, (match) => (keepHexes.has(match.toLowerCase()) ? match : '[redacted-32-byte-hex]'))
     .replace(/(?<!0x)\b[a-fA-F0-9]{64}\b/g, '[redacted-32-byte-hex]');
+}
+
+/**
+ * Public hash values exempt from redaction: a `txHash` hex property on an
+ * error along the cause chain is the kit's own declaration that the value is
+ * a public chain identifier (SubmitSignalReceiptError and friends — the same
+ * provenance broadcastTxHashFromError trusts in the watcher).
+ */
+function publicHashesOf(error: unknown): ReadonlySet<string> {
+  const keepHexes = new Set<string>();
+  for (const current of walkErrorChain(error)) {
+    const txHash = (current as { readonly txHash?: unknown }).txHash;
+    if (typeof txHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      keepHexes.add(txHash.toLowerCase());
+    }
+  }
+  return keepHexes;
 }

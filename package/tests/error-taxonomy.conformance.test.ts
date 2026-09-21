@@ -201,10 +201,12 @@ describe('executor-kit classification completeness against the taxonomy', () => 
     expect(attrs.dead_letter).toBe(false);
   });
 
-  it('keeps public 0x-prefixed identifiers in classified messages while redacting bare key material', () => {
-    // the redactor swept every 66-char 0x-prefixed value — including
-    // tx hashes operators need for correlation — into [redacted]; only bare
-    // 64-hex key material (the shape of raw key echoes) is redacted now.
+  it('keeps tx hashes the error itself carries while redacting secret-shaped hex echoes', () => {
+    // 0x+64-hex is both the tx-hash and the raw-private-key shape, so shape
+    // alone cannot spare one and redact the other. The exemption key is
+    // provenance: a txHash the error object carries as a typed property stays
+    // readable for correlation; every other 0x-prefixed or bare 64-hex run in
+    // third-party error text (including 0x-prefixed key echoes) is redacted.
     const receiptError = classifyExecutorKitError(new SubmitSignalReceiptError(
       TX_HASH,
       `submitSignal transaction receipt wait failed for ${TX_HASH}: Request timed out.`,
@@ -217,6 +219,11 @@ describe('executor-kit classification completeness against the taxonomy', () => 
     const leaked = classifyExecutorKitError(new Error(`signing failed with key ${bareKey}`));
     expect(leaked.message).not.toContain(bareKey);
     expect(leaked.message).toContain('[redacted-32-byte-hex]');
+
+    const prefixedKey = `0x${'ab'.repeat(32)}`;
+    const prefixedLeak = classifyExecutorKitError(new Error(`provider echoed credentials: ${prefixedKey}`));
+    expect(prefixedLeak.message).not.toContain(prefixedKey);
+    expect(prefixedLeak.message).toContain('[redacted-32-byte-hex]');
   });
 
   it('pins the state-machine job status lanes that consume the classification', () => {

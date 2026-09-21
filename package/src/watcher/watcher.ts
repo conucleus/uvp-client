@@ -354,7 +354,7 @@ export class StateMachineWatcher {
       // The finalized head has not caught up with the cursor yet — normal
       // finality lag, nothing to scan this round. Open jobs behind the cursor
       // still get their later-scan recheck: receipts do not wait for new blocks.
-      const revisitResults = await this.revisitOpenJobs(fromBlock);
+      const revisitResults = await this.revisitOpenJobs(fromBlock, new Set());
       return {
         fromBlock,
         toBlock,
@@ -383,6 +383,10 @@ export class StateMachineWatcher {
       }),
     );
     const logs = logBatches.flat().sort(compareRawLogs);
+    // Jobs whose log this round's scan loop handles must not be re-entered by
+    // the later-scan pass: raws without a block number cannot be excluded by
+    // the pass's height comparison, so the dedupe keys on the log's event id.
+    const scannedEventIds = scannedHookReadyEventIds(logs);
     const results: StateMachineLogProcessResult[] = [];
     // Fail fast on unexpected log-processing errors: the round aborts before the
     // cursor advances, so the failing block range is rescanned on the next
@@ -421,7 +425,7 @@ export class StateMachineWatcher {
     // Later-scan pass over open jobs behind the cursor (detected leftovers,
     // unconfirmed broadcasts). It runs before the cursor advances so a crash
     // mid-pass leaves the range (and the recheck) to the next round.
-    results.push(...await this.revisitOpenJobs(fromBlock));
+    results.push(...await this.revisitOpenJobs(fromBlock, scannedEventIds));
     if (this.config.cursorStore) {
       await this.config.cursorStore.save(
         {
@@ -526,18 +530,7 @@ export class StateMachineWatcher {
         new Error(`no state machine handler for ${event.stageIdentifier && event.hookName ? `${event.stageIdentifier}#${event.hookName}` : event.hookId}`),
         'missing_handler',
       );
-      const ignored = await this.updateJob(job.id, {
-        status: 'ignored',
-        updatedAt: this.config.now(),
-        lastError: error,
-      });
-      return {
-        status: 'ignored',
-        event,
-        submissions: [],
-        job: ignored,
-        error,
-      };
+      return this.ignoredVerdictResult(event, await this.recordIgnoredVerdict(job, error), error);
     }
 
     // 任务级原子认领：读-验-写竞态下两个执行器（watcher 扫描与手工
@@ -600,7 +593,9 @@ export class StateMachineWatcher {
           appendJobSubmission(jobSubmissions, toJobSubmission(signalIndex, attemptForSignal, result));
           currentJob = await this.updateJob(job.id, {
             updatedAt: this.config.now(),
-            lastSignalAttemptAt: this.config.now(),
+            // The backoff anchors on real broadcast attempts only — the
+            // handler-context lane applies the same condition.
+            ...(result.dryRun ? {} : { lastSignalAttemptAt: this.config.now() }),
             submissions: jobSubmissions,
           });
           return result;
@@ -1167,6 +1162,64 @@ export class StateMachineWatcher {
   }
 
   /**
+   * Terminal `ignored` write for pre-claim verdicts (missing handler,
+   * undecodable log), guarded like a claimed run's conclusive write: the
+   * verdict only lands while the job is still in the state this process read
+   * and no live run holds it. A held claim (foreign or same pid) or a CAS miss
+   * means a concurrent writer owns the job — a missing-handler write that
+   * landed anyway would clear that live claim and strand the running handler
+   * on a job already terminal here, so the stored job decides instead.
+   */
+  private async recordIgnoredVerdict(
+    job: StateMachineWatcherJob,
+    lastError: ClassifiedExecutorKitError,
+  ): Promise<{ readonly written: boolean; readonly job: StateMachineWatcherJob }> {
+    if (isHeldRunClaim(job.claim)) {
+      return { written: false, job };
+    }
+    const ignored = await this.config.jobStore.update(job.id, withConclusiveClaimRelease({
+      status: 'ignored',
+      updatedAt: this.config.now(),
+      lastError,
+      expectStatus: job.status,
+      expectClaimPid: job.claim?.pid ?? null,
+    }));
+    if (ignored) {
+      return { written: true, job: ignored };
+    }
+    const current = await this.config.jobStore.get(job.id);
+    if (!current) {
+      throw new ValidationError(`job ${job.id} not found`);
+    }
+    return { written: false, job: current };
+  }
+
+  private ignoredVerdictResult(
+    event: StateMachineHookReady,
+    verdict: { readonly written: boolean; readonly job: StateMachineWatcherJob },
+    error: ClassifiedExecutorKitError,
+  ): StateMachineLogProcessResult {
+    if (verdict.written) {
+      return {
+        status: 'ignored',
+        event,
+        submissions: [],
+        job: verdict.job,
+        error,
+      };
+    }
+    // The concurrent writer's stored job is the verdict now; reporting this
+    // process's own missing-handler classification on it would misattribute
+    // the outcome.
+    return {
+      status: isTerminalJobStatus(verdict.job.status) ? 'ignored' : 'skipped',
+      event,
+      submissions: [],
+      job: verdict.job,
+    };
+  }
+
+  /**
    * Atomically take the run claim for this job. Returns:
    * - `claimed`: this process owns the run (status `matched`, claim set);
    * - `busy`: a live foreign claim holds the job — another executor is mid-run;
@@ -1397,7 +1450,10 @@ export class StateMachineWatcher {
    * receipt of an unconfirmed broadcast before anything else and the resend
    * backoff throttles rebroadcasts.
    */
-  private async revisitOpenJobs(fromBlock: bigint): Promise<readonly StateMachineLogProcessResult[]> {
+  private async revisitOpenJobs(
+    fromBlock: bigint,
+    scannedEventIds: ReadonlySet<Hex>,
+  ): Promise<readonly StateMachineLogProcessResult[]> {
     const jobs = await this.config.jobStore.list();
     const watched = new Set(this.config.stateMachines.map((deployment) => normalizeAddress(deployment.stateMachineAddress, 'stateMachines[].stateMachineAddress')));
     const open = jobs.filter((job) => {
@@ -1411,6 +1467,12 @@ export class StateMachineWatcher {
       if (job.raw.blockNumber !== undefined && job.raw.blockNumber !== null && job.raw.blockNumber >= fromBlock) {
         // Inside (or ahead of) this round's window: the scan loop itself owns
         // it this round, so the pass must not double-process it.
+        return false;
+      }
+      if (scannedEventIds.has(job.eventId)) {
+        // Same ownership rule for raws the height comparison cannot place: a
+        // log without a block number that this round's scan loop already
+        // handled would otherwise be re-run within the same round.
         return false;
       }
       if (job.stateMachineAddress && !watched.has(normalizeAddress(job.stateMachineAddress, 'job.stateMachineAddress'))) {
@@ -1482,16 +1544,20 @@ export class StateMachineWatcher {
       maxAttempts: this.config.retry.maxAttempts,
       ...(this.config.supplierId ? { supplierId: this.config.supplierId } : {}),
     });
-    const isolated = await this.updateJob(job.id, {
-      status: 'ignored',
-      updatedAt: now,
-      lastError: classified,
-    });
+    const verdict = await this.recordIgnoredVerdict(job, classified);
+    if (verdict.written) {
+      return {
+        status: 'ignored',
+        submissions: [],
+        job: verdict.job,
+        error: classified,
+        decodeFailure: true,
+      };
+    }
     return {
-      status: 'ignored',
+      status: isTerminalJobStatus(verdict.job.status) ? 'ignored' : 'skipped',
       submissions: [],
-      job: isolated,
-      error: classified,
+      job: verdict.job,
       decodeFailure: true,
     };
   }
@@ -1641,6 +1707,24 @@ export function normalizeStateMachineDeploymentConfig(
     ...(deployment.deploymentId ? { deploymentId: normalizeBytes32(deployment.deploymentId, `${path}.deploymentId`) } : {}),
     ...(status ? { status } : {}),
   };
+}
+
+/**
+ * Event ids of this round's scanned HookReady logs (the same derivation the
+ * job store keys detections on, for both decodable and undecodable logs).
+ */
+function scannedHookReadyEventIds(logs: readonly StateMachineRawLog[]): Set<Hex> {
+  const eventIds = new Set<Hex>();
+  for (const log of logs) {
+    if (log.topics[0] !== HOOK_READY_TOPIC) {
+      continue;
+    }
+    const eventId = tryHookReadyEventId(log);
+    if (eventId !== undefined) {
+      eventIds.add(eventId);
+    }
+  }
+  return eventIds;
 }
 
 /**

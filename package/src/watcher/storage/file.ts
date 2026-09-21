@@ -173,7 +173,16 @@ export async function quarantineCorruptStateFile(filePath: string, raw: string, 
   const quarantinePath = `${filePath}.corrupt-${new Date().toISOString().replaceAll(/[:.]/g, '')}`;
   try {
     await rename(filePath, quarantinePath);
-  } catch {
+  } catch (renameError) {
+    // Recovery still proceeds (the caller starts from empty state), but the
+    // damaged file not moving aside is not a silent condition: it stays in the
+    // read path, so every later read re-trips the same parse failure until a
+    // successful write replaces the file.
+    console.error(
+      `executor-kit: ${kind} state file ${filePath} was unreadable (${error instanceof Error ? error.message : String(error)})`
+      + ` and moving it aside to ${quarantinePath} failed too (${renameError instanceof Error ? renameError.message : String(renameError)});`
+      + ` the damaged file stays in place. The raw contents began with: ${raw.slice(0, 120)}`,
+    );
     return;
   }
   console.error(
