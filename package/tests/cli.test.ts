@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { encodeAbiParameters, keccak256, stringToBytes, type Hex } from 'viem';
 import { buildProductSubmitTypedData } from '@uvp-eth/protocol-bindings';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_WATCHER_STATE_DIR,
   EXECUTOR_RUNTIME_ENV,
@@ -14,7 +14,7 @@ import {
   resolveWatcherStorage,
   WATCHER_STATE_DIR_ENV,
 } from '../src/cli.js';
-import { FileStateMachineCursorStore, FileStateMachineJobStore, loadStateMachineHandlerConfig } from '../src/watcher/index.js';
+import { FileStateMachineCursorStore, FileStateMachineJobStore, loadStateMachineHandlerConfig, type StateMachineJobPatch } from '../src/watcher/index.js';
 import { ValidationError } from '../src/validation.js';
 
 const RETRY_STATE_MACHINE = '0x0000000000000000000000000000000000000001';
@@ -571,6 +571,101 @@ describe('honest execution exit codes', () => {
     } finally {
       process.exitCode = previousExitCode;
       console.log = originalLog;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('exits non-zero with an explicit notice when a concurrent executor beats the retry to the claim (skipped)', async () => {
+    // 重开 CAS 与运行认领之间被并发执行器抢先时，结果是 skipped：重跑没有
+    // 发生，退出码 0 会让脚本把"未执行"读成"已成功"。
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-exit-skipped-'));
+    const jobsFile = join(dir, 'jobs.json');
+    const configPath = join(dir, 'executor.json');
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = (message?: unknown) => {
+      logs.push(String(message));
+    };
+    console.error = (message?: unknown) => {
+      errors.push(String(message));
+    };
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const originalUpdate = FileStateMachineJobStore.prototype.update;
+    const claimRacer = vi.spyOn(FileStateMachineJobStore.prototype, 'update').mockImplementation(
+      async function (this: FileStateMachineJobStore, jobId: Hex, patch: StateMachineJobPatch) {
+        const applied = await originalUpdate.call(this, jobId, patch);
+        if (patch.status === 'detected' && patch.claim === null) {
+          // 模拟并发执行器：重开写刚落地即认领（同 pid 读作存活 → busy）。
+          return await originalUpdate.call(this, jobId, {
+            updatedAt: patch.updatedAt,
+            claim: { pid: process.pid, at: patch.updatedAt },
+          }) ?? applied;
+        }
+        return applied;
+      },
+    );
+    try {
+      await writeFile(jobsFile, JSON.stringify({
+        version: 1,
+        jobs: [{
+          id: RETRY_JOB_ID,
+          eventId: RETRY_EVENT_ID,
+          orderId: RETRY_ORDER_ID,
+          planId: RETRY_PLAN_ID,
+          hookId: RETRY_HOOK_ID,
+          stageId: RETRY_STAGE_ID,
+          stageIdentifier: 'exec.main',
+          hookName: 'START',
+          status: 'failed',
+          attempts: 1,
+          maxAttempts: 3,
+          detectedAt: '2026-04-28T00:00:00.000Z',
+          updatedAt: '2026-04-28T00:00:01.000Z',
+          submissions: [],
+          raw: RETRY_RAW_LOG,
+        }],
+      }));
+      await writeFile(configPath, JSON.stringify({
+        supplierId: 'logistics-provider-a',
+        walletAddress: RETRY_WALLET,
+        chainId: 31_337,
+        stateMachineAddress: RETRY_STATE_MACHINE,
+        artifact: {
+          hooksByHookId: {
+            [RETRY_HOOK_ID]: { stageIdentifier: 'exec.main', hookName: 'START' },
+          },
+        },
+        handlers: {
+          '*': {
+            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+          },
+        },
+      }));
+
+      await main([
+        'node', 'uvp-executor', 'jobs', 'retry', RETRY_JOB_ID,
+        '--jobs-file', jobsFile,
+        '--rpc-url', 'http://127.0.0.1:8545',
+        '--state-machine', RETRY_STATE_MACHINE,
+        '--chain-id', '31337',
+        '--config', configPath,
+        '--operator', 'ops@example.com',
+        '--wallet-address', RETRY_WALLET,
+        '--dry-run',
+      ]);
+
+      const output = JSON.parse(logs[0] ?? '{}') as { retry?: { status?: string } };
+      expect(output.retry?.status).toBe('skipped');
+      expect(process.exitCode).toBe(1);
+      expect(errors.some((line) => line.includes('did not run the job'))).toBe(true);
+    } finally {
+      claimRacer.mockRestore();
+      process.exitCode = previousExitCode;
+      console.log = originalLog;
+      console.error = originalError;
       await rm(dir, { recursive: true, force: true });
     }
   });

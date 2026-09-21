@@ -82,6 +82,19 @@ export function registerJobsCommands(program: Command): void {
         ...(options.reason ? { reason: options.reason } : {}),
       });
       console.log(stringifyForTransport({ retry: result }));
+      if (result.status === 'skipped') {
+        // 重开 CAS 与运行认领之间被并发执行器抢先（或任务已终态）：retry 请求
+        // 的重跑没有发生。结果 JSON 里的 skipped 只是事实陈述，退出码 0 会让
+        // 脚本与操作员把"未执行"读成"已成功"——与 executionOutcomeFailed 的
+        // 诚实退出码同一口径。扫描路径的 skipped（外来 hook、活认领让位）是
+        // 正常态，不适用此规则。
+        console.error(
+          `jobs retry ${jobId} did not run the job (result status: skipped):`
+          + ' another executor claimed or concluded it between the retry write and the run;'
+          + ' re-check the job state before acting again',
+        );
+        process.exitCode = 1;
+      }
       if (executionOutcomeFailed(result)) {
         process.exitCode = 1;
       }

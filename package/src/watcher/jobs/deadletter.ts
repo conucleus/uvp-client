@@ -70,6 +70,9 @@ export async function deadLetterStateMachineJob(
       operator: asNonEmptyString(options.operator, 'operator'),
       at,
       reason,
+      // 审计可区分性：--force 覆盖读作存活的认领是"操作员断言持有者已死"的
+      // 更强声明，回看时必须能与常规 dead-letter 分开识别。
+      ...(options.force ? { forced: true } : {}),
     }),
     claim: null,
     expectStatus: job.status,

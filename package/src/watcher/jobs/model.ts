@@ -84,6 +84,13 @@ export interface StateMachineJobManualAction {
   readonly operator: string;
   readonly at: string;
   readonly reason?: string;
+  /**
+   * Marks a dead-letter that overrode a claim reading alive (--force): the
+   * operator asserted the live-looking holder is a reused pid of a crashed
+   * executor. Audit readers must be able to tell that stronger, riskier
+   * declaration apart from a routine dead-letter.
+   */
+  readonly forced?: boolean;
 }
 
 export interface StateMachineJobStore {

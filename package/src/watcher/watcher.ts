@@ -366,6 +366,10 @@ export class StateMachineWatcher {
         this.checkpoints = [];
         this.cursorBlockHash = undefined;
       } else {
+        // 越头早退轮不扫块也不跑 later-scan，但 stuck-claim 告警的轮计数以
+        // 「每轮观测一次」为前提：跳过观测会让等链长回来的这段（可能无限
+        // 长）窗口里，持续持有的外来认领永远到不了告警阈值。
+        this.trackHeldForeignClaims(await this.config.jobStore.list());
         return { fromBlock, toBlock, scannedLogs: 0, results: [], decodeFailures: 0 };
       }
     } else {
@@ -1154,11 +1158,26 @@ export class StateMachineWatcher {
   }
 
   private async updateJob(jobId: Hex, patch: StateMachineJobPatch): Promise<StateMachineWatcherJob> {
-    const updated = await this.config.jobStore.update(jobId, withConclusiveClaimRelease(patch));
+    // 终态守卫：--force dead-letter 可在运行中途落地（清掉认领，但 handler 仍
+    // 在飞），此后 lastError 存的是操作员的人工处置理由；运行中的失败分类再
+    // 无条件写回会把它抹成机器错误，审计上等于消灭这次人工裁决。状态与结论
+    // 写入走 concludeRun 的 CAS，本就不覆写并发裁决。
+    let guarded = patch;
+    if (patch.lastError !== undefined && await this.jobReachedTerminal(jobId)) {
+      const { lastError: omitted, ...rest } = patch;
+      void omitted;
+      guarded = rest;
+    }
+    const updated = await this.config.jobStore.update(jobId, withConclusiveClaimRelease(guarded));
     if (!updated) {
       throw new ValidationError(`job ${jobId} not found`);
     }
     return updated;
+  }
+
+  private async jobReachedTerminal(jobId: Hex): Promise<boolean> {
+    const current = await this.config.jobStore.get(jobId);
+    return current !== undefined && isTerminalJobStatus(current.status);
   }
 
   /**

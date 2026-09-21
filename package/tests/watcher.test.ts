@@ -3527,6 +3527,45 @@ describe('state machine chain watcher', () => {
     }
   });
 
+  it('racing breakers of the same stale jobs lock cannot double-hold it (no lost updates)', async () => {
+    // rm+wx 式陈旧接管里，同时判陈旧的写者互删对方刚建的新锁而同时持锁，
+    // 各自的读改写互相覆盖、丢更新。原子接管（唯一竞争文件 + link + rename
+    // 挪走复核）下同一把陈旧锁只有一个赢家，其余落回等待，逐个串行完成。
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-jobs-lock-race-'));
+    try {
+      const jobsFile = join(dir, 'jobs.json');
+      const stores = Array.from({ length: 6 }, () => new FileStateMachineJobStore(jobsFile));
+      const events = Array.from({ length: stores.length }, (_, index) => decodeHookReadyLog(
+        { ...hookReadyLog(), transactionHash: `0x${(0x36 + index).toString(16).repeat(32)}` as Hex, logIndex: 7 + index },
+        artifactIndex(),
+      )!);
+      for (const event of events) {
+        await stores[0]!.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
+      }
+      const jobs = await stores[0]!.list();
+      expect(jobs).toHaveLength(stores.length);
+
+      // 陈旧锁：六个写者并发进入时都会判它陈旧而走接管路径。
+      const lockPath = `${jobsFile}.lock`;
+      await writeFile(lockPath, '999999\n');
+      const oneHourAgo = new Date(Date.now() - 3_600_000);
+      await utimes(lockPath, oneHourAgo, oneHourAgo);
+
+      await Promise.all(stores.map((store, index) => store.update(jobs[index]!.id, {
+        status: 'dead_letter',
+        updatedAt: '2026-04-28T00:01:00.000Z',
+      })));
+
+      const after = await stores[0]!.list();
+      expect(after.filter((job) => job.status === 'dead_letter')).toHaveLength(stores.length);
+      const leftovers = (await readdir(dir))
+        .filter((name) => name.endsWith('.lock') || name.includes('.contend-') || name.endsWith('.broken'));
+      expect(leftovers).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a signal without source attribution instead of hashing the empty string', async () => {
     // keccak("") minted one constant pseudo sourceId for every
     // unattributed signal, collapsing the chain's (…, sourceId, signalId)
@@ -5113,6 +5152,149 @@ describe('watcher held foreign claim alert', () => {
     await watcher.pollOnce();
     expect(errors).toHaveLength(1);
   });
+
+  it('re-arms the alert after a streak ends: a release clears the counters, a new persistent hold alerts again', async () => {
+    // 计数与已告警集合在 claim 停止读作持有时必须同步清零——否则第二次
+    // 持续持有永远命中"已告警过"的短路，新的死锁回到静默。
+    const store = new InMemoryStateMachineJobStore();
+    const errors: string[] = [];
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      privateKeyEnv: 'UVP_TEST_PRIVATE_KEY',
+      dryRun: true,
+      artifact: artifactIndex(),
+      jobStore: store,
+      handlers: { '*': () => undefined },
+      onError: (error) => {
+        errors.push(error instanceof Error ? error.message : String(error));
+      },
+      publicClient: {
+        async getChainId() {
+          return 31_337;
+        },
+        async getBlockNumber() {
+          return 20n;
+        },
+        async getLogs() {
+          return [];
+        },
+      },
+    });
+
+    const event = decodeHookReadyLog(hookReadyLog(), artifactIndex());
+    if (!event) {
+      throw new Error('expected a decoded HookReady event');
+    }
+    const foreignPid = process.ppid ?? 1;
+    if (foreignPid === process.pid) {
+      throw new Error('test requires a foreign pid');
+    }
+    const detected = await store.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
+    const hold = () => store.update(detected.id, {
+      updatedAt: '2026-04-28T00:00:01.000Z',
+      status: 'matched',
+      matchedKey: '*',
+      claim: { pid: foreignPid, at: '2026-04-28T00:00:01.000Z' },
+    });
+
+    // 第一次持续持有：满阈值告警一次。
+    await hold();
+    for (let round = 0; round < HELD_FOREIGN_CLAIM_ALERT_ROUNDS; round += 1) {
+      await watcher.pollOnce();
+    }
+    expect(errors).toHaveLength(1);
+
+    // 认领释放：下一轮观测清零计数与已告警集合（本进程接管重跑后释放）。
+    await store.update(detected.id, {
+      updatedAt: '2026-04-28T00:02:00.000Z',
+      claim: null,
+      expectStatus: 'matched',
+    });
+    await watcher.pollOnce();
+    expect(errors).toHaveLength(1);
+
+    // 同一任务再次被外来 pid 持续持有：阈值内沉默，满阈值必须再次告警。
+    await hold();
+    for (let round = 0; round < HELD_FOREIGN_CLAIM_ALERT_ROUNDS - 1; round += 1) {
+      await watcher.pollOnce();
+    }
+    expect(errors).toHaveLength(1);
+    await watcher.pollOnce();
+    expect(errors).toHaveLength(2);
+    expect(errors[1]).toContain(`pid ${foreignPid}`);
+  });
+
+  it('observes held foreign claims on cursor-overshoot early-return rounds', async () => {
+    // 越头早退轮不扫块也不跑 later-scan：早退前不做一次 list()+观测的话，
+    // 等链长回来的整段窗口里持续持有的外来认领到不了告警阈值。
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-overshoot-alert-'));
+    const errors: string[] = [];
+    try {
+      const cursorFile = join(dir, 'cursor.json');
+      await writeFile(cursorFile, `${JSON.stringify({
+        version: 2,
+        nextBlock: '50',
+        chainId: 31_337,
+        stateMachines: [STATE_MACHINE],
+      })}\n`);
+      const store = new InMemoryStateMachineJobStore();
+      const watcher = createStateMachineWatcher({
+        rpcUrl: 'http://127.0.0.1:8545',
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        walletAddress: WALLET_ADDRESS,
+        dryRun: true,
+        artifact: artifactIndex(),
+        jobStore: store,
+        handlers: { '*': () => undefined },
+        onError: (error) => {
+          errors.push(error instanceof Error ? error.message : String(error));
+        },
+        cursorStore: new FileStateMachineCursorStore(cursorFile),
+        publicClient: {
+          async getChainId() {
+            return 31_337;
+          },
+          async getBlockNumber() {
+            return 12n;
+          },
+          async getLogs() {
+            return [];
+          },
+        },
+      });
+
+      const event = decodeHookReadyLog(hookReadyLog(), artifactIndex());
+      if (!event) {
+        throw new Error('expected a decoded HookReady event');
+      }
+      const foreignPid = process.ppid ?? 1;
+      const detected = await store.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
+      const claimed = await store.update(detected.id, {
+        updatedAt: '2026-04-28T00:00:01.000Z',
+        status: 'matched',
+        matchedKey: '*',
+        claim: { pid: foreignPid, at: '2026-04-28T00:00:01.000Z' },
+      });
+      if (!claimed) {
+        throw new Error('expected the claim write to apply');
+      }
+
+      for (let round = 0; round < HELD_FOREIGN_CLAIM_ALERT_ROUNDS; round += 1) {
+        const poll = await watcher.pollOnce();
+        expect(poll.scannedLogs).toBe(0);
+        expect(poll.results).toHaveLength(0);
+      }
+      expect(errors).toHaveLength(HELD_FOREIGN_CLAIM_ALERT_ROUNDS + 1);
+      expect(errors[0]).toContain('beyond the chain head');
+      expect(errors.at(-1)).toContain(`pid ${foreignPid}`);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('jobs dead-letter force', () => {
@@ -5153,6 +5335,24 @@ describe('jobs dead-letter force', () => {
       action: 'dead_letter',
       operator: 'ops@example.com',
       reason: 'holder pid verified reused; executor crashed',
+      // --force 的审计可区分性：回看时必须能识别"操作员断言持有者已死"的人工接管。
+      forced: true,
     });
+
+    // 常规 dead-letter（无 --force）不得带 forced 标记。
+    const quietEvent = decodeHookReadyLog(
+      { ...hookReadyLog(), transactionHash: `0x${'36'.repeat(32)}` as Hex, logIndex: 9 },
+      artifactIndex(),
+    );
+    if (!quietEvent) {
+      throw new Error('expected a decoded HookReady event');
+    }
+    const quiet = await store.upsertDetected(quietEvent, { now: '2026-04-28T00:00:06.000Z', maxAttempts: 3 });
+    const unforced = await deadLetterStateMachineJob(store, quiet.id, {
+      operator: 'ops@example.com',
+      reason: 'not stuck',
+      now: () => '2026-04-28T00:00:07.000Z',
+    });
+    expect(unforced.manualActions?.[0]?.forced).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile, readFile, rm as rmFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile, readFile, rm as rmFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -141,6 +141,184 @@ describe('watcher state-dir 进程锁', () => {
       assert.equal(await readFile(lockPath, 'utf8'), `${process.pid}\n`);
       await lock.release();
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('陈旧锁的并发接管竞态：同时判陈旧也只有唯一持有者，协议自身不留残留文件', async () => {
+    // rm+wx 式接管里，两个同时判陈旧的进程会互删对方刚建的新锁而双双持锁
+    // （TOCTOU）。原子接管下，无论事件循环如何交错，link 的 create-if-absent
+    // 语义保证 lockPath 上至多一个赢家，落败者重读后按活 pid 拒绝。
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-race-'));
+    try {
+      const lockPath = join(dir, 'watcher.lock');
+      await writeFile(lockPath, `${await deadPid()}\n`);
+
+      const settled = await Promise.allSettled([
+        acquireWatcherStateDirLock(dir),
+        acquireWatcherStateDirLock(dir),
+        acquireWatcherStateDirLock(dir),
+      ]);
+      const holders = settled.filter((result) => result.status === 'fulfilled');
+      const refused = settled.filter((result) => result.status === 'rejected');
+      assert.equal(holders.length, 1, 'exactly one contender may end up holding the lock');
+      assert.equal(refused.length, 2);
+      for (const result of refused) {
+        const reason = result.status === 'rejected' ? result.reason : undefined;
+        assert.match(
+          String(reason instanceof Error ? reason.message : String(reason)),
+          /locked by running process/u,
+          'the loser must lose by reading the winner as a live holder, not by double-holding',
+        );
+      }
+
+      const winner = holders[0];
+      assert.ok(winner && winner.status === 'fulfilled');
+      assert.equal(await readFile(lockPath, 'utf8'), `${process.pid}\n`);
+      await winner.value.release();
+      assert.deepEqual(
+        (await readdir(dir)).sort(),
+        [],
+        'the takeover protocol must clean up its contender and graveyard files',
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('跨进程并发接管陈旧锁：每轮风暴至多一个持有者，落败进程按活 pid 拒绝', async () => {
+    // 单次起跑的碰撞窗口只有毫秒级，一次风暴难以稳定复现 rm+wx 式接管的
+    // 互删双持；改为多轮重播陈旧锁 + 8 进程同时起跑的风暴。持有者挂到
+    // 本轮 stop 门才释放：轮内锁位不空闲，第二条 held 只能来自真双持。
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-race-proc-'));
+    const racerCount = 8;
+    const rounds = 12;
+    const children: ReturnType<typeof spawn>[] = [];
+    try {
+      const lockPath = join(dir, 'watcher.lock');
+      const stalePid = await deadPid();
+      const marksFile = join(dir, 'marks');
+      const script = join(dir, 'racer.mts');
+      await writeFile(script, [
+        'import { existsSync } from \'node:fs\';',
+        'import { appendFileSync } from \'node:fs\';',
+        'const mod = await import(process.argv[2]);',
+        'const rounds = Number(process.argv[6]);',
+        'const waitFor = async (path: string) => {',
+        '  while (!existsSync(path)) {',
+        '    await new Promise((resolve) => setTimeout(resolve, 2));',
+        '  }',
+        '};',
+        'for (let round = 0; round < rounds; round += 1) {',
+        '  const gate = `${process.argv[4]}-${round}`;',
+        '  await waitFor(`${gate}-go`);',
+        '  try {',
+        '    const lock = await mod.acquireWatcherStateDirLock(process.argv[3]);',
+        `    appendFileSync(process.argv[5], \`held \${process.pid} r\${round}\\n\`);`,
+        '    await waitFor(`${gate}-stop`);',
+        '    await lock.release();',
+        `    appendFileSync(process.argv[5], \`released \${process.pid} r\${round}\\n\`);`,
+        '  } catch (error) {',
+        `    appendFileSync(process.argv[5], \`refused \${process.pid} r\${round} \${error instanceof Error ? error.message : String(error)}\\n\`);`,
+        '  }',
+        `  appendFileSync(process.argv[5], \`done \${process.pid} r\${round}\\n\`);`,
+        '}',
+        '',
+      ].join('\n'));
+
+      const readMarks = async (): Promise<string[]> => {
+        try {
+          return (await readFile(marksFile, 'utf8')).split('\n').filter((line) => line.length > 0);
+        } catch {
+          return [];
+        }
+      };
+      const linesOfRound = (lines: readonly string[], round: number): string[] =>
+        lines.filter((line) => line.split(' ')[2] === `r${round}`);
+      for (let index = 0; index < racerCount; index += 1) {
+        children.push(spawn(
+          process.execPath,
+          ['--import', 'tsx', script, watcherEntryUrl, dir, join(dir, 'gate'), marksFile, String(rounds)],
+          { cwd: packageDir, stdio: 'ignore' },
+        ));
+      }
+
+      const codes = Promise.all(children.map((child) => new Promise<number | null>((resolve) => {
+        child.once('exit', (code) => resolve(code));
+      })));
+      for (let round = 0; round < rounds; round += 1) {
+        // 每轮重新播种陈旧锁，再开门让全部进程同时冲同一把锁。
+        await writeFile(lockPath, `${stalePid}\n`);
+        await writeFile(join(dir, `gate-${round}-go`), '');
+        const roundDeadline = Date.now() + 30_000;
+        const settle = async (): Promise<void> => {
+          for (;;) {
+            if (Date.now() > roundDeadline) {
+              throw new Error(`round ${round} never settled: ${(await readMarks()).join(' | ')}`);
+            }
+            if (children.some((child) => child.exitCode !== null && child.exitCode !== 0)) {
+              throw new Error(`a racer crashed in round ${round}: ${(await readMarks()).join(' | ')}`);
+            }
+            const lines = linesOfRound(await readMarks(), round);
+            const held = lines.filter((line) => line.startsWith('held '));
+            const done = lines.filter((line) => line.startsWith('done '));
+            assert.ok(
+              held.length <= 1,
+              `round ${round}: at most one racer may hold the lock at a time: ${lines.join(' | ')}`,
+            );
+            if (held.length === 1 && done.length === racerCount - 1) {
+              return;
+            }
+            if (done.length === racerCount) {
+              throw new Error(`round ${round} produced no holder: ${lines.join(' | ')}`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        };
+        await settle();
+        // 持有者挂到 stop 门才放锁：7 个落败者已定性，此时开门收尾。
+        await writeFile(join(dir, `gate-${round}-stop`), '');
+        for (;;) {
+          if (Date.now() > roundDeadline) {
+            throw new Error(`round ${round} holder never released: ${(await readMarks()).join(' | ')}`);
+          }
+          const lines = linesOfRound(await readMarks(), round);
+          if (lines.filter((line) => line.startsWith('done ')).length === racerCount) {
+            const held = lines.filter((line) => line.startsWith('held '));
+            const released = lines.filter((line) => line.startsWith('released '));
+            const refused = lines.filter((line) => line.startsWith('refused '));
+            assert.equal(held.length, 1, `round ${round}: ${lines.join(' | ')}`);
+            assert.equal(released.length, 1, `round ${round}: the holder must release on the stop gate`);
+            assert.equal(refused.length, racerCount - 1);
+            assert.ok(
+              refused.every((line) => line.includes('locked by running process')),
+              `round ${round}: the losers must report the live holder: ${refused.join(' | ')}`,
+            );
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+
+      const exitCodes = await codes;
+      assert.deepEqual(
+        exitCodes.filter((code) => code !== 0),
+        [],
+        'a refused racer still exits cleanly',
+      );
+      assert.deepEqual(
+        (await readdir(dir))
+          .filter((name) => name === 'watcher.lock' || name.includes('.contend-') || name.endsWith('.broken'))
+          .sort(),
+        [],
+        'no lock, contender, or graveyard files may survive the storm',
+      );
+    } finally {
+      for (const child of children) {
+        if (!child.killed && child.exitCode === null) {
+          child.kill('SIGKILL');
+        }
+      }
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -471,6 +649,53 @@ describe('watcher 任务级运行认领', () => {
       const stored = await watcher.config.jobStore.get(jobId);
       assert.equal(stored?.status, 'dead_letter');
       assert.equal(stored?.lastError?.message, 'operator verdict', 'the operator reason must survive the run');
+    } finally {
+      release?.();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('运行中的失败分类写入不得覆盖并发落下的操作员 dead-letter 理由（终态守卫）', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-run-claim-lasterror-'));
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolveStarted) => { entered = resolveStarted; });
+    const blocked = new Promise<void>((resolveBlocked) => { release = resolveBlocked; });
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:1',
+      stateMachineAddress: machine,
+      chainId: 31_337,
+      walletAddress: wallet,
+      privateKeyEnv: 'UVP_RUN_CLAIM_UNUSED_KEY',
+      dryRun: true,
+      jobStore: new FileStateMachineJobStore(join(dir, 'jobs.json')),
+      // handler 先阻塞等操作员裁决落地，再抛错：失败路径会走运行中
+      // lastError 写入（updateJob），正是终态守卫要拦的写。
+      handlers: { '*': async () => { entered(); await blocked; throw new Error('handler boom'); } },
+    });
+    try {
+      const log = await hookReadyLog();
+      const active = watcher.handleLog(log);
+      await started;
+
+      const jobId = stateMachineJobId(decodeHookReadyLog(log));
+      await watcher.config.jobStore.update(jobId, {
+        status: 'dead_letter',
+        updatedAt: new Date().toISOString(),
+        lastError: { kind: 'unknown', message: 'operator verdict', retryable: false },
+        claim: null,
+      });
+
+      release();
+      const settled = await active;
+      assert.equal(settled.job?.status, 'dead_letter');
+      const stored = await watcher.config.jobStore.get(jobId);
+      assert.equal(stored?.status, 'dead_letter');
+      assert.equal(
+        stored?.lastError?.message,
+        'operator verdict',
+        'the in-run failure classification must not clobber the operator-stored reason',
+      );
     } finally {
       release?.();
       await rm(dir, { recursive: true, force: true });
