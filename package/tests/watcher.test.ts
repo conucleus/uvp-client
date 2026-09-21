@@ -4377,6 +4377,81 @@ describe('submitSignal receipt visibility', () => {
     }
   });
 
+  it('keeps the operator dead-letter reason when the recovery clear lands on a terminal job', async () => {
+    // 恢复成功的善后写入用 clearLastError 清掉失败痕迹；任务若已被操作员
+    // --force dead-letter（终态、理由存于 lastError），这次清除与失败分类一
+    // 样不得碰掉人工裁决。失败分类写入与恢复写入之间唯一的中断点是收据查
+    // 询：操作员裁决从那里落地，正好卡在守卫要拦的清除写入之前。
+    process.env[KEY_ENV] = TEST_PRIVATE_KEY;
+    const stub = await startJsonRpcStub();
+    try {
+      let verdictLanded = false;
+      const watcher = createStateMachineWatcher({
+        rpcUrl: stub.url,
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        privateKeyEnv: KEY_ENV,
+        publicClient: {
+          async getChainId() {
+            return 31_337;
+          },
+          async getBlockNumber() {
+            return 12n;
+          },
+          async getLogs() {
+            return [];
+          },
+          async waitForTransactionReceipt() {
+            throw new Error('Request timed out.');
+          },
+          async getTransactionReceipt() {
+            if (!verdictLanded) {
+              verdictLanded = true;
+              await watcher.config.jobStore.update(
+                stateMachineJobId(decodeHookReadyLog(hookReadyLog(), artifactIndex())!),
+                {
+                  status: 'dead_letter',
+                  updatedAt: new Date().toISOString(),
+                  lastError: { kind: 'unknown', message: 'operator verdict', retryable: false },
+                  claim: null,
+                },
+              );
+            }
+            return { status: 'success' };
+          },
+        },
+        artifact: artifactIndex(),
+        retry: { maxAttempts: 3, baseDelayMs: 0 },
+        handlers: {
+          '*': (event) => ({
+            planId: PLAN_ID,
+            orderId: event.orderId,
+            source: 'buyer',
+            signalName: 'exec.main.cmp',
+            payloadHash: PAYLOAD_HASH,
+          }),
+        },
+      });
+
+      const result = await watcher.handleLog(hookReadyLog());
+
+      // 恢复本身照常完成：一次广播，收据恢复仍进审计轨迹。
+      expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
+      const submissions = result.job?.submissions ?? [];
+      expect(submissions[submissions.length - 1]).toMatchObject({ dryRun: false, txHash: TX_HASH, confirmed: true });
+      // 人工裁决胜出：终态与理由都不被运行中的清除写入抹掉。
+      expect(result.job?.status).toBe('dead_letter');
+      expect(result.job?.lastError?.message).toBe('operator verdict');
+      const stored = await watcher.config.jobStore.get(
+        stateMachineJobId(decodeHookReadyLog(hookReadyLog(), artifactIndex())!),
+      );
+      expect(stored?.lastError?.message).toBe('operator verdict');
+    } finally {
+      await stub.close();
+      delete process.env[KEY_ENV];
+    }
+  });
+
   it('throws the receipt error and never rebroadcasts when the recovered receipt reverted', async () => {
     // Replay-guard reverted branch: the receipt-wait timed out (retryable, tx
     // already broadcast), but the receipt lookup finds the tx mined with a

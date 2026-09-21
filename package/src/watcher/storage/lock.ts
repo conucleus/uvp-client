@@ -169,8 +169,7 @@ async function acquireLockMarker(
       }
       // 挪走的是易主后的活锁：放回（不覆盖任何已落位的新锁），再重走竞争。
       if (moved) {
-        await link(gravePath, lockPath).catch(() => undefined);
-        await rm(gravePath, { force: true }).catch(() => undefined);
+        await putBackDisplacedMarker(gravePath, lockPath);
       }
     }
   } finally {
@@ -187,6 +186,23 @@ async function releaseLockMarker(lockPath: string, identity: LockMarkerIdentity)
   // 释放时占位已非自己：静置复核后被挪走的残余（坟场/被放回的鬼锁）由
   // 持有者自己收尾，避免无主占位永久堵住后来的竞争者。
   await cleanupDisplacedMarker(lockPath, identity);
+}
+
+/**
+ * 把 rename 挪进坟场的他人活锁放回 lockPath：link 的 create-if-absent 语义
+ * 天然让位，不覆盖任何已落位的新锁。放回成功才清掉坟场名（此刻它只是同一
+ * inode 的多余硬链接）；放回失败时坟场条目必须保留——它是这把被挪活锁的
+ * 最后一份存置，销毁等于凭空注销他人仍持着的锁（持有者还在临界区，锁位却
+ * 已空置，后来者随即蜂拥而入）。保留下来的条目由原持有者的收尾路径按
+ * inode 认领清理。
+ */
+export async function putBackDisplacedMarker(gravePath: string, lockPath: string): Promise<void> {
+  try {
+    await link(gravePath, lockPath);
+  } catch {
+    return;
+  }
+  await rm(gravePath, { force: true }).catch(() => undefined);
 }
 
 /**

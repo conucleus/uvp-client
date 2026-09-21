@@ -1160,12 +1160,14 @@ export class StateMachineWatcher {
   private async updateJob(jobId: Hex, patch: StateMachineJobPatch): Promise<StateMachineWatcherJob> {
     // 终态守卫：--force dead-letter 可在运行中途落地（清掉认领，但 handler 仍
     // 在飞），此后 lastError 存的是操作员的人工处置理由；运行中的失败分类再
-    // 无条件写回会把它抹成机器错误，审计上等于消灭这次人工裁决。状态与结论
+    // 无条件写回会把它抹成机器错误，恢复成功路径的显式清除（clearLastError）
+    // 则把它整条抹掉——覆写与清除对人工裁决同样致命，须一并拦下。状态与结论
     // 写入走 concludeRun 的 CAS，本就不覆写并发裁决。
     let guarded = patch;
-    if (patch.lastError !== undefined && await this.jobReachedTerminal(jobId)) {
-      const { lastError: omitted, ...rest } = patch;
-      void omitted;
+    if ((patch.lastError !== undefined || patch.clearLastError === true) && await this.jobReachedTerminal(jobId)) {
+      const { lastError: omittedError, clearLastError: omittedClear, ...rest } = patch;
+      void omittedError;
+      void omittedClear;
       guarded = rest;
     }
     const updated = await this.config.jobStore.update(jobId, withConclusiveClaimRelease(guarded));

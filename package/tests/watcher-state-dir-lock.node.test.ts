@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, rm, writeFile, readFile, rm as rmFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat, writeFile, readFile, rm as rmFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -18,6 +18,7 @@ import {
   stateMachineJobId,
   type StateMachineJobPatch,
 } from '../src/watcher/index.js';
+import { putBackDisplacedMarker } from '../src/watcher/storage/lock.js';
 import { main } from '../src/cli.js';
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -461,6 +462,36 @@ describe('watcher state-dir 进程锁', () => {
       await stub.close();
       console.log = originalLog;
       process.exitCode = previousExitCode;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('锁占位放回协议', () => {
+  it('放回让位或失败时不得销毁坟场条目：被挪活锁的最后存置必须保留', async () => {
+    // rename 挪走易主活锁后，坟场条目是该锁唯一剩的存置：放回失败（锁位
+    // 已被更新的锁占位而让位，或 link 瞬时失败）时销毁它，等于凭空注销
+    // 他人仍持着的锁——持有者还在临界区，锁位却已空置。
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-lock-putback-'));
+    try {
+      const lockPath = join(dir, 'watcher.lock');
+      const gravePath = join(dir, 'watcher.lock.contend-4242-putback.broken');
+      await writeFile(gravePath, '4242\n');
+      const graveBefore = await stat(gravePath);
+
+      // 锁位已落位更新的锁：放回必须让位，坟场里的被挪活锁原样保留。
+      await writeFile(lockPath, `${process.pid}\n`);
+      await putBackDisplacedMarker(gravePath, lockPath);
+      const graveSurvived = await stat(gravePath);
+      assert.equal(graveSurvived.ino, graveBefore.ino, 'a failed put-back must not destroy the graveyard entry');
+      assert.equal(await readFile(lockPath, 'utf8'), `${process.pid}\n`, 'the newer lock keeps its place');
+
+      // 锁位空置时放回归位：坟场名清掉，锁位接回被挪的活锁。
+      await rm(lockPath);
+      await putBackDisplacedMarker(gravePath, lockPath);
+      assert.equal(await readFile(lockPath, 'utf8'), '4242\n', 'a free lock path takes the displaced lock back');
+      await assert.rejects(() => stat(gravePath), /ENOENT/u);
+    } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
