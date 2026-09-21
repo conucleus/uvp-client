@@ -19,7 +19,12 @@ export {
 
 export {
   DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV,
+  ZERO_FACT_ATTRIBUTION,
+  ZERO_SELECTOR_BINDING,
   buildSubmitStateMachineSignalCall,
+  capabilityTablesOf,
+  withCapabilityProofs,
+  type StateMachineCapabilityTables,
   type StateMachinePublicClient,
   type StateMachineSignal,
   type StateMachineSignalCallArgs,

@@ -491,12 +491,54 @@ order-level authorization, participant wallet signatures, and contract checks.
 
 ## ABI Boundary
 
-`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.10` compact-hook
+`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.11` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.10.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.11.json`:
 
 - `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId, bytes32 hookName)`;
-- `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey)`.
+- `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution, (bytes32 selectorStageId, bytes32[] proof) selectorBinding)`.
+
+The trailing proof structs are the capabilities-Merkle (v0.11) surface: the
+plan commits one `capabilitiesRoot` over its frozen selector-binding and
+signal-capability tables, and the submitter re-derives membership proofs from
+a table mirror. `attribution` is the fact-owner self-attestation (relation=0
+capability leaf); the all-zero struct means "no claim" (out-of-vocabulary
+fact caliber, valid against vocabulary-less plans). `selectorBinding` carries
+the owner stage's selector-binding proof; all-zero means "no proof carried".
+Proofs never enter the signing envelope — `PRODUCT_SUBMIT` typed data
+(domain `UVPStateMachine` version `0.11`) and the derived-signal / patch
+typehashes are unchanged.
+
+### Capability Proof Material (artifact index)
+
+The watcher's `artifact` index may embed the two plan-frozen table mirrors:
+
+```json
+{
+  "artifact": {
+    "selectorBindings": [
+      { "selectorStageId": "0x…", "targetStageId": "0x…" }
+    ],
+    "signalCapabilities": [
+      { "stageId": "0x…", "targetSourceId": "0x…", "signalId": "0x…", "relation": 0 }
+    ]
+  }
+}
+```
+
+When the tables are present, both submission channels (handler-returned
+signals and the handler-context `submitSignal`) derive proofs on the fly via
+`@uvp-eth/protocol-bindings`'s `factAttribution` / `selectorBindingProofFor`:
+a signal whose (sourceId, signalId) hits a relation=0 capability submits with
+the owner attribution plus the owner stage's selector-binding proof; an
+out-of-vocabulary signal and a table-less artifact both submit the all-zero
+pair. Explicit `attribution` / `selectorBinding` fields on a signal are never
+overwritten by derivation. A non-zero `stageId` whose attribution keys
+disagree with the signal keys is refused at build time (the contract's
+`InvalidFactAttribution` is a guaranteed revert). The same defaulting applies
+to SDK builders: `buildSubmitStateMachineSignalCall` accepts optional
+`attribution` / `selectorBinding` inputs and encodes the zero structs when
+they are omitted.
 
 `planId` is part of the event and submit boundary. It must be retained with the
 watcher job and never inferred from a bare `orderId`; the same state machine can

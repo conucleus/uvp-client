@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
+  PRODUCT_SUBMIT_DOMAIN_VERSION,
   STATE_MACHINE_ABI,
   buildProductSubmitTypedData,
   buildSubmitSignalForCall,
@@ -10,6 +11,8 @@ import {
   requestProductSubmitSignature,
   requestProductSubmitSignatureForTarget,
   type Eip1193Provider,
+  type SelectorBindingPayload,
+  type SignalAttributionPayload,
 } from '@uvp-eth/executor-kit/participant';
 import {
   UnsupportedChainTargetError,
@@ -45,10 +48,12 @@ describe('participant entrypoint', () => {
 
     // UVPStateMachineSignal is plan-scoped — planId is the first
     // field of the signed message and callers must pass the real order planId.
+    // The domain version follows the protocol constant (0.11 since the
+    // capabilities Merkle refactor); the signed envelope itself is unchanged.
     expect(typedData).toEqual({
       domain: {
         name: 'UVPStateMachine',
-        version: '0.10',
+        version: PRODUCT_SUBMIT_DOMAIN_VERSION,
         chainId: 31337,
         verifyingContract,
       },
@@ -118,6 +123,19 @@ describe('participant entrypoint', () => {
 
   it('builds submitSignalFor contract calls from the shared ABI', () => {
     const signature = `0x${'aa'.repeat(65)}` as const;
+    // Proof structs are required ABI inputs since the capabilities Merkle
+    // refactor: the all-zero pair is the "no claim / no binding proof"
+    // encoding (out-of-vocabulary caliber) and stays out of the signature.
+    const attribution: SignalAttributionPayload = {
+      sourceId,
+      signalId,
+      stageId: `0x${'00'.repeat(32)}`,
+      capabilityProof: [],
+    };
+    const selectorBinding: SelectorBindingPayload = {
+      selectorStageId: `0x${'00'.repeat(32)}`,
+      proof: [],
+    };
     const call = buildSubmitSignalForCall({
       stateMachineAddress: verifyingContract,
       chainId: 31337,
@@ -131,6 +149,8 @@ describe('participant entrypoint', () => {
       submitter,
       deadline,
       signature,
+      attribution,
+      selectorBinding,
     });
 
     expect(call).toMatchObject({
@@ -139,7 +159,8 @@ describe('participant entrypoint', () => {
       functionName: 'submitSignalFor',
       chainId: 31337,
     });
-    // planId is the first ABI argument of submitSignalFor.
+    // planId is the first ABI argument of submitSignalFor; the zero proof
+    // structs close the args tuple after the signature.
     expect(call.args).toEqual([
       planId,
       orderId,
@@ -150,6 +171,16 @@ describe('participant entrypoint', () => {
       submitter,
       BigInt(deadline),
       signature,
+      {
+        sourceId,
+        signalId,
+        stageId: `0x${'00'.repeat(32)}`,
+        capabilityProof: [],
+      },
+      {
+        selectorStageId: `0x${'00'.repeat(32)}`,
+        proof: [],
+      },
     ]);
     expect(call.data).toMatch(/^0x[0-9a-f]+$/);
   });

@@ -47,11 +47,12 @@ const TX_HASH_2 = `0x${'35'.repeat(32)}` as Hex;
 const PAYLOAD_HASH = `0x${'44'.repeat(32)}` as Hex;
 const BUYER_SOURCE_ID = keccak256(stringToBytes('buyer'));
 const EXEC_MAIN_CMP_ID = keccak256(stringToBytes('exec.main.cmp'));
+const ZERO_BYTES32_WORD = `0x${'00'.repeat(32)}` as Hex;
 /** Shared private-key env fixture for tests that exercise the broadcast path. */
 const KEY_ENV = 'UVP_RECEIPT_TEST_PRIVATE_KEY';
 const TEST_PRIVATE_KEY = `0x${'ab'.repeat(32)}`;
 const STATE_MACHINE_FIXTURE = JSON.parse(
-  readFileSync(new URL('../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.10.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.11.json', import.meta.url), 'utf8'),
 ) as {
   readonly hashes: {
     readonly artifactHash: Hex;
@@ -150,7 +151,9 @@ describe('state machine chain watcher', () => {
     expect(result.job?.matchedKey).toBe('exec.main#START');
     expect(matchedKeys).toEqual(['exec.main#START']);
     expect(submission.request.functionName).toBe('submitSignal');
-    // planId is the first submitSignal argument.
+    // planId is the first submitSignal argument; the proof structs close the
+    // tuple as the all-zero no-claim/no-proof encoding (no capability tables
+    // on this watcher's artifact).
     expect(submission.request.args).toEqual([
       PLAN_ID,
       ORDER_ID,
@@ -158,7 +161,116 @@ describe('state machine chain watcher', () => {
       EXEC_MAIN_CMP_ID,
       PAYLOAD_HASH,
       expect.any(String),
+      { sourceId: ZERO_BYTES32_WORD, signalId: ZERO_BYTES32_WORD, stageId: ZERO_BYTES32_WORD, capabilityProof: [] },
+      { selectorStageId: ZERO_BYTES32_WORD, proof: [] },
     ]);
+  });
+
+  it('derives capability proofs on the fly from artifact-embedded tables', async () => {
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      privateKeyEnv: 'UVP_TEST_PRIVATE_KEY',
+      dryRun: true,
+      artifact: capabilityArtifact(),
+      handlers: {
+        'exec.main#START': (event) => ({
+          planId: PLAN_ID,
+          orderId: event.orderId,
+          source: 'buyer',
+          signalName: 'exec.main.cmp',
+          payloadHash: PAYLOAD_HASH,
+        }),
+      },
+    });
+
+    const result = await watcher.handleLog(hookReadyLog());
+    const submission = result.submissions[0];
+    if (!submission || !submission.dryRun) {
+      throw new Error('expected a dry-run submission');
+    }
+    // relation=0 能力命中：attribution 自证属主阶段，selector 绑定证明按
+    // 属主阶段现场重算（树是 plan 冻结的，现场证明与预生成等价）。
+    expect(submission.request.args[6]).toMatchObject({
+      sourceId: BUYER_SOURCE_ID,
+      signalId: EXEC_MAIN_CMP_ID,
+      stageId: STAGE_ID,
+    });
+    expect((submission.request.args[6] as { readonly capabilityProof: readonly Hex[] }).capabilityProof.length)
+      .toBeGreaterThan(0);
+    expect(submission.request.args[7]).toMatchObject({ selectorStageId: `0x${'66'.repeat(32)}` });
+  });
+
+  it('keeps out-of-vocabulary signals on the zero-claim encoding even with tables present', async () => {
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      privateKeyEnv: 'UVP_TEST_PRIVATE_KEY',
+      dryRun: true,
+      artifact: capabilityArtifact(),
+      handlers: {
+        'exec.main#START': (event) => ({
+          planId: PLAN_ID,
+          orderId: event.orderId,
+          source: 'someone-else',
+          signalName: 'exec.main.cmp',
+          payloadHash: PAYLOAD_HASH,
+        }),
+      },
+    });
+
+    const result = await watcher.handleLog(hookReadyLog());
+    const submission = result.submissions[0];
+    if (!submission || !submission.dryRun) {
+      throw new Error('expected a dry-run submission');
+    }
+    // 词表外事实：不声明属主、不携 selector 证明（relation=1 的同源能力
+    // 也不构成属主声明）。
+    expect(submission.request.args[6]).toEqual({
+      sourceId: ZERO_BYTES32_WORD,
+      signalId: ZERO_BYTES32_WORD,
+      stageId: ZERO_BYTES32_WORD,
+      capabilityProof: [],
+    });
+    expect(submission.request.args[7]).toEqual({ selectorStageId: ZERO_BYTES32_WORD, proof: [] });
+  });
+
+  it('attaches derived proofs to handler-context submissions too', async () => {
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      privateKeyEnv: 'UVP_TEST_PRIVATE_KEY',
+      dryRun: true,
+      artifact: capabilityArtifact(),
+      handlers: {
+        'exec.main#START': async (event, context) => {
+          await context.submitSignal({
+            planId: PLAN_ID,
+            orderId: event.orderId,
+            source: 'buyer',
+            signalName: 'exec.main.cmp',
+            payloadHash: PAYLOAD_HASH,
+          });
+        },
+      },
+    });
+
+    const result = await watcher.handleLog(hookReadyLog());
+    expect(result.submissions).toHaveLength(0);
+    const recorded = result.job?.submissions?.[0]?.request;
+    expect(recorded?.functionName).toBe('submitSignal');
+    expect(recorded?.args[6]).toMatchObject({
+      sourceId: BUYER_SOURCE_ID,
+      signalId: EXEC_MAIN_CMP_ID,
+      stageId: STAGE_ID,
+    });
+    expect(recorded?.args[7]).toMatchObject({ selectorStageId: `0x${'66'.repeat(32)}` });
   });
 
   it('polls with an injected public client instead of a real network', async () => {
@@ -4489,6 +4601,23 @@ function artifactIndex() {
         hookName: 'START',
       },
     },
+  };
+}
+
+/** Plan 冻结能力词表镜像：BUYER_SOURCE_ID/EXEC_MAIN_CMP_ID 的属主阶段与 selector 绑定。 */
+function capabilityArtifact() {
+  const otherSourceId = keccak256(stringToBytes('someone-else'));
+  const otherSignalId = keccak256(stringToBytes('exec.other.done'));
+  return {
+    ...artifactIndex(),
+    selectorBindings: [
+      { selectorStageId: `0x${'66'.repeat(32)}`, targetStageId: STAGE_ID },
+    ],
+    signalCapabilities: [
+      // relation=1 能力不构成属主声明：同键也必须查不出 attribution。
+      { stageId: STAGE_ID, targetSourceId: otherSourceId, signalId: otherSignalId, relation: 1 as const },
+      { stageId: STAGE_ID, targetSourceId: BUYER_SOURCE_ID, signalId: EXEC_MAIN_CMP_ID, relation: 0 as const },
+    ],
   };
 }
 

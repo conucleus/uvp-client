@@ -1,5 +1,15 @@
 import { encodeFunctionData, keccak256, stringToBytes, type Address, type Hex } from 'viem';
-import { STATE_MACHINE_ABI } from '@uvp-eth/protocol-bindings';
+import {
+  factAttribution,
+  selectorBindingProofFor,
+  STATE_MACHINE_ABI,
+  type SelectorBindingCallStruct,
+  type SelectorBindingPayload,
+  type SignalAttributionCallStruct,
+  type SignalAttributionPayload,
+  type SignalCapabilityTableEntry,
+  type StageSelectorBindingTableEntry,
+} from '@uvp-eth/protocol-bindings';
 import { DEFAULT_SIGNING_KEY_ENV } from '../signing.js';
 import {
   normalizeAddressChecksummed,
@@ -32,6 +42,17 @@ export interface StateMachineSignal {
   /** Off-chain metadata only: the frozen submitSignal ABI cannot carry it on chain. */
   readonly payloadRef?: string;
   readonly idempotencyKey?: string;
+  /**
+   * 事实属主自证（relation=0 能力叶的 membership 证明）：省略时编码为
+   * 全零结构（词表外口径，合约按 stageId==0 不声明处理，兼容无词表 plan）。
+   * 证明不进签名信封——PRODUCT_SUBMIT typed-data 摘要与本字段无关。
+   */
+  readonly attribution?: SignalAttributionPayload;
+  /**
+   * 目标阶段 selector 绑定证明（assign 前置闸的判定材料）：省略时编码为
+   * 全零结构（不携证，合约跳过该门）。
+   */
+  readonly selectorBinding?: SelectorBindingPayload;
 }
 
 export interface StateMachineSignalCallArgs {
@@ -41,13 +62,138 @@ export interface StateMachineSignalCallArgs {
   readonly signalId: Hex;
   readonly payloadHash: Hex;
   readonly idempotencyKey: Hex;
+  /** 归一化后的属主自证；缺省输入编码为全零结构。 */
+  readonly attribution: SignalAttributionCallStruct;
+  /** 归一化后的 selector 绑定证明；缺省输入编码为全零结构。 */
+  readonly selectorBinding: SelectorBindingCallStruct;
+}
+
+/**
+ * 全零 FactAttribution：stageId==0 即"不声明属主"（词表外事实口径），
+ * 与合约 _verifiedFactOwner 的 stageId==0 早退分支一致。无词表 plan 与
+ * 未携带证明材料的提交方共用该编码。
+ */
+export const ZERO_FACT_ATTRIBUTION: SignalAttributionCallStruct = {
+  sourceId: ZERO_BYTES32,
+  signalId: ZERO_BYTES32,
+  stageId: ZERO_BYTES32,
+  capabilityProof: [],
+};
+
+/**
+ * 全零 SelectorBindingProof：selectorStageId==0 即"不携证"，合约的
+ * assign 前置闸在无证时不可判定、跳过（旧口径一致）。
+ */
+export const ZERO_SELECTOR_BINDING: SelectorBindingCallStruct = {
+  selectorStageId: ZERO_BYTES32,
+  proof: [],
+};
+
+/** 造证材料：plan 冻结能力词表（selector 绑定表 + 信号能力表）的链下镜像。 */
+export interface StateMachineCapabilityTables {
+  readonly selectorBindings: readonly StageSelectorBindingTableEntry[];
+  readonly signalCapabilities: readonly SignalCapabilityTableEntry[];
+}
+
+/**
+ * 抽出 artifact 索引里内嵌的两张能力词表。两表皆缺（或皆空）时返回
+ * undefined：调用方按全零缺省提交，兼容不带词表的旧 artifact。
+ */
+export function capabilityTablesOf(
+  artifact?: {
+    readonly selectorBindings?: readonly StageSelectorBindingTableEntry[];
+    readonly signalCapabilities?: readonly SignalCapabilityTableEntry[];
+  },
+): StateMachineCapabilityTables | undefined {
+  if (!artifact) {
+    return undefined;
+  }
+  const selectorBindings = artifact.selectorBindings ?? [];
+  const signalCapabilities = artifact.signalCapabilities ?? [];
+  if (selectorBindings.length === 0 && signalCapabilities.length === 0) {
+    return undefined;
+  }
+  return { selectorBindings, signalCapabilities };
+}
+
+/**
+ * 现场造证：能力树是 plan 冻结的，成员证明可由词表镜像随时重算。信号
+ * 命中能力表（relation=0 属主）时补 attribution，并按属主阶段补
+ * selectorBinding；词表外或不携词表时原样返回（全零缺省）。显式携带
+ * 证明的信号不被覆盖。
+ */
+export function withCapabilityProofs(
+  signal: StateMachineSignal,
+  tables: StateMachineCapabilityTables | undefined,
+): StateMachineSignal {
+  if (tables === undefined
+    || (signal.attribution !== undefined && signal.selectorBinding !== undefined)) {
+    return signal;
+  }
+  // 造证需要与链上提交一致的 (sourceId, signalId) 解析口径，复用归一化
+  // 而不是重推一份哈希规则。
+  const normalized = normalizeStateMachineSignal(signal);
+  const attribution = signal.attribution ?? factAttributionShape(
+    factAttribution(tables.selectorBindings, tables.signalCapabilities, normalized.sourceId, normalized.signalId),
+    normalized.sourceId,
+    normalized.signalId,
+  );
+  if (attribution === undefined) {
+    // 词表外事实：不声明属主（全零），也不携 selector 证明。
+    return signal;
+  }
+  const binding = signal.selectorBinding ?? selectorBindingShape(
+    selectorBindingProofFor(tables.selectorBindings, tables.signalCapabilities, attribution.stageId),
+  );
+  return {
+    ...signal,
+    attribution,
+    ...(binding !== undefined ? { selectorBinding: binding } : {}),
+  };
+}
+
+function factAttributionShape(
+  attribution: { readonly stageId: Hex; readonly capabilityProof: readonly Hex[] } | undefined,
+  sourceId: Hex,
+  signalId: Hex,
+): SignalAttributionPayload | undefined {
+  if (attribution === undefined) {
+    return undefined;
+  }
+  return {
+    sourceId,
+    signalId,
+    stageId: attribution.stageId,
+    capabilityProof: attribution.capabilityProof,
+  };
+}
+
+function selectorBindingShape(
+  binding: { readonly selectorStageId: Hex; readonly proof: readonly Hex[] } | undefined,
+): SelectorBindingPayload | undefined {
+  if (binding === undefined) {
+    return undefined;
+  }
+  return {
+    selectorStageId: binding.selectorStageId,
+    proof: binding.proof,
+  };
 }
 
 export interface SubmitStateMachineSignalCall {
   readonly address: Address;
   readonly abi: typeof STATE_MACHINE_ABI;
   readonly functionName: 'submitSignal';
-  readonly args: readonly [Hex, Hex, Hex, Hex, Hex, Hex];
+  readonly args: readonly [
+    Hex,
+    Hex,
+    Hex,
+    Hex,
+    Hex,
+    Hex,
+    SignalAttributionCallStruct,
+    SelectorBindingCallStruct,
+  ];
   readonly data: Hex;
   readonly chainId: number;
   readonly from?: Address;
@@ -102,15 +248,25 @@ export function buildSubmitStateMachineSignalCall(
 ): SubmitStateMachineSignalCall {
   const normalizedConfig = normalizeSubmitConfig(config);
   const args = normalizeStateMachineSignal(signal);
+  const callArgs = [
+    args.planId,
+    args.orderId,
+    args.sourceId,
+    args.signalId,
+    args.payloadHash,
+    args.idempotencyKey,
+    args.attribution,
+    args.selectorBinding,
+  ] as const;
   const request = {
     address: normalizedConfig.stateMachineAddress,
     abi: STATE_MACHINE_ABI,
     functionName: 'submitSignal',
-    args: [args.planId, args.orderId, args.sourceId, args.signalId, args.payloadHash, args.idempotencyKey],
+    args: callArgs,
     data: encodeFunctionData({
       abi: STATE_MACHINE_ABI,
       functionName: 'submitSignal',
-      args: [args.planId, args.orderId, args.sourceId, args.signalId, args.payloadHash, args.idempotencyKey],
+      args: callArgs,
     }),
     chainId: normalizedConfig.chainId,
     ...(from ? { from } : {}),
@@ -202,10 +358,59 @@ function normalizeStateMachineSignal(signal: StateMachineSignal): StateMachineSi
     idempotencyKey: signal.idempotencyKey
       ? hashText(signal.idempotencyKey, 'idempotencyKey')
       : hashText(`${planId}:${orderId}:${sourceId}:${signalId}`, 'idempotencyKey'),
+    attribution: normalizeAttribution(signal.attribution, sourceId, signalId),
+    selectorBinding: normalizeSelectorBindingProof(signal.selectorBinding),
     // The emitting HookReady event anchor is off-chain correlation context
     // only. It is deliberately absent from both the call args and the default
     // key: the contract never sees it, and off-chain metadata must not
     // participate in the idempotency verdict (EXEC kit ruling #21).
+  };
+}
+
+/**
+ * 归一化事实属主自证。缺省编码为全零结构（stageId==0 不声明，词表外
+ * 口径）。声明非零 stageId 时，结构内的 (sourceId, signalId) 必须与顶层
+ * 事实键一致——否则合约必响 InvalidFactAttribution，与零 planId 同口径
+ * 在构包期拒绝而不是广播一笔必回滚的交易。
+ */
+function normalizeAttribution(
+  attribution: SignalAttributionPayload | undefined,
+  sourceId: Hex,
+  signalId: Hex,
+): SignalAttributionCallStruct {
+  if (attribution === undefined) {
+    return ZERO_FACT_ATTRIBUTION;
+  }
+  const normalizedSourceId = normalizeBytes32(attribution.sourceId, 'attribution.sourceId');
+  const normalizedSignalId = normalizeBytes32(attribution.signalId, 'attribution.signalId');
+  const stageId = normalizeBytes32(attribution.stageId, 'attribution.stageId');
+  if (stageId !== ZERO_BYTES32
+    && (normalizedSourceId !== sourceId || normalizedSignalId !== signalId)) {
+    throw new ValidationError(
+      'attribution.sourceId/attribution.signalId must match the signal sourceId/signalId when attribution.stageId is non-zero:'
+        + ' the contract rejects a mismatched fact key with InvalidFactAttribution',
+    );
+  }
+  return {
+    sourceId: normalizedSourceId,
+    signalId: normalizedSignalId,
+    stageId,
+    capabilityProof: attribution.capabilityProof.map((word, index) =>
+      normalizeBytes32(word, `attribution.capabilityProof[${index}]`)),
+  };
+}
+
+/** 归一化 selector 绑定证明；缺省编码为全零结构（selectorStageId==0 不携证）。 */
+function normalizeSelectorBindingProof(
+  selectorBinding: SelectorBindingPayload | undefined,
+): SelectorBindingCallStruct {
+  if (selectorBinding === undefined) {
+    return ZERO_SELECTOR_BINDING;
+  }
+  return {
+    selectorStageId: normalizeBytes32(selectorBinding.selectorStageId, 'selectorBinding.selectorStageId'),
+    proof: selectorBinding.proof.map((word, index) =>
+      normalizeBytes32(word, `selectorBinding.proof[${index}]`)),
   };
 }
 

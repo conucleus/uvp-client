@@ -119,12 +119,12 @@ export function registerChainCommands(program: Command): void {
     .option('--wait-for-receipt', 'wait for tx receipt after broadcasting')
     .action(async (options: ChainSignalOptions) => {
       if (options.payloadRef) {
-        // The frozen UVPStateMachine v0.10 ABI has no payloadRef input, so this
-        // flag would be silently dropped and the operator would walk away with
-        // a "submitted" success that never carried the reference. Fail loudly;
-        // only the 32-byte payloadHash goes on chain.
+        // The frozen UVPStateMachine submitSignal ABI has no payloadRef input,
+        // so this flag would be silently dropped and the operator would walk
+        // away with a "submitted" success that never carried the reference.
+        // Fail loudly; only the 32-byte payloadHash goes on chain.
         throw new ValidationError(
-          '--payload-ref is not supported by chain-signal: submitSignal(planId, orderId, sourceId, signalId, payloadHash, idempotencyKey) has no reference field, so the flag would be silently dropped. Keep only the 32-byte --payload-hash on chain and record the off-chain payload reference in your own job/evidence store next to it.',
+          '--payload-ref is not supported by chain-signal: submitSignal(planId, orderId, sourceId, signalId, payloadHash, idempotencyKey, attribution, selectorBinding) has no reference field, so the flag would be silently dropped. Keep only the 32-byte --payload-hash on chain and record the off-chain payload reference in your own job/evidence store next to it.',
         );
       }
       const result = await submitStateMachineSignal({

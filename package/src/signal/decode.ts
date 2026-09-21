@@ -1,5 +1,9 @@
 import { decodeEventLog, encodeAbiParameters, keccak256, stringToBytes, type Address, type Hex } from 'viem';
-import { STATE_MACHINE_ABI } from '@uvp-eth/protocol-bindings';
+import {
+  STATE_MACHINE_ABI,
+  type SignalCapabilityTableEntry,
+  type StageSelectorBindingTableEntry,
+} from '@uvp-eth/protocol-bindings';
 import { normalizeAddressChecksummed, normalizeBytes32, ValidationError } from '../validation.js';
 import { asString, describeError } from '../watcher/internal.js';
 
@@ -35,6 +39,18 @@ export interface StateMachineHookReady {
 export interface StateMachineArtifactIndex {
   readonly hooksByHookId?: Readonly<Record<string, StateMachineHookMetadata>>;
   readonly signals?: Readonly<Record<string, StateMachineSignalMetadata>>;
+  /**
+   * 阶段 selector 绑定表（plan 冻结能力词表的链下镜像）：内嵌进执行器
+   * 配置后，提交通道用 protocol-bindings 的 selectorBindingProofFor 现场
+   * 造证。缺省（无表）按全零不携证提交。
+   */
+  readonly selectorBindings?: readonly StageSelectorBindingTableEntry[];
+  /**
+   * 信号能力表（plan 冻结能力词表的链下镜像）：内嵌进执行器配置后，
+   * 提交通道用 protocol-bindings 的 factAttribution 现场造证。缺省
+   * （无表）按全零不声明提交。
+   */
+  readonly signalCapabilities?: readonly SignalCapabilityTableEntry[];
 }
 
 export interface StateMachineHookMetadata {

@@ -1,5 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import type { Address, Hex } from 'viem';
+import type {
+  SignalCapabilityTableEntry,
+  StageSelectorBindingTableEntry,
+} from '@uvp-eth/protocol-bindings';
 import { ZERO_BYTES32 } from '../../constants.js';
 import {
   normalizeAddressChecksummed,
@@ -281,6 +285,47 @@ export function normalizeArtifactIndex(value: StateMachineArtifactIndex): StateM
         ]),
       ),
     } : {}),
+    ...(value.selectorBindings !== undefined ? {
+      selectorBindings: value.selectorBindings.map((binding, index) =>
+        normalizeSelectorBindingEntry(binding, `artifact.selectorBindings[${index}]`)),
+    } : {}),
+    ...(value.signalCapabilities !== undefined ? {
+      signalCapabilities: value.signalCapabilities.map((capability, index) =>
+        normalizeSignalCapabilityEntry(capability, `artifact.signalCapabilities[${index}]`)),
+    } : {}),
+  };
+}
+
+function normalizeSelectorBindingEntry(
+  binding: StageSelectorBindingTableEntry,
+  path: string,
+): StageSelectorBindingTableEntry {
+  if (!isRecord(binding)) {
+    throw new ValidationError(`${path} must be an object`);
+  }
+  return {
+    selectorStageId: normalizeBytes32(binding.selectorStageId, `${path}.selectorStageId`),
+    targetStageId: normalizeBytes32(binding.targetStageId, `${path}.targetStageId`),
+  };
+}
+
+function normalizeSignalCapabilityEntry(
+  capability: SignalCapabilityTableEntry,
+  path: string,
+): SignalCapabilityTableEntry {
+  if (!isRecord(capability)) {
+    throw new ValidationError(`${path} must be an object`);
+  }
+  // relation 是 0|1 字面量联合：JSON 层进来是 number，越界值在这里拒绝
+  // 而不是静默落成一个错误的叶子（叶子公式含 relation，错值=错误证明）。
+  if (capability.relation !== 0 && capability.relation !== 1) {
+    throw new ValidationError(`${path}.relation must be 0 or 1`);
+  }
+  return {
+    stageId: normalizeBytes32(capability.stageId, `${path}.stageId`),
+    targetSourceId: normalizeBytes32(capability.targetSourceId, `${path}.targetSourceId`),
+    signalId: normalizeBytes32(capability.signalId, `${path}.signalId`),
+    relation: capability.relation,
   };
 }
 

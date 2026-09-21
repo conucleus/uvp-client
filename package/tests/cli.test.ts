@@ -752,6 +752,18 @@ describe('watcher state storage', () => {
     );
     expect(config.dryRun).toBeUndefined();
     expect(Object.keys(config.handlers)).toEqual(['*']);
+    // The bundled capability-vocabulary mirror survives config normalization:
+    // both table shapes stay loadable and feed on-the-fly proof derivation.
+    expect(config.artifact?.signalCapabilities).toEqual([{
+      stageId: '0x78031a308835b17e5b6df46f6c35320793bfe881d642607579223cce078be990',
+      targetSourceId: '0x701be17d1f6581ca965b5e3e7e7f734c35574a65b3c87f991263bf0e069b5645',
+      signalId: '0xcad8fffd0d5a975dc6fb7261c684d2ecb3ca6a46f8d913b2daaefe20c9f00f9e',
+      relation: 0,
+    }]);
+    expect(config.artifact?.selectorBindings).toEqual([{
+      selectorStageId: '0x17f32ef9690d41df659cb800d564946bd749def2effe873046c2091e33ce2796',
+      targetStageId: '0x78031a308835b17e5b6df46f6c35320793bfe881d642607579223cce078be990',
+    }]);
   });
 
   it('warns when a config-level dryRun silently overrides the real-execution default', async () => {

@@ -21,8 +21,11 @@ import {
 } from '../signal/decode.js';
 import {
   buildSubmitStateMachineSignalCall,
+  capabilityTablesOf,
   normalizeSubmitConfig,
+  withCapabilityProofs,
   type NormalizedSubmitConfig,
+  type StateMachineCapabilityTables,
   type StateMachinePublicClient,
   type StateMachineSignal,
   type SubmitStateMachineSignalCall,
@@ -581,6 +584,10 @@ export class StateMachineWatcher {
       ...this.config,
       stateMachineAddress: event.stateMachineAddress ?? this.config.stateMachineAddress,
     };
+    // 能力造证材料（artifact 索引内嵌的两张 plan 冻结词表）：无表时为
+    // undefined，两条提交通道按全零缺省（词表外口径）提交。树是 plan
+    // 冻结的，现场重算成员证明与预生成等价。
+    const capabilityTables = capabilityTablesOf(this.config.artifact);
     const submitSignalWithJobRetry = async (
       signal: StateMachineSignal,
       signalIndex: number,
@@ -686,10 +693,13 @@ export class StateMachineWatcher {
         contextSubmissionCount += 1;
         const attempt = contextSubmissionCount;
         const submitConfig = normalizeSubmitConfig({ ...eventSubmitConfig, ...overrides });
+        // 词表材料在场时先造证：证明进 calldata，身份请求（与后续回放
+        // 守卫的 content identity）必须从同一份带证信号构建。
+        const provenSignal = withCapabilityProofs(signal, capabilityTables);
         // Signal identity for the replay decisions below: submitSignal calldata
         // is a deterministic function of the four-tuple (plus an explicit key),
         // so equal data across runs means the same logical signal.
-        const identityRequest = buildSubmitStateMachineSignalCall(submitConfig, signal);
+        const identityRequest = buildSubmitStateMachineSignalCall(submitConfig, provenSignal);
         const priorRecords = jobSubmissions.filter((submission) => submission.request?.data === identityRequest.data);
         const deliveredPrior = options?.resubmitDelivered
           ? undefined
@@ -712,7 +722,7 @@ export class StateMachineWatcher {
         if (unresolvedPrior?.txHash !== undefined) {
           // Replay guard, same as the returned-signal lane: the prior
           // broadcast's outcome is unknown until its receipt says otherwise.
-          const recovered = await this.recoverBroadcastSubmission(submitConfig, signal, unresolvedPrior.txHash);
+          const recovered = await this.recoverBroadcastSubmission(submitConfig, provenSignal, unresolvedPrior.txHash);
           if (recovered) {
             // The recovered record keeps the prior broadcast's index: one
             // logical signal, one index in the history the terminal-status
@@ -746,7 +756,7 @@ export class StateMachineWatcher {
           // transaction actually mined.
         }
         try {
-          const result = await submitStateMachineSignal(submitConfig, signal);
+          const result = await submitStateMachineSignal(submitConfig, provenSignal);
           appendJobSubmission(jobSubmissions, toJobSubmission(signalIndex, attempt, result));
           currentJob = await this.updateJob(job.id, {
             updatedAt: this.config.now(),
@@ -769,7 +779,7 @@ export class StateMachineWatcher {
             // handler a retryable-looking error invited an immediate second
             // transaction for the same signal; consult the receipt once and
             // otherwise defer to the later-scan recheck under the backoff.
-            const recovered = await this.recoverBroadcastSubmission(submitConfig, signal, broadcastTxHash)
+            const recovered = await this.recoverBroadcastSubmission(submitConfig, provenSignal, broadcastTxHash)
               .catch(() => undefined);
             if (recovered) {
               appendJobSubmission(jobSubmissions, toJobSubmission(signalIndex, attempt, recovered));
@@ -939,12 +949,16 @@ export class StateMachineWatcher {
       });
     }
     const identityDatas: string[] = [];
-    for (const [index, resolvedSignal] of resolvedSignals.entries()) {
+    for (const [index, handlerSignal] of resolvedSignals.entries()) {
       // The identity build sits inside the run's failure handling on purpose: a
       // structurally unbuildable signal (e.g. no resolvable planId) must fail
       // THIS job through the classified terminal path, not escape the run.
+      // Proof derivation shares the fate: an unresolvable signal cannot be
+      // attributed either.
+      let resolvedSignal = handlerSignal;
       let identityRequest: SubmitStateMachineSignalCall;
       try {
+        resolvedSignal = withCapabilityProofs(handlerSignal, capabilityTables);
         identityRequest = buildSubmitStateMachineSignalCall(eventSubmitConfig, resolvedSignal);
       } catch (error) {
         const classified = error instanceof ClassifiedStateMachineError
