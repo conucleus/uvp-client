@@ -491,16 +491,22 @@ export class StateMachineWatcher {
         job,
       };
     }
-    // A `matched` job with no run claim is a concluded run's leftover. Under
-    // dry-run that pass already converged: re-running its handler would replay
-    // handler side effects and pile simulated submissions onto the audit trail
-    // on every rescan — with or without recorded submissions (a void handler
-    // records none). Flipping dry-run off, or a manual retry (which re-opens
-    // the job as `detected`), still re-runs the job for real; a crashed
-    // mid-run job keeps its (dead) claim and is taken over instead of skipped.
+    // A `matched` job with no run claim and a recorded dry-run conclusion is
+    // a concluded pass's leftover. Under dry-run re-running its handler would
+    // replay handler side effects and pile simulated submissions onto the
+    // audit trail on every rescan, so it is skipped. The conclusion record is
+    // required because a conclusive write can fail while the finally-block
+    // claim release succeeds — that crashed leftover is otherwise
+    // field-identical (a void pass records no submissions), and skipping it
+    // stranded the job forever. Without the record the safe direction is to
+    // re-run: a dry-run replay has no chain side effects. Flipping dry-run
+    // off, or a manual retry (which re-opens the job as `detected`), still
+    // re-runs the job for real; a crashed mid-run job keeps its (dead) claim
+    // and is taken over instead of skipped.
     if (
       job.status === 'matched'
       && job.claim === undefined
+      && job.dryRunConcludedAt !== undefined
       && this.config.dryRun
     ) {
       return {
@@ -1043,6 +1049,12 @@ export class StateMachineWatcher {
         attempts,
         submissions: jobSubmissions,
         clearLastError: true,
+        // A concluded dry-run pass keeps the job in `matched` — recording the
+        // conclusion is what lets the rescan guard tell this leftover apart
+        // from a crashed run's (see the guard in handleLog).
+        ...(this.config.dryRun && finalStatus === 'matched'
+          ? { dryRunConcludedAt: this.config.now() }
+          : {}),
       });
     }
 
@@ -1171,6 +1183,10 @@ export class StateMachineWatcher {
         updatedAt: at,
         matchedKey,
         claim: { pid: process.pid, at },
+        // A new claim invalidates any recorded dry-run conclusion: if this
+        // run crashes before concluding, the leftover must read as crashed
+        // (re-run), not as a concluded pass's leftover (skipped).
+        dryRunConcludedAt: null,
         expectStatus: fresh.status,
         expectClaimPid: fresh.claim?.pid ?? null,
       });

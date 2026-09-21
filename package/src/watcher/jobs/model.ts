@@ -50,6 +50,16 @@ export interface StateMachineWatcherJob {
   readonly submissions: readonly StateMachineJobSubmission[];
   readonly lastError?: ClassifiedExecutorKitError;
   /**
+   * Wall-clock time the last dry-run pass concluded (kept the job in the
+   * non-terminal `matched` state). A concluded dry-run pass and a crashed one
+   * are otherwise field-identical (matched, claim released, and a void pass
+   * records no submissions), yet they demand opposite treatment — the first
+   * must be skipped on rescan, the second re-run — so the conclusive write
+   * records this and the rescan guard requires it. Cleared whenever a new run
+   * claims the job.
+   */
+  readonly dryRunConcludedAt?: string;
+  /**
    * Wall-clock time of the last real signal attempt (broadcast outcome
    * known or not). The resend backoff anchors here — updatedAt also moves on
    * unrelated bookkeeping, which would restart the throttle every round.
@@ -112,6 +122,12 @@ export interface StateMachineJobPatch {
   readonly expectClaimPid?: number | null;
   /** Takes or releases the run claim; omitted patches leave the claim as is. */
   readonly claim?: { readonly pid: number; readonly at: string } | null;
+  /**
+   * Records (string) or clears (null) the dry-run conclusion marker; omitted
+   * patches leave it as is. Same resolution shape as `claim`: a claim write
+   * clears it, the dry-run conclusive write sets it.
+   */
+  readonly dryRunConcludedAt?: string | null;
 }
 
 export function stateMachineJobId(event: Pick<StateMachineHookReady, 'orderId' | 'hookId' | 'eventId' | 'stateMachineAddress'>): Hex {
@@ -181,7 +197,12 @@ export function applyJobPatch(
   current: StateMachineWatcherJob,
   patch: StateMachineJobPatch,
 ): StateMachineWatcherJob {
-  const { lastError: currentLastError, claim: currentClaim, ...currentWithoutOptional } = current;
+  const {
+    lastError: currentLastError,
+    claim: currentClaim,
+    dryRunConcludedAt: currentDryRunConcludedAt,
+    ...currentWithoutOptional
+  } = current;
   const next: StateMachineWatcherJob = {
     ...currentWithoutOptional,
     ...(patch.status ? { status: patch.status } : {}),
@@ -197,7 +218,15 @@ export function applyJobPatch(
   };
   // claim 解析：显式写入优先（对象=认领，null=释放），未声明则保持现状。
   const resolvedClaim = patch.claim !== undefined ? patch.claim : currentClaim;
-  return resolvedClaim !== undefined && resolvedClaim !== null
-    ? { ...next, claim: resolvedClaim }
+  const withClaim = resolvedClaim !== undefined && resolvedClaim !== null
+    ? { ...next, claim: resolvedClaim } as StateMachineWatcherJob
     : next;
+  // dryRunConcludedAt 同形解析：显式写入优先（字符串=记录，null=清除），
+  // 未声明则保持现状。
+  const resolvedDryRunConcludedAt = patch.dryRunConcludedAt !== undefined
+    ? patch.dryRunConcludedAt
+    : currentDryRunConcludedAt;
+  return resolvedDryRunConcludedAt !== undefined && resolvedDryRunConcludedAt !== null
+    ? { ...withClaim, dryRunConcludedAt: resolvedDryRunConcludedAt }
+    : withClaim;
 }

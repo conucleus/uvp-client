@@ -2183,6 +2183,75 @@ describe('state machine chain watcher', () => {
     expect(handlerRuns).toBe(2);
   });
 
+  it('re-runs a dry-run job left by a crashed conclusive write instead of skipping it forever', async () => {
+    // The dry-run skip guard keys on matched + no claim. A conclusive write
+    // that throws (store fault) while the finally-block claim release still
+    // succeeds leaves exactly that shape with no conclusion record — a void
+    // dry-run pass records no submissions either, so the crashed leftover is
+    // field-identical to a concluded pass's. Skipping on status alone
+    // stranded such a job forever; the guard must also require the conclusion
+    // record a finished pass writes, and re-run without it: a dry-run replay
+    // has no chain side effects, so the safe direction is to run more, not
+    // less.
+    let handlerRuns = 0;
+    const inner = new InMemoryStateMachineJobStore();
+    let updateCalls = 0;
+    // Update 1 claims, update 2 is the post-handler bookkeeping write, update
+    // 3 is the conclusive status write — fail exactly that one.
+    const failUpdates = new Set<number>([3]);
+    const store: StateMachineJobStore = {
+      kind: 'memory+fault',
+      upsertDetected: (event, options) => inner.upsertDetected(event, options),
+      get: (jobId) => inner.get(jobId),
+      list: () => inner.list(),
+      update: async (jobId, patch) => {
+        updateCalls += 1;
+        if (failUpdates.has(updateCalls)) {
+          throw new Error('simulated store fault during the conclusive write');
+        }
+        return inner.update(jobId, patch);
+      },
+    };
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      dryRun: true,
+      jobStore: store,
+      artifact: artifactIndex(),
+      handlers: {
+        '*': () => {
+          handlerRuns += 1;
+        },
+      },
+    });
+
+    // The pass crashes at its conclusive write; the claim release in the
+    // finally block succeeds, so the job is left matched, unclaimed, and
+    // without any record that a pass ever concluded.
+    await expect(watcher.handleLog(hookReadyLog())).rejects.toThrow(/simulated store fault/);
+    expect(handlerRuns).toBe(1);
+    const [stranded] = await store.list();
+    expect(stranded?.status).toBe('matched');
+    expect(stranded?.claim).toBeUndefined();
+    expect(stranded?.submissions).toHaveLength(0);
+    expect(stranded?.dryRunConcludedAt).toBeUndefined();
+
+    // The rescan re-runs the job (it never concluded) instead of skipping it.
+    const recovery = await watcher.handleLog(hookReadyLog());
+    expect(recovery.status).toBe('handled');
+    expect(handlerRuns).toBe(2);
+    expect(recovery.job?.status).toBe('matched');
+    expect(recovery.job?.dryRunConcludedAt).toBeDefined();
+
+    // With the conclusion record present, the converged pass is skipped
+    // again — the crash window closed without giving up convergence.
+    const replay = await watcher.handleLog(hookReadyLog());
+    expect(replay.status).toBe('ignored');
+    expect(handlerRuns).toBe(2);
+  });
+
   it('records handler-context submitSignal broadcasts in the job audit trail', async () => {
     // The handler-context submitSignal channel must go through the job
     // submissions bookkeeping: a bypassing broadcast txHash would silently
