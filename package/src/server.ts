@@ -555,8 +555,25 @@ export function createWebhookReplayGuard(options: {
       seen.delete(nonce);
       seen.set(nonce, timestampMs);
       if (seen.size > maxTrackedNonces) {
-        const oldest = seen.keys().next().value;
-        if (oldest !== undefined) {
+        // A nonce dies with the acceptance window (the same tolerance that
+        // verifyWebhookSignature enforces — outside it the signature itself
+        // no longer verifies, so the entry can never matter again). Evict
+        // expired entries before any live one: stale entries must not hold
+        // tracked capacity and push unconsumed signed callbacks out of the
+        // guard while their window is still live.
+        for (const [trackedNonce, observedMs] of seen) {
+          if (seen.size <= maxTrackedNonces) {
+            break;
+          }
+          if (Math.abs(nowMs - observedMs) > toleranceMs) {
+            seen.delete(trackedNonce);
+          }
+        }
+        while (seen.size > maxTrackedNonces) {
+          const oldest = seen.keys().next().value;
+          if (oldest === undefined) {
+            break;
+          }
           seen.delete(oldest);
         }
       }

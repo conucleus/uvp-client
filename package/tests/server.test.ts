@@ -67,6 +67,21 @@ describe('executor HTTP server', () => {
     expect(guard.observe('c'.repeat(32), at, at + 5 * 60_000 + 1)).toBe(true);
   });
 
+  it('evicts expired nonces before live ones when tracked capacity overflows', () => {
+    // Insertion order and expiry order can diverge (a timestamp at or beyond
+    // the window edge is already stale on arrival): capacity pressure must
+    // drop dead entries first so a live consumed nonce still detects its
+    // in-window replay instead of being pushed out by entries that can never
+    // matter again.
+    const toleranceMs = 5 * 60_000;
+    const guard = createWebhookReplayGuard({ toleranceMs, maxTrackedNonces: 2 });
+    const at = 1_800_000_000_000;
+    expect(guard.observe('f'.repeat(32), at, at)).toBe(true);
+    expect(guard.observe('e'.repeat(32), at + toleranceMs + 1, at)).toBe(true);
+    expect(guard.observe('g'.repeat(32), at, at)).toBe(true);
+    expect(guard.observe('f'.repeat(32), at, at + 1000)).toBe(false);
+  });
+
   it('accepts dispatches and posts callback signals to a webhook endpoint', async () => {
     const callbackBodies: unknown[] = [];
     const callbackEndpoint = createServer((request, response) => {
