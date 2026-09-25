@@ -33,6 +33,7 @@ import {
 import { ValidationError } from '../src/validation.js';
 import { appendJobSubmission, statusForCompletedRun } from '../src/watcher/execution/receipt.js';
 import { HELD_FOREIGN_CLAIM_ALERT_ROUNDS } from '../src/watcher/watcher.js';
+import { DEFAULT_GET_LOGS_CONCURRENCY } from '../src/watcher/scan/logs.js';
 import type { StateMachineJobSubmission } from '../src/watcher/jobs/model.js';
 import type { SubmitStateMachineSignalCall } from '../src/watcher/index.js';
 
@@ -323,6 +324,83 @@ describe('state machine chain watcher', () => {
         toBlock: 11n,
       },
     ]);
+  });
+
+  it('bounds how many chunked getLogs requests are in flight during deep catch-up', async () => {
+    // A deep-lag round splits into one getLogs per block-span chunk; firing
+    // them all at once is exactly the burst RPC providers rate-limit (or that
+    // floods a local node) when catch-up matters most.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      fromBlock: 1,
+      confirmations: 0,
+      getLogsBlockSpan: 1,
+      dryRun: true,
+      artifact: artifactIndex(),
+      handlers: { '*': () => undefined },
+      publicClient: {
+        async getChainId() {
+          return 31_337;
+        },
+        async getBlockNumber() {
+          return 12n;
+        },
+        async getLogs() {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          inFlight -= 1;
+          return [];
+        },
+      },
+    });
+
+    const poll = await watcher.pollOnce();
+
+    // 12 one-block chunks, never more than the pool allows in flight.
+    expect(poll.fromBlock).toBe(1n);
+    expect(poll.toBlock).toBe(12n);
+    expect(poll.scannedLogs).toBe(0);
+    expect(maxInFlight).toBe(DEFAULT_GET_LOGS_CONCURRENCY);
+  });
+
+  it('fails the catch-up round on the first getLogs rejection without scheduling the rest', async () => {
+    let started = 0;
+    const watcher = createStateMachineWatcher({
+      rpcUrl: 'http://127.0.0.1:8545',
+      stateMachineAddress: STATE_MACHINE,
+      chainId: 31_337,
+      walletAddress: WALLET_ADDRESS,
+      fromBlock: 1,
+      confirmations: 0,
+      getLogsBlockSpan: 1,
+      dryRun: true,
+      artifact: artifactIndex(),
+      handlers: { '*': () => undefined },
+      publicClient: {
+        async getChainId() {
+          return 31_337;
+        },
+        async getBlockNumber() {
+          return 12n;
+        },
+        async getLogs() {
+          started += 1;
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          throw new Error('getLogs rejected');
+        },
+      },
+    });
+
+    await expect(watcher.pollOnce()).rejects.toThrow(/getLogs rejected/);
+    // Only the in-flight batch was started; the first rejection stops the
+    // pool from scheduling the remaining chunks.
+    expect(started).toBe(DEFAULT_GET_LOGS_CONCURRENCY);
   });
 
   it('polls all configured state machines and sends callbacks to the emitting contract', async () => {

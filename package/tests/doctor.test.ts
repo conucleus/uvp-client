@@ -210,6 +210,23 @@ describe('Product API doctor', () => {
     expect(report.ok).toBe(false);
   });
 
+  it('aborts a hung reachability probe at the deadline instead of waiting forever', async () => {
+    const fetch: ProductApiFetch = (_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted due to timeout')));
+    });
+
+    const report = await runProductDoctor({
+      chainServicesUrl: 'http://chain.local/api',
+      fetch,
+      requestTimeoutMs: 25,
+    });
+
+    expect(report.checks).toHaveLength(1);
+    expect(report.checks[0]).toMatchObject({ ok: false, label: 'reachability' });
+    expect(report.checks[0]?.detail).toContain('aborted due to timeout');
+    expect(report.ok).toBe(false);
+  });
+
   it('never follows a Product API redirect and never replays the bearer to the redirect target', async () => {
     // Audit S11 same-class fix: the reachability probe carries the
     // Authorization bearer from --auth-token-env, and the default
@@ -385,9 +402,49 @@ describe('Product API doctor', () => {
     expect(report.taskReadiness?.check.ok).toBe(false);
   });
 
-  it('reports next action as proof for a task completed with the canonical done status', async () => {
-    // Product's frozen completion enum includes `done`; readiness.ok must
-    // count it as complete, otherwise a completed task reports not-ready.
+  it('reports next action as proof for a submitted task', async () => {
+    // `submitted` is the terminal state of the frozen TaskStatus vocabulary
+    // (open|submitted|blocked): on-chain confirmation flows back through the
+    // submission receipt, not as a new task status, so readiness.ok must count
+    // a submitted task as complete pending proof.
+    const fetch: ProductApiFetch = async (url) => {
+      if (!url.includes('/product/')) {
+        return jsonResponse({ service: 'chain-services' });
+      }
+      return jsonResponse({
+        task: {
+          taskId: 'task_submitted',
+          orderId: 'order_3b',
+          title: 'Completed inspection',
+          status: 'submitted',
+          assigneeWallet: submitter,
+          canSubmit: false,
+        },
+      });
+    };
+
+    const report = await runProductDoctor({
+      chainServicesUrl: 'http://chain.local/api',
+      walletAddress: submitter,
+      taskId: 'task_submitted',
+      fetch,
+    });
+
+    expect(report.taskReadiness).toMatchObject({
+      taskId: 'task_submitted',
+      status: 'submitted',
+      nextAction: 'proof',
+    });
+    expect(report.taskReadiness?.ok).toBe(true);
+    expect(report.taskReadiness?.check.ok).toBe(true);
+    expect(report.taskReadiness?.nextActionLabel).toContain('Run product proof');
+    expect(report.ok).toBe(true);
+  });
+
+  it('treats a status outside the TaskStatus vocabulary as not complete', async () => {
+    // The server only emits open|submitted|blocked; any other status (e.g.
+    // "done") is a non-canonical payload that must surface as not-ready
+    // instead of being silently treated as a completed task.
     const fetch: ProductApiFetch = async (url) => {
       if (!url.includes('/product/')) {
         return jsonResponse({ service: 'chain-services' });
@@ -395,7 +452,7 @@ describe('Product API doctor', () => {
       return jsonResponse({
         task: {
           taskId: 'task_done',
-          orderId: 'order_3b',
+          orderId: 'order_3',
           title: 'Completed inspection',
           status: 'done',
           assigneeWallet: submitter,
@@ -414,45 +471,6 @@ describe('Product API doctor', () => {
     expect(report.taskReadiness).toMatchObject({
       taskId: 'task_done',
       status: 'done',
-      nextAction: 'proof',
-    });
-    expect(report.taskReadiness?.ok).toBe(true);
-    expect(report.taskReadiness?.check.ok).toBe(true);
-    expect(report.taskReadiness?.nextActionLabel).toContain('Run product proof');
-    expect(report.ok).toBe(true);
-  });
-
-  it('treats only the canonical done status as complete (no completion aliases)', async () => {
-    // Product's TaskStatus vocabulary is open|submitted|blocked|done. The
-    // historical `confirmed`/`completed` completion aliases were purged, so a
-    // non-canonical status must surface as not-ready instead of being silently
-    // treated as a completed task.
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_confirmed',
-          orderId: 'order_3',
-          title: 'Completed inspection',
-          status: 'confirmed',
-          assigneeWallet: submitter,
-          canSubmit: false,
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_confirmed',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_confirmed',
-      status: 'confirmed',
       nextAction: 'wait',
     });
     expect(report.taskReadiness?.nextActionLabel).not.toContain('Run product proof');

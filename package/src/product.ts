@@ -31,6 +31,14 @@ const ZERO_BYTES32 = `0x${'0'.repeat(64)}` as const;
  */
 export const PRODUCT_API_REQUEST_ID_HEADER = 'x-request-id';
 
+/**
+ * Default deadline for one Product API round trip. prepare/submit run long
+ * server-side (evidence resolution, broadcast, receipt wait), so the budget
+ * matches the order-app upload precedent (60s) rather than its 6s plain-fetch
+ * default; without a bound, a hung API stalls the CLI indefinitely.
+ */
+export const PRODUCT_API_REQUEST_TIMEOUT_MS = 60_000;
+
 export interface ProductApiFetchInit {
   readonly method?: string;
   readonly headers?: Readonly<Record<string, string>>;
@@ -41,6 +49,8 @@ export interface ProductApiFetchInit {
    * to whatever host the Location header points at.
    */
   readonly redirect?: 'manual';
+  /** Abort deadline for the request (bounded by the transport on every call). */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -79,6 +89,12 @@ export interface ProductApiClientOptions {
   readonly fetch?: ProductApiFetch;
   readonly headers?: Readonly<Record<string, string>>;
   readonly principalId?: string;
+  /**
+   * Per-request deadline override; defaults to
+   * PRODUCT_API_REQUEST_TIMEOUT_MS. Exists so the same bounded-transport
+   * contract is observable under test with a short budget.
+   */
+  readonly requestTimeoutMs?: number | string;
 }
 
 export interface ProductApiAuthStatus {
@@ -783,6 +799,7 @@ async function requestProductApiJson(
     // bearer from --auth-token-env, and a 3xx would replay it to whatever host
     // the Location header points at. A redirect is a request failure, full stop.
     redirect: 'manual',
+    signal: AbortSignal.timeout(normalizeRequestTimeoutMs(input.requestTimeoutMs)),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   if (isProductApiRedirectStatus(response.status)) {
@@ -814,6 +831,17 @@ export function resolveProductApiFetch(fetchFn?: ProductApiFetch): ProductApiFet
     throw new ValidationError('fetch is not available; provide a Product API fetch implementation');
   }
   return globalFetch;
+}
+
+function normalizeRequestTimeoutMs(value: number | string | undefined): number {
+  if (value === undefined) {
+    return PRODUCT_API_REQUEST_TIMEOUT_MS;
+  }
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new ValidationError('requestTimeoutMs must be a positive integer');
+  }
+  return parsed;
 }
 
 function productApiUrl(

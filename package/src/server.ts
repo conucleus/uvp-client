@@ -379,11 +379,23 @@ async function processDispatch(
       } : {}),
     });
   } catch (error) {
-    await context.jobStore.update(job.id, {
-      status: 'callback_failed',
-      updatedAt: context.now(),
-      lastError: error instanceof Error ? error.message : String(error),
-    });
+    // This catch is the last line of defense for a detached run
+    // (queueMicrotask + void: no caller is left to observe a rejection), so
+    // its own failure write must stay contained — a store fault here would
+    // otherwise escape as an unhandledRejection and take the process down.
+    try {
+      await context.jobStore.update(job.id, {
+        status: 'callback_failed',
+        updatedAt: context.now(),
+        lastError: error instanceof Error ? error.message : String(error),
+      });
+    } catch (updateError) {
+      console.error(
+        `executor-kit: recording the failure for job ${job.id} failed:`
+          + ` ${updateError instanceof Error ? updateError.message : String(updateError)};`
+          + ` the original failure was: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 }
 

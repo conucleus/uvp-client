@@ -88,8 +88,10 @@ import type {
 } from './storage/cursor.js';
 import {
   DEFAULT_GET_LOGS_BLOCK_SPAN,
+  DEFAULT_GET_LOGS_CONCURRENCY,
   blockRanges,
   compareRawLogs,
+  mapWithConcurrency,
 } from './scan/logs.js';
 import {
   DEFAULT_FINALITY_CONFIRMATIONS,
@@ -392,23 +394,29 @@ export class StateMachineWatcher {
 
     // Chunk deep ranges: one unbounded eth_getLogs over a large gap is exactly
     // the query RPC providers reject; a rejected catch-up round fails wholesale.
-    const logBatches = await Promise.all(
-      this.config.stateMachines.map(async (deployment) => {
-        const logs = (
-          await Promise.all(
-            blockRanges(fromBlock, toBlock, BigInt(this.config.getLogsBlockSpan)).map((range) =>
-              client.getLogs({
-                address: deployment.stateMachineAddress,
-                fromBlock: range.fromBlock,
-                toBlock: range.toBlock,
-              }),
-            ),
-          )
-        ).flat();
-        return logs.map((log) => log.address ? log : { ...log, address: deployment.stateMachineAddress });
-      }),
+    // All (deployment, range) pairs share one bounded in-flight pool: a long
+    // catch-up must not open hundreds of simultaneous getLogs requests.
+    const scanRequests = this.config.stateMachines.flatMap((deployment) =>
+      blockRanges(fromBlock, toBlock, BigInt(this.config.getLogsBlockSpan))
+        .map((range) => ({ deployment, range })),
     );
-    const logs = logBatches.flat().sort(compareRawLogs);
+    const logs = (
+      await mapWithConcurrency(
+        scanRequests,
+        DEFAULT_GET_LOGS_CONCURRENCY,
+        ({ deployment, range }) => client.getLogs({
+          address: deployment.stateMachineAddress,
+          fromBlock: range.fromBlock,
+          toBlock: range.toBlock,
+        }),
+      )
+    )
+      .flatMap((logsForRequest, index) => {
+        const deployment = scanRequests[index]?.deployment;
+        // A provider omitting the log address gets the requested deployment's.
+        return logsForRequest.map((log) => (log.address ? log : deployment ? { ...log, address: deployment.stateMachineAddress } : log));
+      })
+      .sort(compareRawLogs);
     // Jobs whose log this round's scan loop handles must not be re-entered by
     // the later-scan pass: raws without a block number cannot be excluded by
     // the pass's height comparison, so the dedupe keys on the log's event id.

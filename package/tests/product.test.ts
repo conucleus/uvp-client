@@ -94,6 +94,21 @@ describe('Product API mode', () => {
     });
   });
 
+  it('aborts a hung Product API request at the bounded deadline', async () => {
+    // The transport must bound every call: a hung server otherwise stalls the
+    // CLI forever. The fetch only settles through the abort signal.
+    const fetch: ProductApiFetch = (_url, init) => new Promise<never>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted due to timeout')));
+    });
+
+    await expect(listSignalContainers({
+      chainServicesUrl: 'http://chain.local/api',
+      walletAddress: submitter,
+      fetch,
+      requestTimeoutMs: 25,
+    })).rejects.toThrow(/aborted due to timeout/);
+  });
+
   it('loads Product API bearer auth only from the named env var', () => {
     const envName = 'UVP_PRODUCT_API_TEST_TOKEN';
     const previous = process.env[envName];

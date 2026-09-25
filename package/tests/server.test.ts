@@ -10,6 +10,7 @@ import {
   createWebhookReplayGuard,
   DEFAULT_CALLBACK_MAX_ATTEMPTS,
   DEFAULT_CALLBACK_RETRY_BASE_DELAY_MS,
+  InMemoryExecutorJobStore,
   loadExecutorConfig,
   parseCallbackHostAllowlist,
   signWebhookBody,
@@ -560,6 +561,57 @@ describe('executor HTTP server', () => {
       expect(jobs[0]?.id).toBe('dispatch-race');
       expect(outboundCalls).toBeLessThanOrEqual(1);
     } finally {
+      await executor.close();
+    }
+  });
+
+  it('contains a failing job-store write inside the detached dispatch path instead of raising an unhandled rejection', async () => {
+    // processDispatch runs detached (queueMicrotask + void): when the
+    // success-path status write faults, the catch path's own failure write
+    // must be the last line of defense — escaping it kills the process as an
+    // unhandledRejection, taking down every other in-flight dispatch.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    const backingStore = new InMemoryExecutorJobStore();
+    let updateCalls = 0;
+    const executor = await startExecutorServer({
+      executorId: 'exec-executor',
+      executorToken,
+      callbackToken,
+      callbackHostAllowlist: ['127.0.0.1'],
+      handlers: { 'exec.main#START': () => ({ status: 'succeeded' }) },
+      jobStore: {
+        create: (job) => backingStore.create(job),
+        get: (jobId) => backingStore.get(jobId),
+        list: () => backingStore.list(),
+        update: async () => {
+          updateCalls += 1;
+          throw new Error('job store write failed');
+        },
+      },
+    });
+    try {
+      const accepted = await fetch(`${executor.url}/v0/dispatches`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${executorToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ dispatchId: 'dispatch-store-fault', effect, callbackUrl: 'http://127.0.0.1:1/v0/signals' }),
+      });
+      expect(accepted.status).toBe(202);
+
+      // Both the success-path write and the guarded catch-path write fault;
+      // neither may escape the process.
+      await eventually(async () => {
+        expect(updateCalls).toBeGreaterThanOrEqual(2);
+      });
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
       await executor.close();
     }
   });

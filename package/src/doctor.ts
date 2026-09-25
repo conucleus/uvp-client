@@ -14,7 +14,15 @@ import {
   type SubmittedSignalContainerSummary,
 } from './product.js';
 import { classifyExecutorKitError } from './errors.js';
-import { normalizeAddress, normalizeAddressChecksummed } from './validation.js';
+import { ValidationError, normalizeAddress, normalizeAddressChecksummed } from './validation.js';
+
+/**
+ * Deadline for the reachability probe. A probe only needs the server to
+ * answer, not to finish work, so it takes the periphery doctor's 10s budget
+ * instead of the 60s prepare/submit budget: a hung base URL must fail the
+ * check instead of pinning the CLI for a full request budget.
+ */
+const PRODUCT_DOCTOR_REACHABILITY_TIMEOUT_MS = 10_000;
 
 export interface ProductDoctorInput extends ProductApiClientOptions {
   readonly walletAddress?: string;
@@ -157,7 +165,18 @@ async function checkReachability(
     // Same redirect discipline as the product transport: the reachability
     // probe carries the Authorization bearer from --auth-token-env and must
     // never follow a 3xx that would replay it to another host.
-    const response = await fetchFn(url, { method: 'GET', headers, redirect: 'manual' });
+    const response = await fetchFn(url, {
+      method: 'GET',
+      headers,
+      redirect: 'manual',
+      // An explicit requestTimeoutMs wins so the same bounded-deadline
+      // contract is observable under test with a short budget.
+      signal: AbortSignal.timeout(
+        input.requestTimeoutMs === undefined
+          ? PRODUCT_DOCTOR_REACHABILITY_TIMEOUT_MS
+          : normalizeProbeTimeoutMs(input.requestTimeoutMs),
+      ),
+    });
     const latencyMs = Date.now() - started;
     if (isProductApiRedirectStatus(response.status)) {
       // Every 3xx (and the status-0 opaqueredirect response a manual redirect
@@ -290,13 +309,15 @@ async function checkTaskReadiness(
     let nextAction: TaskReadinessResult['nextAction'] = 'blocked';
     let nextActionLabel = 'This task is not ready for action.';
 
-    // Product's frozen TaskStatus vocabulary is open|submitted|blocked|done
+    // Product's frozen TaskStatus vocabulary is open|submitted|blocked
     // (ProductTaskDTO in @uvp-eth/product-dto; the /product/tasks endpoints
-    // return it verbatim). Completion is exactly `done`; historical
-    // `confirmed`/`completed` aliases were purged — the server has never
-    // emitted them as task status, and treating them as complete would mask
-    // non-canonical payloads instead of surfacing them.
-    const taskComplete = summary.status === 'done';
+    // return it verbatim). `submitted` is the executor-side terminal state:
+    // on-chain confirmation never flows back as a new task status (it lives
+    // in the submission receipt and the chain projection), so a submitted
+    // task is complete pending proof, while any status outside the
+    // vocabulary surfaces as not-ready instead of silently counting as
+    // complete.
+    const taskComplete = summary.status === 'submitted';
     if (taskComplete) {
       nextAction = 'proof';
       nextActionLabel = 'Task is complete. Run product proof to verify on-chain confirmation.';
@@ -329,8 +350,7 @@ async function checkTaskReadiness(
     // One readiness verdict drives both the outer check and the embedded
     // readiness copy: the embedded check.ok must equal readiness.ok so
     // consumers that only look at the nested check cannot miss a failure.
-    // The canonical completion state `done`
-    // is part of the verdict, not an alias afterthought.
+    // The terminal `submitted` state is part of that verdict.
     const readinessOk = canSubmit || taskComplete;
     const readinessCheck = {
       ok: readinessOk,
@@ -379,6 +399,14 @@ async function checkTaskReadiness(
 
 function stripTrailingSlash(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;
+}
+
+function normalizeProbeTimeoutMs(value: number | string): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new ValidationError('requestTimeoutMs must be a positive integer');
+  }
+  return parsed;
 }
 
 /**
