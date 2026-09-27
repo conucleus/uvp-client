@@ -34,7 +34,7 @@ const TX_HASH: Hex = '0x' + 'ab'.repeat(32);
  */
 
 const TAXONOMY_VERSION = 'uvp.error-taxonomy.v1';
-const TAXONOMY_SHA256 = 'eb3ceba32669cbdc74b62482e341314f864c49e26bdc570401772457544bd059';
+const TAXONOMY_SHA256 = '27bc628bd350c6cf63742710a075f94edaad3abb61b0c40c2a41b4f1e4047174';
 
 interface TaxonomyErrorEntry {
   readonly code: string;
