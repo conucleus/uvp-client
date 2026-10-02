@@ -1234,6 +1234,36 @@ async function startChainStub(): Promise<{
         result = '0x7a69';
       } else if (parsed.method === 'eth_blockNumber') {
         result = head;
+      } else if (parsed.method === 'eth_getBlockByNumber') {
+        // Serve deterministic per-height blocks (including genesis) like a real
+        // chain would: the watcher binds its persisted-cursor identity to the
+        // block-0 hash, and a stub that cannot serve block 0 makes every
+        // chain-once run report a degraded genesis identity.
+        const tag = String((parsed.params?.[0] ?? 'latest'));
+        const tagged = tag === 'earliest' ? 0 : ['latest', 'pending', 'finalized', 'safe'].includes(tag)
+          ? Number.parseInt(head, 16)
+          : Number.parseInt(tag, 16);
+        const height = Number.isFinite(tagged) && tagged >= 0 ? tagged : 0;
+        const blockHash = (blockHeight: number) => `0x${(blockHeight + 1).toString(16).padStart(64, '0')}`;
+        result = {
+          number: `0x${height.toString(16)}`,
+          hash: blockHash(height),
+          parentHash: blockHash(Math.max(height - 1, 0)),
+          timestamp: '0x0',
+          nonce: '0x0000000000000000',
+          difficulty: '0x0',
+          gasLimit: '0x1c9c380',
+          gasUsed: '0x0',
+          miner: '0x0000000000000000000000000000000000000000',
+          extraData: '0x',
+          logsBloom: `0x${'00'.repeat(64)}`,
+          transactions: [],
+          stateRoot: `0x${'00'.repeat(32)}`,
+          transactionsRoot: `0x${'00'.repeat(32)}`,
+          receiptsRoot: `0x${'00'.repeat(32)}`,
+          size: '0x0',
+          mixHash: `0x${'00'.repeat(32)}`,
+        };
       } else if (parsed.method === 'eth_getLogs') {
         const filter = (parsed.params?.[0] ?? {}) as {
           address?: string;

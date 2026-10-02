@@ -672,6 +672,101 @@ describe('state machine chain watcher', () => {
     }
   });
 
+  it('reports a degraded genesis identity loudly instead of silently skipping the cursor chain check', async () => {
+    // UA-16: while the block-0 read fails (RPC hiccup, pruned node), the
+    // restore latch still adopts and re-saves the cursor with the genesis
+    // binding dropped — the one window where a same-chain-id reset goes
+    // undetected. That window must be reported every round it persists,
+    // exposed through describe(), and self-heal (re-bind the saved cursor)
+    // the moment block 0 becomes readable again, matching the watcher's
+    // degrade-don't-die caliber (an unreadable genesis must not kill the
+    // scan loop either).
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-cursor-genesis-loud-'));
+    const errors: string[] = [];
+    try {
+      const cursorFile = join(dir, 'cursor.json');
+      const genesis = `0x${'cc'.repeat(32)}`;
+      let genesisReadable = false;
+      let headBlock = 30n;
+      const client: StateMachinePublicClient = {
+        async getChainId() {
+          return 31_337;
+        },
+        async getBlockNumber() {
+          return headBlock;
+        },
+        async getLogs() {
+          return [];
+        },
+        async getBlock(args: { readonly blockNumber: bigint }) {
+          if (args.blockNumber === 0n) {
+            if (!genesisReadable) {
+              throw new Error('block 0 pruned');
+            }
+            return { hash: genesis };
+          }
+          return { hash: `0x${(Number(args.blockNumber) + 1).toString(16).padStart(64, '0')}` };
+        },
+      };
+      const buildWatcher = () => createStateMachineWatcher({
+        rpcUrl: 'http://127.0.0.1:8545',
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        walletAddress: WALLET_ADDRESS,
+        fromBlock: 10,
+        dryRun: true,
+        handlers: { '*': () => undefined },
+        onError: (error) => {
+          errors.push(String(error));
+        },
+        cursorStore: new FileStateMachineCursorStore(cursorFile),
+        publicClient: client,
+      });
+
+      // Seed a cursor bound to the real genesis, then blind the watcher to it.
+      await new FileStateMachineCursorStore(cursorFile).save(
+        { nextBlock: 22n },
+        { chainId: 31_337, stateMachines: [STATE_MACHINE.toLowerCase()], genesisHash: genesis },
+      );
+
+      // Degraded round 1: the cursor is still adopted (chain id and machine set
+      // match), but loudly — one alert per degraded round, status exposed.
+      const degraded = buildWatcher();
+      const degradedPoll = await degraded.pollOnce();
+      expect(degradedPoll.fromBlock).toBe(22n);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('chain genesis hash could not be read');
+      expect(errors[0]).toContain('degraded for 1 poll round');
+      expect(degraded.describe()).toMatchObject({ genesisIdentity: 'unknown', genesisIdentityUnknownRounds: 1 });
+      // The degraded save dropped the genesis binding from the file: the
+      // erosion itself is the visible symptom the operator alerts on.
+      const eroded = JSON.parse(await readFile(cursorFile, 'utf8')) as { genesisHash?: string };
+      expect(eroded.genesisHash).toBeUndefined();
+
+      // Degraded round 2 (head grew so the round scans and re-saves): the
+      // alert repeats while the condition persists.
+      headBlock = 32n;
+      await degraded.pollOnce();
+      expect(errors).toHaveLength(2);
+      expect(errors[1]).toContain('degraded for 2 poll round');
+      expect(degraded.describe()).toMatchObject({ genesisIdentity: 'unknown', genesisIdentityUnknownRounds: 2 });
+
+      // Healed round 3: the retry succeeds, the recovery is reported once, and
+      // the cursor save re-binds the genesis identity for later restarts.
+      genesisReadable = true;
+      headBlock = 34n;
+      const healedPoll = await degraded.pollOnce();
+      expect(healedPoll.fromBlock).toBe(32n);
+      expect(errors).toHaveLength(3);
+      expect(errors[2]).toContain('readable again after 2 degraded poll round');
+      expect(degraded.describe()).toMatchObject({ genesisIdentity: 'bound', genesisIdentityUnknownRounds: 0 });
+      const rebound = JSON.parse(await readFile(cursorFile, 'utf8')) as { genesisHash?: string };
+      expect(rebound.genesisHash).toBe(genesis);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the scan cursor in process memory when no cursor store is configured', async () => {
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',

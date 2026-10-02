@@ -234,6 +234,13 @@ export class StateMachineWatcher {
    */
   private adoptedStoredCursor = false;
   private genesisHash: string | undefined;
+  /**
+   * Consecutive poll rounds the genesis (block-0) identity read stayed
+   * unreadable. Zero once the read succeeds; the streak is exposed through
+   * describe() so a permanently degraded identity (e.g. a pruned block 0)
+   * stays visible in status output instead of decaying into silence.
+   */
+  private genesisIdentityUnknownRounds = 0;
   /** Canonical hash of block nextBlock - 1 from the last successful round, when readable. */
   private cursorBlockHash: string | undefined;
   private checkpoints: StateMachineCursorCheckpoint[] = [];
@@ -282,6 +289,12 @@ export class StateMachineWatcher {
       decodeFailures: this.decodeFailuresTotal,
       jobStore: this.config.jobStore.kind ?? 'custom',
       cursorStore: this.config.cursorStore?.kind ?? 'memory',
+      ...(this.config.cursorStore
+        ? {
+          genesisIdentity: this.genesisHash !== undefined ? 'bound' : 'unknown',
+          genesisIdentityUnknownRounds: this.genesisIdentityUnknownRounds,
+        }
+        : {}),
     };
   }
 
@@ -304,7 +317,11 @@ export class StateMachineWatcher {
       this.cursorRestored = true;
       return;
     }
-    this.genesisHash = client ? await tryGetBlockHash(client, 0n) : undefined;
+    // The genesis binding is resolved through observeGenesisIdentity so a
+    // failed read is loud BEFORE the identity decision below runs degraded.
+    if (client) {
+      await this.observeGenesisIdentity(client);
+    }
     const result = await store.load(this.cursorContext());
     // Latch only after the store reached a decision: a transient load failure
     // (EACCES, EMFILE, a full disk) must retry on the next poll instead of
@@ -331,6 +348,59 @@ export class StateMachineWatcher {
     }
   }
 
+  /**
+   * Resolve (or keep retrying) the chain genesis (block-0) hash that binds the
+   * persisted cursor to this chain's identity. A failed read used to leave the
+   * genesis check silently disabled: the restore latch adopted the cursor with
+   * a degraded identity, later saves re-wrote the file without the genesis
+   * binding, and nothing surfaced any of it (UA-16).
+   *
+   * Operational caliber: the watcher's documented rule is degrade-don't-die
+   * (see start(): persistent poll failures are reported through onError with
+   * capped backoff instead of killing the loop, and fail-fast is reserved for
+   * constructor-time validation), so the round continues scanning with the
+   * chain-id + state-machine identity only — but every round the read stays
+   * unreadable is reported through onError (the kit's degraded-condition alarm
+   * channel, same per-round cadence as the stuck claim-release retries) and
+   * exposed through describe()'s genesisIdentity status. The retry every poll
+   * round makes the binding self-heal: once block 0 is readable again, cursor
+   * saves re-bind the genesis identity, restoring reset-chain detection for
+   * later restarts.
+   */
+  private async observeGenesisIdentity(client: StateMachinePublicClient): Promise<void> {
+    if (!this.config.cursorStore || this.genesisHash !== undefined) {
+      return;
+    }
+    if (typeof client.getBlock !== 'function') {
+      // A client without block support is a supported configuration the reorg
+      // defenses already treat as "no evidence": no genesis binding is ever
+      // expected there, so there is no degraded identity to report. Only an
+      // attempted-but-failed read (RPC hiccup, pruned block 0) disables a
+      // check this watcher was otherwise relying on — that is the loud case.
+      return;
+    }
+    const hash = await tryGetBlockHash(client, 0n);
+    if (hash !== undefined) {
+      if (this.genesisIdentityUnknownRounds > 0) {
+        this.config.onError?.(new ExecutorKitError(
+          `chain genesis hash is readable again after ${this.genesisIdentityUnknownRounds} degraded poll round(s);`
+            + ' subsequent cursor saves re-bind the genesis identity, restoring reset-chain detection for restarts',
+        ));
+      }
+      this.genesisHash = hash;
+      this.genesisIdentityUnknownRounds = 0;
+      return;
+    }
+    this.genesisIdentityUnknownRounds += 1;
+    this.config.onError?.(new ExecutorKitError(
+      `chain genesis hash could not be read (degraded for ${this.genesisIdentityUnknownRounds} poll round(s));`
+        + ' the persisted scan cursor is restored and re-saved with a degraded chain identity'
+        + ' (chain id and state-machine set only), so a chain reset at the same chain id'
+        + ' goes undetected while this persists; the read is retried every poll round and the'
+        + ' identity binding self-heals once block 0 is readable',
+    ));
+  }
+
   async pollOnce(): Promise<StateMachinePollResult> {
     // Claim-release retries run before any early return of the round: a stuck
     // release must not wait for new blocks (the finality-lag path returns
@@ -338,7 +408,15 @@ export class StateMachineWatcher {
     await this.retryPendingClaimReleases();
     const client = getPublicClient(this.config);
     await ensureChainId(client, this.config.chainId);
+    const cursorAlreadyRestored = this.cursorRestored;
     await this.restoreCursor(client);
+    if (cursorAlreadyRestored) {
+      // Post-latch genesis retry (the restore path already observed it in its
+      // own round): while the read stays unreadable the identity check runs
+      // degraded, so it must be retried and re-reported every round instead of
+      // silently abdicating for the rest of the process lifetime.
+      await this.observeGenesisIdentity(client);
+    }
 
     const latestBlock = await client.getBlockNumber();
     // Finality buffer: never scan the chain tip, so a short reorg cannot flip
