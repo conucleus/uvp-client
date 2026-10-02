@@ -498,7 +498,13 @@ should dock into the same low-level Product API boundaries:
   returned EIP-712 typed data, then `POST /product/tasks/:taskId/submit`.
 - Executor patch: `POST /product/tasks/:taskId/prepare-stage-executor-patch`,
   wallet signs the returned patch typed data, then
-  `POST /product/tasks/:taskId/submit-stage-executor-patch`.
+  `POST /product/tasks/:taskId/submit-stage-executor-patch`. The relayer
+  broadcast resolves to `applyStageExecutorPatchFor`, which since the
+  delegation-retirement batch carries trailing `candidateProof` (executor
+  candidate-set Merkle proof) and `executorAuthorizations` (the explicit
+  order-level authorization set whose hash the selector signature commits);
+  only `assign` and `handoff` modes remain — non-cooperative executor changes
+  move to the governance fork lane, which is not part of this kit yet.
 - Resource patch: `POST /product/tasks/:taskId/prepare-stage-resource-patch`,
   wallet signs the returned patch typed data, then
   `POST /product/tasks/:taskId/submit-stage-resource-patch`.
@@ -509,9 +515,9 @@ order-level authorization, participant wallet signatures, and contract checks.
 
 ## ABI Boundary
 
-`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.12` compact-hook
+`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.13` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.12.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.13.json`:
 
 - `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId, bytes32 hookName)`;
 - `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution, (bytes32 selectorStageId, bytes32[] proof) selectorBinding)`.
@@ -523,9 +529,15 @@ a table mirror. `attribution` is the fact-owner self-attestation (relation=0
 capability leaf); the all-zero struct means "no claim" (out-of-vocabulary
 fact caliber, valid against vocabulary-less plans). `selectorBinding` carries
 the owner stage's selector-binding proof; all-zero means "no proof carried".
-Proofs never enter the signing envelope — `PRODUCT_SUBMIT` typed data
-(domain `UVPStateMachine` version `0.11`) and the derived-signal / patch
-typehashes are unchanged.
+Proofs never enter the signing envelope — `PRODUCT_SUBMIT` typed data keeps its
+frozen shape with the domain version pinned by `@uvp-eth/protocol-bindings`
+(`UVPStateMachine` version `0.13`). The stage-patch signing envelope did change
+with the delegation-retirement batch (`UVPStagePatchModule` version `0.2`): the
+`StageExecutorPatch` digest now commits `authorizationsHash` (the
+explicit order-level authorization set written for the incoming executor) and
+the retired `approvalSourceId`/`approvalSignalId` REPLACEMENT material is gone.
+The kit consumes that surface only through protocol-bindings' exported ABI and
+typed-data field tables — never hand-copied here.
 
 ### Capability Proof Material (artifact index)
 
