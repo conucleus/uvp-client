@@ -531,13 +531,12 @@ fact caliber, valid against vocabulary-less plans). `selectorBinding` carries
 the owner stage's selector-binding proof; all-zero means "no proof carried".
 Proofs never enter the signing envelope — `PRODUCT_SUBMIT` typed data keeps its
 frozen shape with the domain version pinned by `@uvp-eth/protocol-bindings`
-(`UVPStateMachine` version `0.13`). The stage-patch signing envelope did change
-with the delegation-retirement batch (`UVPStagePatchModule` version `0.2`): the
-`StageExecutorPatch` digest now commits `authorizationsHash` (the
-explicit order-level authorization set written for the incoming executor) and
-the retired `approvalSourceId`/`approvalSignalId` REPLACEMENT material is gone.
-The kit consumes that surface only through protocol-bindings' exported ABI and
-typed-data field tables — never hand-copied here.
+(`UVPStateMachine` version `0.13`). The stage-patch signing envelope is
+`UVPStagePatchModule` version `0.2`: the `StageExecutorPatch` digest commits
+`authorizationsHash` (the explicit order-level authorization set written for
+the incoming executor). The kit consumes that surface only through
+protocol-bindings' exported ABI and typed-data field tables — never
+hand-copied here.
 
 ### Capability Proof Material (artifact index)
 
