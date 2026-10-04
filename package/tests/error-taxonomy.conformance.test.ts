@@ -18,7 +18,7 @@ const TX_HASH: Hex = '0x' + 'ab'.repeat(32);
 
 /**
  * Conformance suite for the unified UVP error taxonomy
- * (uvp-protocol/protocol/uvp-error-taxonomy.v1.json).
+ * (self-hosted in the uvp-core repo under protocol/uvp-error-taxonomy.v1.json).
  *
  * errors.ts keeps its handwritten tables (the published package must not gain a
  * runtime file dependency outside its own repo), but this suite pins the
@@ -60,7 +60,7 @@ function taxonomyPath(): string {
   }
   // tests/ -> package -> uvp-executor-kit -> uvp-eth (workspace root)
   const workspaceRoot = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
-  return join(workspaceRoot, 'uvp-protocol', 'protocol', 'uvp-error-taxonomy.v1.json');
+  return join(workspaceRoot, 'uvp-core', 'protocol', 'uvp-error-taxonomy.v1.json');
 }
 
 function loadTaxonomy(): TaxonomyFile {
@@ -71,7 +71,7 @@ function loadTaxonomy(): TaxonomyFile {
   } catch (error) {
     throw new Error(
       `uvp error taxonomy not readable at ${path} (${(error as Error).message}). `
-      + 'The table lives in the uvp-protocol repo under protocol/uvp-error-taxonomy.v1.json; '
+      + 'The table is self-hosted in the uvp-core repo under protocol/uvp-error-taxonomy.v1.json; '
       + 'run the test from the pnpm workspace or point UVP_ERROR_TAXONOMY_JSON at the file. '
       + 'Do not skip this suite: it is the executor-kit side of the pinned conformance contract.',
     );
