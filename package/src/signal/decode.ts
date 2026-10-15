@@ -41,8 +41,8 @@ export interface StateMachineArtifactIndex {
   readonly signals?: Readonly<Record<string, StateMachineSignalMetadata>>;
   /**
    * 阶段 selector 绑定表（plan 冻结能力词表的链下镜像）：内嵌进执行器
-   * 配置后，提交通道用 protocol-bindings 的 selectorBindingProofFor 现场
-   * 造证。缺省（无表）按全零不携证提交。
+   * 配置后，提交通道以该表解析事实属主阶段并现场造 attribution 证。
+   * 缺省（无表）按全零不声明提交。
    */
   readonly selectorBindings?: readonly StageSelectorBindingTableEntry[];
   /**

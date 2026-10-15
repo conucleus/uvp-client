@@ -11,7 +11,6 @@ import {
   requestProductSubmitSignature,
   requestProductSubmitSignatureForTarget,
   type Eip1193Provider,
-  type SelectorBindingPayload,
   type SignalAttributionPayload,
 } from '@uvp-eth/executor-kit/participant';
 import {
@@ -133,10 +132,6 @@ describe('participant entrypoint', () => {
       stageId: `0x${'00'.repeat(32)}`,
       capabilityProof: [],
     };
-    const selectorBinding: SelectorBindingPayload = {
-      selectorStageId: `0x${'00'.repeat(32)}`,
-      proof: [],
-    };
     const call = buildSubmitSignalForCall({
       stateMachineAddress: verifyingContract,
       chainId: 31337,
@@ -151,7 +146,6 @@ describe('participant entrypoint', () => {
       deadline,
       signature,
       attribution,
-      selectorBinding,
     });
 
     expect(call).toMatchObject({
@@ -177,10 +171,6 @@ describe('participant entrypoint', () => {
         signalId,
         stageId: `0x${'00'.repeat(32)}`,
         capabilityProof: [],
-      },
-      {
-        selectorStageId: `0x${'00'.repeat(32)}`,
-        proof: [],
       },
     ]);
     expect(call.data).toMatch(/^0x[0-9a-f]+$/);

@@ -124,7 +124,7 @@ export function registerChainCommands(program: Command): void {
         // away with a "submitted" success that never carried the reference.
         // Fail loudly; only the 32-byte payloadHash goes on chain.
         throw new ValidationError(
-          '--payload-ref is not supported by chain-signal: submitSignal(planId, orderId, sourceId, signalId, payloadHash, idempotencyKey, attribution, selectorBinding) has no reference field, so the flag would be silently dropped. Keep only the 32-byte --payload-hash on chain and record the off-chain payload reference in your own job/evidence store next to it.',
+          '--payload-ref is not supported by chain-signal: submitSignal(planId, orderId, sourceId, signalId, payloadHash, idempotencyKey, attribution) has no reference field, so the flag would be silently dropped. Keep only the 32-byte --payload-hash on chain and record the off-chain payload reference in your own job/evidence store next to it.',
         );
       }
       const result = await submitStateMachineSignal({

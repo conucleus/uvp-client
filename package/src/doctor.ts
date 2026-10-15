@@ -188,7 +188,7 @@ async function checkReachability(
         latencyMs,
       };
     }
-    if (response.ok || response.status < 500) {
+    if (response.ok) {
       return { ok: true, label: 'reachability', detail: `Product API responded HTTP ${response.status}`, latencyMs };
     }
     return { ok: false, label: 'reachability', detail: `Product API HTTP ${response.status}`, latencyMs };

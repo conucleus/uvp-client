@@ -3,7 +3,6 @@ import { decodeFunctionData, keccak256, stringToBytes, type Hex } from 'viem';
 import {
   capabilitiesRootOf,
   factAttribution,
-  selectorBindingProofFor,
   STATE_MACHINE_ABI,
 } from '@uvp-eth/protocol-bindings';
 import {
@@ -11,7 +10,6 @@ import {
   capabilityTablesOf,
   withCapabilityProofs,
   ZERO_FACT_ATTRIBUTION,
-  ZERO_SELECTOR_BINDING,
   type StateMachineSignal,
 } from '../src/watcher/index.js';
 import { ValidationError } from '../src/validation.js';
@@ -54,30 +52,26 @@ const TABLES = {
 };
 
 describe('submitSignal calldata proof shape', () => {
-  it('encodes the all-zero proof structs when no proof material is given', () => {
+  it('encodes the all-zero proof struct when no proof material is given', () => {
     const call = buildSubmitStateMachineSignalCall(CONFIG, BASE_SIGNAL, WALLET_ADDRESS);
 
-    // The 8-arg submitSignal selector, pinned against the v0.13 fixture shape.
+    // The 7-arg submitSignal selector, pinned against the v0.14 fixture shape.
     expect(call.data.slice(0, 10)).toBe(keccak256(
-      stringToBytes('submitSignal(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,(bytes32,bytes32,bytes32,bytes32[]),(bytes32,bytes32[]))'),
+      stringToBytes('submitSignal(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,(bytes32,bytes32,bytes32,bytes32[]))'),
     ).slice(0, 10));
-    expect(call.args).toHaveLength(8);
+    expect(call.args).toHaveLength(7);
     expect(call.args[6]).toEqual(ZERO_FACT_ATTRIBUTION);
-    expect(call.args[7]).toEqual(ZERO_SELECTOR_BINDING);
     const decoded = decodeFunctionData({
       abi: STATE_MACHINE_ABI,
       functionName: 'submitSignal',
       data: call.data,
     });
     expect(decoded.args[6]).toEqual(ZERO_FACT_ATTRIBUTION);
-    expect(decoded.args[7]).toEqual(ZERO_SELECTOR_BINDING);
   });
 
-  it('encodes an explicit attribution and selector binding proof', () => {
+  it('encodes an explicit attribution proof', () => {
     const attribution = factAttribution(TABLES.selectorBindings, TABLES.signalCapabilities, SOURCE_ID, SIGNAL_ID);
-    const binding = selectorBindingProofFor(TABLES.selectorBindings, TABLES.signalCapabilities, OWNER_STAGE_ID);
     expect(attribution).toBeDefined();
-    expect(binding).toBeDefined();
 
     const call = buildSubmitStateMachineSignalCall(CONFIG, {
       ...BASE_SIGNAL,
@@ -87,10 +81,6 @@ describe('submitSignal calldata proof shape', () => {
         stageId: attribution!.stageId,
         capabilityProof: attribution!.capabilityProof,
       },
-      selectorBinding: {
-        selectorStageId: binding!.selectorStageId,
-        proof: binding!.proof,
-      },
     });
 
     expect(call.args[6]).toEqual({
@@ -98,10 +88,6 @@ describe('submitSignal calldata proof shape', () => {
       signalId: SIGNAL_ID,
       stageId: OWNER_STAGE_ID,
       capabilityProof: attribution!.capabilityProof,
-    });
-    expect(call.args[7]).toEqual({
-      selectorStageId: SELECTOR_STAGE_ID,
-      proof: binding!.proof,
     });
     // The proof round-trips through the calldata and still verifies against
     // the plan-frozen capabilities root.
@@ -158,18 +144,15 @@ describe('submitSignal calldata proof shape', () => {
 
     const proven = withCapabilityProofs(BASE_SIGNAL, TABLES);
     expect(proven.attribution).toBeDefined();
-    expect(proven.selectorBinding).toBeDefined();
     const call = buildSubmitStateMachineSignalCall(CONFIG, proven);
     expect(call.args[6]).toMatchObject({ stageId: OWNER_STAGE_ID, sourceId: SOURCE_ID, signalId: SIGNAL_ID });
-    expect(call.args[7]).toMatchObject({ selectorStageId: SELECTOR_STAGE_ID });
 
-    // Out-of-vocabulary fact: no attribution derived, no binding attached.
+    // Out-of-vocabulary fact: no attribution derived.
     const foreign = withCapabilityProofs({
       ...BASE_SIGNAL,
       sourceId: keccak256(stringToBytes('someone-else')),
     }, TABLES);
     expect(foreign.attribution).toBeUndefined();
-    expect(foreign.selectorBinding).toBeUndefined();
     expect(buildSubmitStateMachineSignalCall(CONFIG, foreign).args[6]).toEqual(ZERO_FACT_ATTRIBUTION);
 
     // No tables (vocabulary-less plan): unchanged signal, zero encoding.
@@ -183,10 +166,6 @@ describe('submitSignal calldata proof shape', () => {
         signalId: SIGNAL_ID,
         stageId: ZERO_FACT_ATTRIBUTION.stageId,
         capabilityProof: [],
-      },
-      selectorBinding: {
-        selectorStageId: ZERO_SELECTOR_BINDING.selectorStageId,
-        proof: [],
       },
     }, TABLES);
     expect(explicit.attribution).toEqual({

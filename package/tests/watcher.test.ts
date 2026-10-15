@@ -55,7 +55,7 @@ const ZERO_BYTES32_WORD = `0x${'00'.repeat(32)}` as Hex;
 const KEY_ENV = 'UVP_RECEIPT_TEST_PRIVATE_KEY';
 const TEST_PRIVATE_KEY = `0x${'ab'.repeat(32)}`;
 const STATE_MACHINE_FIXTURE = JSON.parse(
-  readFileSync(new URL('../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.13.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.14.json', import.meta.url), 'utf8'),
 ) as {
   readonly hashes: {
     readonly artifactHash: Hex;
@@ -154,9 +154,9 @@ describe('state machine chain watcher', () => {
     expect(result.job?.matchedKey).toBe('exec.main#START');
     expect(matchedKeys).toEqual(['exec.main#START']);
     expect(submission.request.functionName).toBe('submitSignal');
-    // planId is the first submitSignal argument; the proof structs close the
-    // tuple as the all-zero no-claim/no-proof encoding (no capability tables
-    // on this watcher's artifact).
+    // planId is the first submitSignal argument; the proof struct closes the
+    // tuple as the all-zero no-claim encoding (no capability tables on this
+    // watcher's artifact).
     expect(submission.request.args).toEqual([
       PLAN_ID,
       ORDER_ID,
@@ -165,7 +165,6 @@ describe('state machine chain watcher', () => {
       PAYLOAD_HASH,
       expect.any(String),
       { sourceId: ZERO_BYTES32_WORD, signalId: ZERO_BYTES32_WORD, stageId: ZERO_BYTES32_WORD, capabilityProof: [] },
-      { selectorStageId: ZERO_BYTES32_WORD, proof: [] },
     ]);
   });
 
@@ -194,8 +193,8 @@ describe('state machine chain watcher', () => {
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
-    // relation=0 能力命中：attribution 自证属主阶段，selector 绑定证明按
-    // 属主阶段现场重算（树是 plan 冻结的，现场证明与预生成等价）。
+    // relation=0 能力命中：attribution 自证属主阶段（树是 plan 冻结的，
+    // 现场证明与预生成等价）。
     expect(submission.request.args[6]).toMatchObject({
       sourceId: BUYER_SOURCE_ID,
       signalId: EXEC_MAIN_CMP_ID,
@@ -203,7 +202,6 @@ describe('state machine chain watcher', () => {
     });
     expect((submission.request.args[6] as { readonly capabilityProof: readonly Hex[] }).capabilityProof.length)
       .toBeGreaterThan(0);
-    expect(submission.request.args[7]).toMatchObject({ selectorStageId: `0x${'66'.repeat(32)}` });
   });
 
   it('keeps out-of-vocabulary signals on the zero-claim encoding even with tables present', async () => {
@@ -231,15 +229,13 @@ describe('state machine chain watcher', () => {
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
-    // 词表外事实：不声明属主、不携 selector 证明（relation=1 的同源能力
-    // 也不构成属主声明）。
+    // 词表外事实：不声明属主（relation=1 的同源能力也不构成属主声明）。
     expect(submission.request.args[6]).toEqual({
       sourceId: ZERO_BYTES32_WORD,
       signalId: ZERO_BYTES32_WORD,
       stageId: ZERO_BYTES32_WORD,
       capabilityProof: [],
     });
-    expect(submission.request.args[7]).toEqual({ selectorStageId: ZERO_BYTES32_WORD, proof: [] });
   });
 
   it('attaches derived proofs to handler-context submissions too', async () => {
@@ -273,7 +269,6 @@ describe('state machine chain watcher', () => {
       signalId: EXEC_MAIN_CMP_ID,
       stageId: STAGE_ID,
     });
-    expect(recorded?.args[7]).toMatchObject({ selectorStageId: `0x${'66'.repeat(32)}` });
   });
 
   it('polls with an injected public client instead of a real network', async () => {

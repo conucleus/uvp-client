@@ -432,6 +432,17 @@ Watcher job semantics:
   chain (the contract's `SignalAlreadyExists` dedupe on
   `(planId, orderId, sourceId, signalId)` absorbs the duplicate when the
   signal actually survived).
+- `dead_letter` is a one-way archive with no revival channel: `jobs retry`
+  refuses it, and a later scan that re-encounters the same HookReady log
+  answers from the existing terminal record instead of re-opening it
+  (deleting just the jobs-file entry is not enough either — the cursor is
+  bound to the watcher identity, not the jobs file, and will not rescan
+  already-cleared blocks). If the dead-lettered work turns out to be required
+  after all, the operator paths are: deliver the signals directly
+  (`chain-signal`, or product prepare/submit), or re-detect the log by
+  starting a watcher on a fresh state directory so the scan replays from the
+  configured start block. Hand-editing jobs.json/cursor.json is not a
+  supported channel.
 - HookReady-topic logs that fail to decode (e.g. from a mixed-version
   deployment) never crash the watcher: the scan skips them, records an
   `ignored` job with the raw log preserved, counts them in poll results and
@@ -515,23 +526,24 @@ order-level authorization, participant wallet signatures, and contract checks.
 
 ## ABI Boundary
 
-`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.13` compact-hook
+`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.14` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.13.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.14.json`:
 
 - `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId, bytes32 hookName)`;
-- `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution, (bytes32 selectorStageId, bytes32[] proof) selectorBinding)`.
+- `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution)`.
 
-The trailing proof structs are the capabilities-Merkle (v0.11) surface: the
-plan commits one `capabilitiesRoot` over its frozen selector-binding and
-signal-capability tables, and the submitter re-derives membership proofs from
-a table mirror. `attribution` is the fact-owner self-attestation (relation=0
-capability leaf); the all-zero struct means "no claim" (out-of-vocabulary
-fact caliber, valid against vocabulary-less plans). `selectorBinding` carries
-the owner stage's selector-binding proof; all-zero means "no proof carried".
+The trailing proof struct is the capabilities-Merkle surface: the plan commits
+one `capabilitiesRoot` over its frozen selector-binding and signal-capability
+tables, and the submitter re-derives membership proofs from a table mirror.
+`attribution` is the fact-owner self-attestation (relation=0 capability leaf);
+the all-zero struct means "no claim" (out-of-vocabulary fact caliber, valid
+against vocabulary-less plans). The proof never enters the signing envelope —
+`PRODUCT_SUBMIT` typed data keeps its frozen shape with the domain version
+pinned by `@uvp-eth/protocol-bindings`
 Proofs never enter the signing envelope — `PRODUCT_SUBMIT` typed data keeps its
 frozen shape with the domain version pinned by `@uvp-eth/protocol-bindings`
-(`UVPStateMachine` version `0.13`). The stage-patch signing envelope is
+(`UVPStateMachine` version `0.14`). The stage-patch signing envelope is
 `UVPStagePatchModule` version `0.2`: the `StageExecutorPatch` digest commits
 `authorizationsHash` (the explicit order-level authorization set written for
 the incoming executor). The kit consumes that surface only through
@@ -557,17 +569,15 @@ The watcher's `artifact` index may embed the two plan-frozen table mirrors:
 
 When the tables are present, both submission channels (handler-returned
 signals and the handler-context `submitSignal`) derive proofs on the fly via
-`@uvp-eth/protocol-bindings`'s `factAttribution` / `selectorBindingProofFor`:
-a signal whose (sourceId, signalId) hits a relation=0 capability submits with
-the owner attribution plus the owner stage's selector-binding proof; an
-out-of-vocabulary signal and a table-less artifact both submit the all-zero
-pair. Explicit `attribution` / `selectorBinding` fields on a signal are never
+`@uvp-eth/protocol-bindings`'s `factAttribution`: a signal whose
+(sourceId, signalId) hits a relation=0 capability submits with the owner
+attribution; an out-of-vocabulary signal and a table-less artifact both submit
+the all-zero struct. An explicit `attribution` field on a signal is never
 overwritten by derivation. A non-zero `stageId` whose attribution keys
 disagree with the signal keys is refused at build time (the contract's
 `InvalidFactAttribution` is a guaranteed revert). The same defaulting applies
-to SDK builders: `buildSubmitStateMachineSignalCall` accepts optional
-`attribution` / `selectorBinding` inputs and encodes the zero structs when
-they are omitted.
+to SDK builders: `buildSubmitStateMachineSignalCall` accepts an optional
+`attribution` input and encodes the zero struct when it is omitted.
 
 `planId` is part of the event and submit boundary. It must be retained with the
 watcher job and never inferred from a bare `orderId`; the same state machine can
