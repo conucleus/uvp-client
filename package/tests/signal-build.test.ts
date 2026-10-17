@@ -55,7 +55,7 @@ describe('submitSignal calldata proof shape', () => {
   it('encodes the all-zero proof struct when no proof material is given', () => {
     const call = buildSubmitStateMachineSignalCall(CONFIG, BASE_SIGNAL, WALLET_ADDRESS);
 
-    // The 7-arg submitSignal selector, pinned against the v0.14 fixture shape.
+    // The 7-arg submitSignal selector, pinned against the v0.15 fixture shape.
     expect(call.data.slice(0, 10)).toBe(keccak256(
       stringToBytes('submitSignal(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,(bytes32,bytes32,bytes32,bytes32[]))'),
     ).slice(0, 10));

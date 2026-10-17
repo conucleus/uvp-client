@@ -526,9 +526,9 @@ order-level authorization, participant wallet signatures, and contract checks.
 
 ## ABI Boundary
 
-`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.14` compact-hook
+`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.15` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.14.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.15.json`:
 
 - `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId, bytes32 hookName)`;
 - `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution)`.
@@ -543,7 +543,7 @@ against vocabulary-less plans). The proof never enters the signing envelope —
 pinned by `@uvp-eth/protocol-bindings`
 Proofs never enter the signing envelope — `PRODUCT_SUBMIT` typed data keeps its
 frozen shape with the domain version pinned by `@uvp-eth/protocol-bindings`
-(`UVPStateMachine` version `0.14`). The stage-patch signing envelope is
+(`UVPStateMachine` version `0.15`). The stage-patch signing envelope is
 `UVPStagePatchModule` version `0.2`: the `StageExecutorPatch` digest commits
 `authorizationsHash` (the explicit order-level authorization set written for
 the incoming executor). The kit consumes that surface only through

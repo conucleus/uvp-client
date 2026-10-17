@@ -48,7 +48,7 @@ describe('participant entrypoint', () => {
     // UVPStateMachineSignal is plan-scoped — planId is the first
     // field of the signed message and callers must pass the real order planId.
     // The domain version follows the protocol constant (re-exported from
-    // protocol-bindings; 0.14 since the state-machine 0.14 domain batch); the
+    // protocol-bindings; 0.15 since the state-machine 0.15 domain batch); the
     // signed envelope itself is unchanged.
     expect(typedData).toEqual({
       domain: {
