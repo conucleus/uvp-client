@@ -227,6 +227,96 @@ describe('executor CLI', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('revives an ignored local watcher job back into the queue and refuses other statuses', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-jobs-revive-'));
+    const jobsFile = join(dir, 'jobs.json');
+    const jobId = `0x${'aa'.repeat(32)}`;
+    const otherId = `0x${'cc'.repeat(32)}`;
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (message?: unknown) => {
+      logs.push(String(message));
+    };
+
+    try {
+      const job = (id: string, status: string) => ({
+        id,
+        eventId: `0x${'bb'.repeat(32)}`,
+        orderId: `0x${'11'.repeat(32)}`,
+        hookId: `0x${'22'.repeat(32)}`,
+        stageId: `0x${'33'.repeat(32)}`,
+        stageIdentifier: 'export.customs',
+        hookName: 'START',
+        supplierId: 'logistics-provider-a',
+        status,
+        attempts: 1,
+        maxAttempts: 3,
+        detectedAt: '2026-04-28T00:00:00.000Z',
+        updatedAt: '2026-04-28T00:00:01.000Z',
+        submissions: [],
+        ...(status === 'ignored' ? {
+          lastError: { kind: 'missing_handler', message: 'no state machine handler', retryable: false },
+          raw: {
+            address: '0x0000000000000000000000000000000000000001',
+            topics: [`0x${'dd'.repeat(32)}`, `0x${'ee'.repeat(32)}`],
+            data: `0x${'55'.repeat(32)}${'66'.repeat(32)}`,
+            blockNumber: 12,
+            transactionHash: `0x${'99'.repeat(32)}`,
+            logIndex: 7,
+          },
+        } : {}),
+      });
+      await writeFile(jobsFile, JSON.stringify({
+        version: 1,
+        jobs: [job(jobId, 'ignored'), job(otherId, 'failed')],
+      }));
+
+      await expect(main([
+        'node',
+        'uvp-executor',
+        'jobs',
+        'revive',
+        otherId,
+        '--jobs-file',
+        jobsFile,
+        '--operator',
+        'ops@example.com',
+        '--reason',
+        'not an ignored job',
+      ])).rejects.toThrow(/cannot be revived from status failed/u);
+
+      await main([
+        'node',
+        'uvp-executor',
+        'jobs',
+        'revive',
+        jobId,
+        '--jobs-file',
+        jobsFile,
+        '--operator',
+        'ops@example.com',
+        '--reason',
+        'handler now configured',
+      ]);
+      const revived = JSON.parse(logs[0] ?? '{}') as {
+        job?: { status?: string };
+        rawJob?: { attempts?: number; manualActions?: Array<{ action?: string; operator?: string; reason?: string }>; lastError?: unknown };
+      };
+      expect(revived.job).toMatchObject({ status: 'queued' });
+      expect(revived.rawJob?.status).toBe('detected');
+      expect(revived.rawJob?.attempts).toBe(0);
+      expect(revived.rawJob?.lastError).toBeUndefined();
+      expect(revived.rawJob?.manualActions?.[0]).toMatchObject({
+        action: 'revive',
+        operator: 'ops@example.com',
+        reason: 'handler now configured',
+      });
+    } finally {
+      console.log = originalLog;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it('dead-letters a job stuck behind a live-looking claim only with --force', async () => {
     // pid liveness cannot distinguish a live holder from a crashed one whose
     // pid the OS reused; the CLI must refuse the silent override and expose

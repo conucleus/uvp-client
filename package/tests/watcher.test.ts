@@ -23,6 +23,7 @@ import {
   InMemoryStateMachineJobStore,
   loadStateMachineHandlerConfig,
   retryStateMachineJob,
+  reviveStateMachineJob,
   submitStateMachineSignal,
   SubmitSignalReceiptError,
   stateMachineJobId,
@@ -55,7 +56,7 @@ const ZERO_BYTES32_WORD = `0x${'00'.repeat(32)}` as Hex;
 const KEY_ENV = 'UVP_RECEIPT_TEST_PRIVATE_KEY';
 const TEST_PRIVATE_KEY = `0x${'ab'.repeat(32)}`;
 const STATE_MACHINE_FIXTURE = JSON.parse(
-  readFileSync(new URL('../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.15.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.16.json', import.meta.url), 'utf8'),
 ) as {
   readonly hashes: {
     readonly artifactHash: Hex;
@@ -1551,6 +1552,92 @@ describe('state machine chain watcher', () => {
       expect(deadLetter.status).toBe('dead_letter');
       expect(deadLetter.lastError?.message).toBe('manual review required');
       expect(deadLetter.manualActions?.map((action) => action.action)).toEqual(['retry', 'dead_letter']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('revives an ignored job back into the scan queue (ignored -> detected -> re-run)', async () => {
+    // A-31: `ignored` had no revival channel — a handler set that was missing
+    // at scan time (missing_handler) or a handler-thrown duplicate verdict
+    // froze the job forever. `jobs revive` re-enqueues it as `detected` (the
+    // queue's pending state); the next scan pass re-runs it. Never automatic.
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-state-machine-revive-'));
+    const jobsFile = join(dir, 'jobs.json');
+    try {
+      const store = new FileStateMachineJobStore(jobsFile);
+      const ignoreWatcher = createStateMachineWatcher({
+        rpcUrl: 'http://127.0.0.1:8545',
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        walletAddress: WALLET_ADDRESS,
+        dryRun: true,
+        artifact: artifactIndex(),
+        jobStore: store,
+        now: () => '2026-04-28T00:00:00.000Z',
+        handlers: {},
+      });
+      const ignored = await ignoreWatcher.handleLog(hookReadyLog());
+      expect(ignored.status).toBe('ignored');
+      const jobId = ignored.job?.id;
+      if (!jobId) {
+        throw new Error('expected ignored job id');
+      }
+
+      const revived = await reviveStateMachineJob(store, jobId, {
+        operator: 'ops@example.com',
+        reason: 'handler now configured',
+        now: () => '2026-04-28T00:01:00.000Z',
+      });
+      expect(revived.status).toBe('detected');
+      expect(revived.attempts).toBe(0);
+      expect(revived.lastError).toBeUndefined();
+      expect(revived.manualActions).toEqual([
+        { action: 'revive', operator: 'ops@example.com', at: '2026-04-28T00:01:00.000Z', reason: 'handler now configured' },
+      ]);
+
+      // Only `ignored` is revivable: every other status keeps its own channel.
+      await expect(reviveStateMachineJob(store, jobId, {
+        operator: 'ops@example.com',
+        reason: 'not ignored anymore',
+        now: () => '2026-04-28T00:01:30.000Z',
+      })).rejects.toThrow(/cannot be revived from status detected/u);
+
+      // The re-enqueued job is not a dead channel: the later-scan pass behind
+      // the cursor picks the detected job up and re-runs it.
+      let effects = 0;
+      const runWatcher = createStateMachineWatcher({
+        rpcUrl: 'http://127.0.0.1:8545',
+        stateMachineAddress: STATE_MACHINE,
+        chainId: 31_337,
+        walletAddress: WALLET_ADDRESS,
+        dryRun: true,
+        artifact: artifactIndex(),
+        jobStore: store,
+        fromBlock: 13n,
+        publicClient: {
+          async getChainId() {
+            return 31_337;
+          },
+          async getBlockNumber() {
+            return 20n;
+          },
+          async getLogs() {
+            return [];
+          },
+        },
+        handlers: {
+          '*': (event) => {
+            effects += 1;
+            return [{ orderId: event.orderId, source: 'buyer', signalName: 'cmp' }];
+          },
+        },
+      });
+      await runWatcher.pollOnce();
+      expect(effects).toBe(1);
+      const rerun = await store.get(jobId);
+      expect(rerun?.status).toBe('matched');
+      expect(rerun?.submissions.length).toBe(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -3694,6 +3781,38 @@ describe('state machine chain watcher', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('never preempts a live jobs-lock holder however old the marker reads (pid+age)', async () => {
+    // A-31: the jobs-file lock broke on mtime age alone, so a paused or slow
+    // writer lost its lock after 10s and two read-modify-write cycles could
+    // drop each other's updates. pid+age (the state-dir lock paradigm): an
+    // alive holder is never broken — the contender fails loudly on the lock
+    // timeout instead of stealing the lock. The assertion must outlast the
+    // lock's own 5s deadline, hence the explicit test timeout.
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-jobs-lock-live-'));
+    try {
+      const jobsFile = join(dir, 'jobs.json');
+      const store = new FileStateMachineJobStore(jobsFile);
+      const event = decodeHookReadyLog(hookReadyLog(), artifactIndex())!;
+      const created = await store.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
+
+      // Live holder (this process) whose marker already reads older than the
+      // stale window: age alone must not break it.
+      const lockPath = `${jobsFile}.lock`;
+      await writeFile(lockPath, `${process.pid}\n`);
+      const oneHourAgo = new Date(Date.now() - 3_600_000);
+      await utimes(lockPath, oneHourAgo, oneHourAgo);
+
+      await expect(store.update(created.id, {
+        status: 'dead_letter',
+        updatedAt: '2026-04-28T00:01:00.000Z',
+      })).rejects.toThrow(new RegExp(`holder pid ${process.pid} reads alive`, 'u'));
+      expect((await store.get(created.id))?.status).toBe('detected');
+      expect((await readdir(dir)).filter((name) => name.endsWith('.lock'))).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it('racing breakers of the same stale jobs lock cannot double-hold it (no lost updates)', async () => {
     // rm+wx 式陈旧接管里，同时判陈旧的写者互删对方刚建的新锁而同时持锁，

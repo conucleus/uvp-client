@@ -27,27 +27,46 @@ jobs:
         with:
           path: uvp-executor-kit
 
+      # A-24：姊妹仓检出按 .github/sibling-pins.yaml 钉 sha——ref 缺省会
+      # 随姊妹仓默认分支漂移，同一 uvp-executor-kit SHA 的 CI 结论不可
+      # 复现（同 miniprogram-agent 的 sibling-pins 模式：pin 缺失/为空即
+      # 红，禁止静默回落默认分支）。
+      - name: Resolve sibling pins
+        id: sibling_pins
+        run: |
+          set -euo pipefail
+          protocol_pin="$(sed -n 's/^uvp-protocol: //p' uvp-executor-kit/.github/sibling-pins.yaml)"
+          core_pin="$(sed -n 's/^uvp-core: //p' uvp-executor-kit/.github/sibling-pins.yaml)"
+          if [ -z "${protocol_pin}" ] || [ -z "${core_pin}" ]; then
+            echo "sibling pin missing or empty in uvp-executor-kit/.github/sibling-pins.yaml (uvp-protocol='${protocol_pin}' uvp-core='${core_pin}') — checkout would silently fall back to the default branch" >&2
+            exit 1
+          fi
+          echo "uvp_protocol=${protocol_pin}" >> "$GITHUB_OUTPUT"
+          echo "uvp_core=${core_pin}" >> "$GITHUB_OUTPUT"
+
       # package/package.json 依赖 @uvp-eth/protocol-bindings workspace:*，
       # 本仓 pnpm-workspace.yaml 不含它——独立安装必须以姊妹仓形态供包。
-      # 跨仓私有 checkout 沿用伞仓 CI_SUBMODULE_TOKEN 模式；ref 用默认
-      # 分支，同 uvp-core 仓既有 ci.yml 检出 uvp-protocol 的形态。
+      # 跨仓私有 checkout 沿用伞仓 CI_SUBMODULE_TOKEN 模式；ref 用上方
+      # sibling pin。
       - name: Checkout uvp-protocol (protocol-bindings)
         uses: actions/checkout@v4
         with:
           repository: conucleus/uvp-protocol
           path: uvp-protocol
           fetch-depth: 1
+          ref: ${{ steps.sibling_pins.outputs.uvp_protocol }}
           token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
 
       # error-taxonomy conformance 依赖 uvp-core 姊妹检出（契约表自宿主于
       # uvp-core protocol/，测试按工作区根兄弟路径解析）；检出形态与
-      # uvp-protocol 同款。
+      # uvp-protocol 同款（ref 用 sibling pin）。
       - name: Checkout uvp-core (contract tables)
         uses: actions/checkout@v4
         with:
           repository: conucleus/uvp-core
           path: uvp-core
           fetch-depth: 1
+          ref: ${{ steps.sibling_pins.outputs.uvp_core }}
           token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
 
       # 复现伞仓 workspace 形态：本包 + 跨仓 workspace 依赖包合成一个

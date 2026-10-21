@@ -34,7 +34,7 @@ const TX_HASH: Hex = '0x' + 'ab'.repeat(32);
  */
 
 const TAXONOMY_VERSION = 'uvp.error-taxonomy.v1';
-const TAXONOMY_SHA256 = '27bc628bd350c6cf63742710a075f94edaad3abb61b0c40c2a41b4f1e4047174';
+const TAXONOMY_SHA256 = 'edd7a1ee1e1a1e6899c008f00aeb57da0918cb98bd8982d7469c855610e7ae84';
 
 interface TaxonomyErrorEntry {
   readonly code: string;
@@ -332,10 +332,11 @@ describe('executor-kit classification consistency against the taxonomy', () => {
     for (const [code, retryable] of expectations) {
       expect(attrsForExecutorKit(code).retryable, code).toBe(retryable);
     }
-    // The executor-kit override for nonce_conflict is the deliberate divergence
-    // from the chain-services relayer (duplicate_transaction, non-retryable).
-    expect(entryByCode('nonce_conflict').retryable).toBe(false);
-    expect(attrsForExecutorKit('nonce_conflict').retryable).toBe(true);
+    // nonce_conflict is ruled single-value across producers (A-30): retryable,
+    // never dead-lettered — no producer_overrides lane may reintroduce one.
+    expect(entryByCode('nonce_conflict').retryable).toBe(true);
+    expect(entryByCode('nonce_conflict').dead_letter).toBe(false);
+    expect(entryByCode('nonce_conflict').producer_overrides).toBeUndefined();
   });
 });
 

@@ -152,6 +152,11 @@ export interface JobsDeadLetterOptions extends JobsFileOptions {
   force?: boolean;
 }
 
+export interface JobsReviveOptions extends JobsFileOptions {
+  operator: string;
+  reason: string;
+}
+
 export function productClientOptions(options: ProductClientCliOptions): ProductClientRuntimeOptions {
   const auth = options.authTokenEnv
     ? productApiAuthHeadersFromEnv(options.authTokenEnv)

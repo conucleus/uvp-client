@@ -81,6 +81,11 @@ export {
 } from './jobs/deadletter.js';
 
 export {
+  reviveStateMachineJob,
+  type StateMachineJobReviveOptions,
+} from './jobs/revive.js';
+
+export {
   stateMachineJobId,
   type StateMachineJobManualAction,
   type StateMachineJobPatch,

@@ -80,7 +80,8 @@ export interface StateMachineWatcherJob {
 }
 
 export interface StateMachineJobManualAction {
-  readonly action: 'retry' | 'dead_letter';
+  /** Operator channel: retry re-runs, dead_letter archives, revive re-enqueues an ignored job. */
+  readonly action: 'retry' | 'dead_letter' | 'revive';
   readonly operator: string;
   readonly at: string;
   readonly reason?: string;

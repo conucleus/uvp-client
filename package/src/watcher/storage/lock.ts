@@ -6,11 +6,13 @@ import { delay, isNodeError, isProcessAlive } from '../internal.js';
 
 /**
  * Cross-process exclusion for the jobs-file read-modify-write cycle. The whole
- * file is the store, so two processes (or two concurrent CLI invocations, e.g.
+ * file is the store, so two processes (or two concurrent CLI invocations, e.g
  * `jobs retry` against a running watcher) reading the same base and writing
  * their own view would silently drop each other's updates — including
  * broadcasts the audit trail would then lack. The lock is an O_EXCL marker file
- * broken by age (a crashed holder must not block the store forever).
+ * broken by pid+age (same paradigm as the state-dir lock below): a live holder
+ * is never preempted however slow it is; only a dead holder (crashed) or an
+ * unattributable marker aged past the stale window is taken over.
  */
 const LOCK_MARKER_STALE_MS = 10_000;
 const JOBS_FILE_LOCK_POLL_MS = 25;
@@ -238,15 +240,28 @@ export async function withJobsFileLock<T>(filePath: string, operation: () => Pro
   // before the lock marker can be created beside it.
   await mkdir(dirname(filePath), { recursive: true });
   const deadline = Date.now() + JOBS_FILE_LOCK_TIMEOUT_MS;
+  let holderPid: number | undefined;
+  let holderReadsAlive = false;
   const release = await acquireLockMarker(
     lockPath,
-    (observed) => (Date.now() - observed.mtimeMs > LOCK_MARKER_STALE_MS
-      ? { kind: 'break' }
-      : { kind: 'wait' }),
+    (observed) => {
+      holderPid = observed.pid;
+      holderReadsAlive = observed.pid !== undefined && isProcessAlive(observed.pid);
+      // pid+age（state-dir 锁同范式）：活写者不夺——暂停/慢盘超过陈旧阈值
+      // 也不破锁；pid 已死即崩溃残留，立即接管；无 pid 可读退回按年龄判
+      // 陈旧。等不到就由超时路径响亮失败。
+      if (holderReadsAlive) {
+        return { kind: 'wait' };
+      }
+      const stale = observed.pid !== undefined || Date.now() - observed.mtimeMs > LOCK_MARKER_STALE_MS;
+      return stale ? { kind: 'break' } : { kind: 'wait' };
+    },
     async () => {
       if (Date.now() >= deadline) {
         throw new ExecutorKitError(
-          `timed out acquiring the jobs file lock ${lockPath}: another process holds it; concurrent writers must serialize on one jobs file`,
+          `timed out acquiring the jobs file lock ${lockPath}: another process holds it`
+            + (holderPid !== undefined ? ` (holder pid ${holderPid}${holderReadsAlive ? ' reads alive' : ''})` : '')
+            + '; a live writer is never preempted — wait for it to finish or stop that process',
         );
       }
       await delay(JOBS_FILE_LOCK_POLL_MS);

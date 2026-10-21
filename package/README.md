@@ -62,6 +62,7 @@ package/src/
 │   ├── jobs/claim.ts          # 任务级运行认领（isHeldRunClaim、结论性写入释放）
 │   ├── jobs/retry.ts          # 手工重试、重试/重发回退配置
 │   ├── jobs/deadletter.ts     # 手工 dead-letter
+│   ├── jobs/revive.ts         # 手工复活（ignored → 重新入队 detected）
 │   ├── storage/memory.ts      # 内存 job store
 │   ├── storage/file.ts        # jobs.json 持久化（原子写、损坏隔离、复活）
 │   ├── storage/cursor.ts      # cursor.json 持久化与身份校验
@@ -369,6 +370,11 @@ uvp-executor jobs dead-letter <jobId> \
   --operator ops@example.com \
   --reason "holder pid verified reused; executor crashed" \
   --force
+# Revive an ignored job back into the scan queue (the next scan re-runs it):
+uvp-executor jobs revive <jobId> \
+  --jobs-file .uvp-executor-jobs.json \
+  --operator ops@example.com \
+  --reason "handler now configured"
 ```
 
 Watcher job semantics:
@@ -432,6 +438,14 @@ Watcher job semantics:
   chain (the contract's `SignalAlreadyExists` dedupe on
   `(planId, orderId, sourceId, signalId)` absorbs the duplicate when the
   signal actually survived).
+- `ignored` has a manual revival channel: `jobs revive <jobId> --operator
+  <id> --reason <why>` re-enqueues an ignored job as `detected` (the queue's
+  pending state) with a fresh attempt budget, and the next scan — or an
+  immediate `jobs retry` — re-runs it. This is the recovery path when the
+  ignore verdict turns out wrong (a `missing_handler` whose handler is now
+  configured, a handler-thrown duplicate verdict the operator disputes, or an
+  isolated undecodable log). Revival is manual only: scans never re-open an
+  ignored job by themselves. `dead_letter` stays a one-way archive.
 - `dead_letter` is a one-way archive with no revival channel: `jobs retry`
   refuses it, and a later scan that re-encounters the same HookReady log
   answers from the existing terminal record instead of re-opening it
@@ -528,7 +542,7 @@ order-level authorization, participant wallet signatures, and contract checks.
 
 `createStateMachineWatcher` uses the fixed `UVPStateMachine v0.15` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.15.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.16.json`:
 
 - `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId, bytes32 hookName)`;
 - `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution)`.

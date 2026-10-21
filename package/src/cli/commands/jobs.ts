@@ -6,6 +6,7 @@ import {
   FileStateMachineJobStore,
   deadLetterStateMachineJob,
   retryStateMachineJob,
+  reviveStateMachineJob,
 } from '../../watcher/index.js';
 import { executionOutcomeFailed, stateMachineJobToExecutorJobDTO } from '../output.js';
 import { buildStateMachineWatcherFromCli, EXECUTOR_RUNTIME_ENV } from '../watcher.js';
@@ -14,6 +15,7 @@ import type {
   JobsFileOptions,
   JobsListOptions,
   JobsRetryOptions,
+  JobsReviveOptions,
 } from '../options.js';
 
 /** jobs 命令分发（本地 watcher 任务查询与运维）。 */
@@ -113,6 +115,21 @@ export function registerJobsCommands(program: Command): void {
         operator: options.operator,
         reason: options.reason,
         ...(options.force ? { force: true } : {}),
+      });
+      console.log(stringifyForTransport({ job: stateMachineJobToExecutorJobDTO(job), rawJob: job }));
+    });
+
+  jobs
+    .command('revive <jobId>')
+    .description('revive an ignored state-machine watcher job: re-enqueue it as detected so the next scan (or jobs retry) re-runs it')
+    .requiredOption('--jobs-file <path>', 'state-machine watcher jobs JSON file')
+    .requiredOption('--operator <id>', 'operator id recorded in the job audit trail')
+    .requiredOption('--reason <text>', 'revive reason recorded in the job audit trail')
+    .action(async (jobId: string, options: JobsReviveOptions) => {
+      const store = new FileStateMachineJobStore(options.jobsFile);
+      const job = await reviveStateMachineJob(store, jobId, {
+        operator: options.operator,
+        reason: options.reason,
       });
       console.log(stringifyForTransport({ job: stateMachineJobToExecutorJobDTO(job), rawJob: job }));
     });
