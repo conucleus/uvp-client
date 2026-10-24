@@ -503,7 +503,7 @@ describe('watcher 任务级运行认领', () => {
 
   async function hookReadyLog(): Promise<Parameters<ReturnType<typeof createStateMachineWatcher>['handleLog']>[0]> {
     const fixture = JSON.parse(await readFile(
-      join(packageDir, '../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.16.json'),
+      join(packageDir, '../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.17.json'),
       'utf8',
     )) as { events: { HookReady: { topic: string } } };
     return {

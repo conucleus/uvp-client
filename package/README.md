@@ -542,7 +542,7 @@ order-level authorization, participant wallet signatures, and contract checks.
 
 `createStateMachineWatcher` uses the fixed `UVPStateMachine v0.15` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.16.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.17.json`:
 
 - `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId, bytes32 hookName)`;
 - `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution)`.
