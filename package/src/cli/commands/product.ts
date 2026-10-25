@@ -82,7 +82,7 @@ export function registerProductCommands(program: Command): void {
     .description('prepare a Product API task submission')
     .requiredOption('--chain-services-url <url>', 'chain-services Product API base URL')
     .requiredOption('--wallet-address <address>', 'participant wallet address')
-    .requiredOption('--intent <intent>', 'submit intent: confirm_stage, reject_stage, raise_dispute, or resolve_dispute')
+    .requiredOption('--intent <intent>', 'submit intent: confirm_stage or reject_stage')
     .option('--evidence-id <id>', 'evidence id to include; repeat for multiple evidence records', collectRepeatedOption, [])
     .option('--prepared-file <path>', 'write the full prepared Product API response for later local signing')
     .option('--principal-id <id>', 'optional Product API principal id header')

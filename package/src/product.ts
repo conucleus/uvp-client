@@ -994,10 +994,10 @@ function requireLiteral<T extends string>(value: unknown, expected: T, label: st
 
 function normalizeIntent(value: string): ProductSubmitIntent {
   const intent = requiredText(value, 'intent');
-  if (intent === 'confirm_stage' || intent === 'reject_stage' || intent === 'raise_dispute' || intent === 'resolve_dispute') {
+  if (intent === 'confirm_stage' || intent === 'reject_stage') {
     return intent;
   }
-  throw new ValidationError('intent must be confirm_stage, reject_stage, raise_dispute, or resolve_dispute');
+  throw new ValidationError('intent must be confirm_stage or reject_stage');
 }
 
 function normalizeSignature(value: string): Hex {
