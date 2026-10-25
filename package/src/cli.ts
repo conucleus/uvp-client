@@ -28,7 +28,7 @@ export function buildProgram(): Command {
 
   program
     .name('uvp-executor')
-    .description('UVP EVM checker, executor, and adjudicator CLI')
+    .description('UVP EVM executor CLI')
     .version('0.1.0');
 
   registerWalletCommands(program);

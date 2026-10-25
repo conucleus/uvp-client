@@ -20,7 +20,8 @@ import {
   ValidationError,
 } from './validation.js';
 
-export type ProductSubmitIntent = 'confirm_stage' | 'reject_stage' | 'raise_dispute' | 'resolve_dispute';
+import type { ProductSubmitIntent } from '@uvp-eth/product-dto';
+export type { ProductSubmitIntent };
 
 const ZERO_BYTES32 = `0x${'0'.repeat(64)}` as const;
 

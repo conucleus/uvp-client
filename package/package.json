@@ -2,7 +2,7 @@
   "name": "@uvp-eth/executor-kit",
   "version": "0.1.0",
   "private": true,
-  "description": "CLI and SDK for UVP EVM executors, executors, and adjudicators.",
+  "description": "CLI and SDK for UVP EVM executors.",
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
@@ -31,7 +31,8 @@
   "dependencies": {
     "@uvp-eth/protocol-bindings": "workspace:*",
     "commander": "^12.1.0",
-    "viem": "^2.21.58"
+    "viem": "^2.21.58",
+    "@uvp-eth/product-dto": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

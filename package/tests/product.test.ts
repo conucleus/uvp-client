@@ -45,7 +45,7 @@ describe('Product API mode', () => {
             {
               taskId: 'task_1',
               orderId: 'order_1',
-              title: 'Confirm customs release',
+              title: 'Confirm stage release',
               status: 'open',
               sourceId: bytes32('02'),
               signalId: bytes32('03'),
@@ -65,7 +65,7 @@ describe('Product API mode', () => {
     expect(tasks[0]).toMatchObject({
       taskId: 'task_1',
       orderId: 'order_1',
-      title: 'Confirm customs release',
+      title: 'Confirm stage release',
       status: 'open',
     });
     expect(calls[0]?.url).toBe(`http://chain.local/api/product/tasks?assignee=${submitter}`);
@@ -346,7 +346,7 @@ describe('Product API mode', () => {
           status: 'open',
           sourceId: bytes32('02'),
           signalId: bytes32('03'),
-          stageIdentifier: 'export.customs',
+          stageIdentifier: 'stage-a',
         },
       ],
     })) as unknown as typeof globalThis.fetch;
@@ -463,7 +463,7 @@ describe('Product API mode', () => {
       blockNumber: '123',
       sourceId: bytes32('02'),
       signalId: bytes32('03'),
-      stageIdentifier: 'export.customs',
+      stageIdentifier: 'stage-a',
       proofRows: [{ label: 'Transaction', value: bytes32('44') }],
     })) as unknown as typeof globalThis.fetch;
 
@@ -528,7 +528,7 @@ describe('Product API mode', () => {
       blockNumber: '456',
       sourceId: sourceIdHex,
       signalId: bytes32('03'),
-      stageIdentifier: 'export.customs',
+      stageIdentifier: 'stage-a',
       proofRows: [{ label: 'Transaction', value: bytes32('55') }],
     })) as unknown as typeof globalThis.fetch;
 
@@ -548,7 +548,7 @@ describe('Product API mode', () => {
       expect(parsed.submission?.submissionId).toBe('sub_verb');
       expect(parsed.submission?.sourceId).toBe(sourceIdHex);
       expect(parsed.submission?.signalId).toBe(bytes32('03'));
-      expect(parsed.submission?.stageIdentifier).toBe('export.customs');
+      expect(parsed.submission?.stageIdentifier).toBe('stage-a');
       expect(output).toContain(fakeSignature);
     } finally {
       console.log = originalLog;
@@ -848,7 +848,7 @@ function preparedSubmission(options: { readonly submitter?: Address } = {}): Pre
     taskId: 'task_1',
     orderId: 'order_1',
     onchainOrderId: orderId,
-    stageIdentifier: 'export.customs',
+    stageIdentifier: 'stage-a',
     signalName: 'confirm_stage',
     sourceId,
     signalId,
@@ -864,8 +864,8 @@ function preparedSubmission(options: { readonly submitter?: Address } = {}): Pre
     humanSummary: {
       purpose: 'Submit task evidence',
       orderId: 'order_1',
-      taskTitle: 'Confirm customs release',
-      stage: 'Customs release',
+      taskTitle: 'Confirm stage release',
+      stage: 'Stage A release',
       action: 'Confirm stage',
       payloadHash,
       payloadRef: 'ipfs://payload',

@@ -80,8 +80,8 @@ describe('executor CLI', () => {
 
     try {
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
-        executorId: 'logistics-provider-a',
+        supplierId: 'role-a',
+        executorId: 'role-a',
         walletAddress: '0x0000000000000000000000000000000000000002',
         chainId: 84532,
         stateMachineAddress: '0x0000000000000000000000000000000000000001',
@@ -89,11 +89,11 @@ describe('executor CLI', () => {
         dryRun: true,
         authTokenRef: 'UVP_EXECUTOR_TOKEN',
         handlers: {
-          'export.customs#START': {
+          'stage-a#START': {
             signals: [
               {
-                source: 'logistics-provider-a',
-                stageIdentifier: 'export.customs',
+                source: 'role-a',
+                stageIdentifier: 'stage-a',
                 signalName: 'cmp',
               },
             ],
@@ -128,7 +128,7 @@ describe('executor CLI', () => {
         handlerCount: 1,
         signalCount: 1,
         supplier: {
-          supplierId: 'logistics-provider-a',
+          supplierId: 'role-a',
         },
         wallet: {
           configured: true,
@@ -136,8 +136,8 @@ describe('executor CLI', () => {
         },
       });
       expect(output.config?.stageCapabilities?.[0]).toMatchObject({
-        key: 'export.customs#START',
-        stageIdentifiers: ['export.customs'],
+        key: 'stage-a#START',
+        stageIdentifiers: ['stage-a'],
         signalCount: 1,
       });
     } finally {
@@ -166,9 +166,9 @@ describe('executor CLI', () => {
             orderId: `0x${'11'.repeat(32)}`,
             hookId: `0x${'22'.repeat(32)}`,
             stageId: `0x${'33'.repeat(32)}`,
-            stageIdentifier: 'export.customs',
+            stageIdentifier: 'stage-a',
             hookName: 'START',
-            supplierId: 'logistics-provider-a',
+            supplierId: 'role-a',
             status: 'failed',
             attempts: 1,
             maxAttempts: 3,
@@ -191,7 +191,7 @@ describe('executor CLI', () => {
       expect(listed.jobs?.[0]).toMatchObject({
         jobId,
         status: 'failed',
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
       });
 
       await main([
@@ -246,9 +246,9 @@ describe('executor CLI', () => {
         orderId: `0x${'11'.repeat(32)}`,
         hookId: `0x${'22'.repeat(32)}`,
         stageId: `0x${'33'.repeat(32)}`,
-        stageIdentifier: 'export.customs',
+        stageIdentifier: 'stage-a',
         hookName: 'START',
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         status,
         attempts: 1,
         maxAttempts: 3,
@@ -343,7 +343,7 @@ describe('executor CLI', () => {
             stageId: RETRY_STAGE_ID,
             stageIdentifier: 'exec.main',
             hookName: 'START',
-            supplierId: 'logistics-provider-a',
+            supplierId: 'role-a',
             status: 'matched',
             attempts: 0,
             maxAttempts: 3,
@@ -549,7 +549,7 @@ describe('honest execution exit codes', () => {
         }],
       }));
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -623,7 +623,7 @@ describe('honest execution exit codes', () => {
       // No handler matches exec.main#START: the outcome carries an error and
       // the job is ignored — the process must not pretend this succeeded.
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -719,7 +719,7 @@ describe('honest execution exit codes', () => {
         }],
       }));
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -798,7 +798,7 @@ describe('honest execution exit codes', () => {
         }],
       }));
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -913,7 +913,7 @@ describe('watcher state storage', () => {
 
     try {
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -1032,7 +1032,7 @@ describe('watcher state storage', () => {
 
     try {
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -1100,7 +1100,7 @@ describe('watcher state storage', () => {
 
     try {
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -1189,7 +1189,7 @@ describe('watcher state storage', () => {
     const stub = await startChainStub();
     try {
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
         chainId: 31_337,
         stateMachineAddress: RETRY_STATE_MACHINE,
@@ -1424,7 +1424,7 @@ function preparedProductResponse() {
     taskId: 'task_1',
     orderId: 'order_1',
     onchainOrderId: productBytes32('01'),
-    stageIdentifier: 'export.customs',
+    stageIdentifier: 'stage-a',
     signalName: 'confirm_stage',
     sourceId,
     signalId,
@@ -1440,8 +1440,8 @@ function preparedProductResponse() {
     humanSummary: {
       purpose: 'Submit task evidence',
       orderId: 'order_1',
-      taskTitle: 'Confirm customs release',
-      stage: 'Customs release',
+      taskTitle: 'Confirm stage release',
+      stage: 'Stage A release',
       action: 'Confirm stage',
       payloadHash,
       payloadRef: 'ipfs://payload',

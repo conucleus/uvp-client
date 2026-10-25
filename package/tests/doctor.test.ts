@@ -58,7 +58,7 @@ describe('Product API doctor', () => {
           {
             taskId: 'task_1',
             orderId: 'order_1',
-            title: 'Confirm customs release',
+            title: 'Confirm stage release',
             status: 'open',
           },
           {
@@ -83,7 +83,7 @@ describe('Product API doctor', () => {
     expect(taskCheck?.detail).toContain('2 task(s)');
     expect(report.walletAddress).toBe(submitter);
     expect(report.tasks).toHaveLength(2);
-    expect(report.tasks?.[0]).toMatchObject({ taskId: 'task_1', title: 'Confirm customs release' });
+    expect(report.tasks?.[0]).toMatchObject({ taskId: 'task_1', title: 'Confirm stage release' });
     expect(report.ok).toBe(true);
     // normal output strips raw fields
     expect(report.rawTasks).toBeUndefined();
@@ -160,7 +160,7 @@ describe('Product API doctor', () => {
             {
               taskId: 'task_1',
               orderId: 'order_1',
-              title: 'Confirm customs release',
+              title: 'Confirm stage release',
               status: 'open',
               sourceId: sourceIdHex,
               signalId: signalIdHex,
@@ -323,10 +323,10 @@ describe('Product API doctor', () => {
         task: {
           taskId: 'task_actionable',
           orderId: 'order_1',
-          title: 'Confirm customs release',
+          title: 'Confirm stage release',
           status: 'open',
           assigneeWallet: submitter,
-          stageName: 'Customs release',
+          stageName: 'Stage A release',
           deadline: '2099-01-01T00:00:00.000Z',
           canSubmit: true,
           primaryActionLabel: 'Confirm stage',
@@ -760,7 +760,7 @@ describe('doctor CLI', () => {
           title: 'CLI task',
           status: 'open',
           assigneeWallet: submitter,
-          stageName: 'Customs release',
+          stageName: 'Stage A release',
           deadline: '2099-01-01T00:00:00.000Z',
           canSubmit: true,
           primaryActionLabel: 'Confirm stage',
@@ -881,7 +881,7 @@ describe('doctor CLI', () => {
           {
             taskId: 'task_1',
             orderId: 'order_1',
-            title: 'Confirm customs release',
+            title: 'Confirm stage release',
             status: 'open',
             sourceId: bytes32('02'),
             signalId: bytes32('03'),
@@ -945,7 +945,7 @@ describe('doctor CLI', () => {
             {
               taskId: 'task_1',
               orderId: 'order_1',
-              title: 'Confirm customs release',
+              title: 'Confirm stage release',
               status: 'open',
               sourceId: sourceIdHex,
               signalId: bytes32('03'),

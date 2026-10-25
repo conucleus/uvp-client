@@ -1490,7 +1490,7 @@ describe('state machine chain watcher', () => {
         rpcUrl: 'http://127.0.0.1:8545',
         stateMachineAddress: STATE_MACHINE,
         chainId: 31_337,
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: WALLET_ADDRESS,
         dryRun: true,
         artifact: artifactIndex(),
@@ -1534,9 +1534,9 @@ describe('state machine chain watcher', () => {
           reason: 'pushing past the attempt budget',
         },
       ]);
-      expect(summarizeSupplierOps({ supplierId: 'logistics-provider-a', walletAddress: WALLET_ADDRESS }, [persistedAfterOverLimit!]))
+      expect(summarizeSupplierOps({ supplierId: 'role-a', walletAddress: WALLET_ADDRESS }, [persistedAfterOverLimit!]))
         .toMatchObject({
-          supplierId: 'logistics-provider-a',
+          supplierId: 'role-a',
           activeJobs: 0,
           failedJobs: 1,
         confirmedSignals: 0,
@@ -4185,8 +4185,8 @@ describe('state machine executor config', () => {
     const configPath = join(dir, 'executor.json');
     try {
       await writeFile(configPath, JSON.stringify({
-        supplierId: 'logistics-provider-a',
-        executorId: 'logistics-provider-a',
+        supplierId: 'role-a',
+        executorId: 'role-a',
         walletAddress: WALLET_ADDRESS,
         chainId: 84_532,
         stateMachineAddress: STATE_MACHINE,
@@ -4195,7 +4195,7 @@ describe('state machine executor config', () => {
           { stateMachineAddress: STATE_MACHINE_V2, deploymentId: `0x${'02'.repeat(32)}`, status: 'active' },
         ],
         chainServicesUrl: 'http://127.0.0.1:3001',
-        stages: ['export.customs'],
+        stages: ['stage-a'],
         callbackMode: 'auto',
         dryRun: true,
         authTokenRef: 'UVP_EXECUTOR_TOKEN',
@@ -4204,11 +4204,11 @@ describe('state machine executor config', () => {
           baseDelayMs: 0,
         },
         handlers: {
-          'export.customs#START': {
+          'stage-a#START': {
             signals: [
               {
-                source: 'logistics-provider-a',
-                stageIdentifier: 'export.customs',
+                source: 'role-a',
+                stageIdentifier: 'stage-a',
                 signalName: 'cmp',
               },
             ],
@@ -4219,8 +4219,8 @@ describe('state machine executor config', () => {
       const config = await loadStateMachineHandlerConfig(configPath);
 
       expect(config).toMatchObject({
-        supplierId: 'logistics-provider-a',
-        executorId: 'logistics-provider-a',
+        supplierId: 'role-a',
+        executorId: 'role-a',
         walletAddress: WALLET_ADDRESS,
         chainId: 84_532,
         stateMachineAddress: STATE_MACHINE,
@@ -4236,13 +4236,13 @@ describe('state machine executor config', () => {
           baseDelayMs: 0,
         },
       });
-      expect(config.handlers['export.customs#START']?.signals[0]).toMatchObject({
-        source: 'logistics-provider-a',
-        stageIdentifier: 'export.customs',
+      expect(config.handlers['stage-a#START']?.signals[0]).toMatchObject({
+        source: 'role-a',
+        stageIdentifier: 'stage-a',
         signalName: 'cmp',
       });
       expect(stateMachineHandlerConfigToExecutorConfigDTO(config)).toMatchObject({
-        supplierId: 'logistics-provider-a',
+        supplierId: 'role-a',
         walletAddress: WALLET_ADDRESS,
         chainId: 84_532,
         stateMachineAddress: STATE_MACHINE,
@@ -4251,8 +4251,8 @@ describe('state machine executor config', () => {
           { stateMachineAddress: STATE_MACHINE_V2, deploymentId: `0x${'02'.repeat(32)}`, status: 'active' },
         ],
         chainServicesUrl: 'http://127.0.0.1:3001',
-        stages: ['export.customs'],
-        signals: ['export.customs.cmp'],
+        stages: ['stage-a'],
+        signals: ['stage-a.cmp'],
         callbackMode: 'auto',
         dryRun: true,
         authTokenRef: 'UVP_EXECUTOR_TOKEN',
@@ -4268,10 +4268,10 @@ describe('state machine executor config', () => {
     try {
       await writeFile(configPath, JSON.stringify({
         handlers: {
-          'export.customs#START': {
+          'stage-a#START': {
             signals: [
               {
-                source: 'logistics-provider-a',
+                source: 'role-a',
                 signalName: 'cmp',
               },
             ],
