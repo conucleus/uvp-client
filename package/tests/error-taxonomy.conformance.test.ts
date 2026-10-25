@@ -16,23 +16,6 @@ import type { Hex } from '../src/constants.js';
 
 const TX_HASH: Hex = '0x' + 'ab'.repeat(32);
 
-/**
- * Conformance suite for the unified UVP error taxonomy
- * (self-hosted in the uvp-core repo under protocol/uvp-error-taxonomy.v1.json).
- *
- * errors.ts keeps its handwritten tables (the published package must not gain a
- * runtime file dependency outside its own repo), but this suite pins the
- * taxonomy version + sha256 and enforces, in both directions:
- *   1. completeness — every error kind/status the kit can produce appears in
- *      the taxonomy (mirrored closed sets + behavioral probes);
- *   2. consistency — for every taxonomy entry produced by executor-kit, the
- *      classifier's verdict matches the taxonomy attributes field by field
- *      (base attributes merged with the executor-kit producer_overrides).
- *
- * Any edit to the taxonomy table or to errors.ts classification semantics must
- * update both sides in the same change or these tests fail loudly.
- */
-
 const TAXONOMY_VERSION = 'uvp.error-taxonomy.v1';
 const TAXONOMY_SHA256 = 'edd7a1ee1e1a1e6899c008f00aeb57da0918cb98bd8982d7469c855610e7ae84';
 
@@ -58,7 +41,6 @@ function taxonomyPath(): string {
   if (override) {
     return override;
   }
-  // tests/ -> package -> uvp-executor-kit -> uvp-eth (workspace root)
   const workspaceRoot = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
   return join(workspaceRoot, 'uvp-core', 'protocol', 'uvp-error-taxonomy.v1.json');
 }
@@ -93,7 +75,6 @@ function entryByCode(code: string): TaxonomyErrorEntry {
   return entry;
 }
 
-/** Base attributes merged with the executor-kit producer_overrides patch. */
 function attrsForExecutorKit(code: string): TaxonomyErrorEntry & Record<string, unknown> {
   const entry = entryByCode(code);
   if (!entry.producers.includes('executor-kit')) {
@@ -102,7 +83,6 @@ function attrsForExecutorKit(code: string): TaxonomyErrorEntry & Record<string, 
   return { ...entry, ...(entry.producer_overrides?.['executor-kit'] ?? {}) };
 }
 
-/** Mirrored closed set of ExecutorKitErrorKind, mapped onto taxonomy codes. */
 const KIND_TO_TAXONOMY_CODE: Readonly<Record<ExecutorKitErrorKind, string>> = {
   unauthorized: 'unauthorized',
   duplicate_signal: 'duplicate_signal',
@@ -115,7 +95,6 @@ const KIND_TO_TAXONOMY_CODE: Readonly<Record<ExecutorKitErrorKind, string>> = {
   unknown: 'unknown_unclassified',
 };
 
-/** Probe that drives the classifier into each reachable kind. */
 const KIND_PROBES: Readonly<Record<ExecutorKitErrorKind, () => { readonly kind: ExecutorKitErrorKind; readonly retryable: boolean }>> = {
   unauthorized: () => classifyExecutorKitError(new CodedExecutorKitError('UNAUTHORIZED', 'AccessControlUnauthorizedAccount')),
   duplicate_signal: () => classifyExecutorKitError(new Error('execution reverted: SignalAlreadyExists()')),
@@ -130,8 +109,6 @@ const KIND_PROBES: Readonly<Record<ExecutorKitErrorKind, () => { readonly kind: 
 
 describe('uvp error taxonomy pinning (executor-kit)', () => {
   it('pins the taxonomy version and sha256', () => {
-    // Covered inside loadTaxonomy(); this explicit test makes a drift read as
-    // a named failure rather than a setup error.
     expect(taxonomy.version).toBe(TAXONOMY_VERSION);
     const digest = createHash('sha256').update(readFileSync(taxonomyPath(), 'utf8')).digest('hex');
     expect(digest).toBe(TAXONOMY_SHA256);
@@ -142,10 +119,9 @@ describe('executor-kit classification completeness against the taxonomy', () => 
   it('maps every ExecutorKitErrorKind onto an existing taxonomy entry produced by executor-kit', () => {
     for (const [kind, code] of Object.entries(KIND_TO_TAXONOMY_CODE)) {
       const attrs = attrsForExecutorKit(code);
-      expect(attrs.retryable, `${kind} -> ${code}.retryable`).toBe(attrs.retryable); // entry exists and is readable
+      expect(attrs.retryable, `${kind} -> ${code}.retryable`).toBe(attrs.retryable);
       expect(typeof attrs.dead_letter, `${kind} -> ${code}.dead_letter`).toBe('boolean');
     }
-    // The mirrored kind set must stay exhaustive: 9 kinds today.
     expect(Object.keys(KIND_TO_TAXONOMY_CODE)).toHaveLength(9);
   });
 
@@ -161,10 +137,6 @@ describe('executor-kit classification completeness against the taxonomy', () => 
 
   it('covers every taxonomy entry that lists executor-kit as a producer', () => {
     const producedCodes = new Set(Object.values(KIND_TO_TAXONOMY_CODE));
-    // Conditions without a dedicated kind in executor-kit: a reverted receipt
-    // surfaces as SubmitSignalReceiptError and is classified through the
-    // conservative fallback; a receipt-wait transport failure is classified
-    // through its cause chain (e.g. rpc_network). Both are probed below.
     const fallbackCoveredCodes = new Set(['transaction_reverted', 'transaction_receipt_unknown']);
     const taxonomyExecutorKitCodes = taxonomy.errors
       .filter((entry) => entry.producers.includes('executor-kit'))
@@ -180,11 +152,8 @@ describe('executor-kit classification completeness against the taxonomy', () => 
     const classified = classifyExecutorKitError(
       new SubmitSignalReceiptError(TX_HASH, 'submitSignal transaction receipt status reverted'),
     );
-    // No dedicated kind: the revert fact rides the conservative fallback.
     expect(classified.kind).toBe('unknown');
     expect(classified.retryable).toBe(attrs.retryable);
-    // Lane derived from the classification must match the taxonomy dead_letter
-    // attribute (jobStatusForError semantics: non-retryable, non-benign -> dead_letter).
     const lane = classified.retryable ? 'failed' : 'dead_letter';
     expect(lane).toBe(attrs.dead_letter ? 'dead_letter' : 'failed');
   });
@@ -202,12 +171,6 @@ describe('executor-kit classification completeness against the taxonomy', () => 
   });
 
   it('keeps tx hashes the error itself carries while redacting secret-shaped hex echoes', () => {
-    // 0x+64-hex is both the tx-hash and the raw-private-key shape, so shape
-    // alone cannot spare one and redact the other. The exemption key is
-    // provenance: a txHash the error object carries as a typed property stays
-    // readable for correlation; every other 0x-prefixed or bare hex segment
-    // of 64+ digits in third-party error text (including 0x-prefixed key
-    // echoes) is cut in its entirety.
     const receiptError = classifyExecutorKitError(new SubmitSignalReceiptError(
       TX_HASH,
       `submitSignal transaction receipt wait failed for ${TX_HASH}: Request timed out.`,
@@ -228,9 +191,6 @@ describe('executor-kit classification completeness against the taxonomy', () => 
   });
 
   it('redacts hex runs of 64+ digits as a whole segment, including longer runs without word boundaries', () => {
-    // Inside a longer contiguous hex segment there is no word boundary for a
-    // length-anchored pattern, so an exactly-64 slice of it leaked the rest;
-    // the whole segment is the redaction unit now.
     const longPrefixed = `0x${'ab'.repeat(64)}`;
     const prefixed = classifyExecutorKitError(new Error(`provider dump: ${longPrefixed}`));
     expect(prefixed.message).not.toContain(longPrefixed.slice(2, 2 + 64));
@@ -242,13 +202,10 @@ describe('executor-kit classification completeness against the taxonomy', () => 
     expect(bare.message).not.toContain(longBare);
     expect(bare.message).toContain('[redacted-hex]');
 
-    // Under the 64-digit threshold nothing is secret-32-byte-shaped: kept.
     const shortEcho = `0x${'ab'.repeat(31)}`;
     const short = classifyExecutorKitError(new Error(`bad value ${shortEcho} rejected`));
     expect(short.message).toContain(shortEcho);
 
-    // A txHash riding in a longer run loses the exemption: it is no longer
-    // exactly the carried hash, so the whole segment falls with it.
     const embedded = classifyExecutorKitError(new SubmitSignalReceiptError(
       TX_HASH,
       `dump ${TX_HASH}ff more`,
@@ -258,9 +215,6 @@ describe('executor-kit classification completeness against the taxonomy', () => 
   });
 
   it('keeps public ids readable in the kit\'s own ValidationError texts', () => {
-    // The kit authors ValidationError messages and echoes public identifiers
-    // (job ids, bytes32 fields) the operator must read; over-redacting them
-    // hid exactly the value needed to act on the error.
     const jobId = `0x${'aa'.repeat(32)}`;
     const classified = classifyExecutorKitError(new ValidationError(`job ${jobId} not found`));
     expect(classified.kind).toBe('validation_failure');
@@ -269,11 +223,6 @@ describe('executor-kit classification completeness against the taxonomy', () => 
   });
 
   it('pins the state-machine job status lanes that consume the classification', () => {
-    // jobStatusForError semantics (watcher.ts): benign kinds -> `ignored`,
-    // retryable -> `failed`, non-retryable -> `dead_letter`. Pinned here via
-    // the taxonomy lane attributes; the behavior itself is exercised by
-    // watcher.test.ts. isRetriableStateMachineJobStatus accepts exactly
-    // failed/matched/submitted — the retryable lane plus the two open lanes.
     const retriableJobStatuses = ['failed', 'matched', 'submitted'] as const;
     expect(retriableJobStatuses).toHaveLength(3);
     const benignCodes = taxonomy.errors
@@ -309,7 +258,6 @@ describe('executor-kit classification consistency against the taxonomy', () => {
       const attrs = attrsForExecutorKit(testCase.code);
       const classified = testCase.run();
       expect(classified.retryable).toBe(attrs.retryable);
-      // The observed kind must be one of the kinds mapped onto this taxonomy code.
       const kindsForCode = Object.entries(KIND_TO_TAXONOMY_CODE)
         .filter(([, entryCode]) => entryCode === testCase.code)
         .map(([kind]) => kind);
@@ -332,8 +280,6 @@ describe('executor-kit classification consistency against the taxonomy', () => {
     for (const [code, retryable] of expectations) {
       expect(attrsForExecutorKit(code).retryable, code).toBe(retryable);
     }
-    // nonce_conflict is ruled single-value across producers (A-30): retryable,
-    // never dead-lettered — no producer_overrides lane may reintroduce one.
     expect(entryByCode('nonce_conflict').retryable).toBe(true);
     expect(entryByCode('nonce_conflict').dead_letter).toBe(false);
     expect(entryByCode('nonce_conflict').producer_overrides).toBeUndefined();
@@ -349,7 +295,6 @@ describe('executor-kit benign scan outcomes against the taxonomy', () => {
         `${kind} is a benign scan outcome in the taxonomy and must not fail a scan`,
       ).toBe(false);
     }
-    // Everything else that executor-kit produces must fail a scan.
     const benignCodes = taxonomy.errors
       .filter((entry) => entry.producers.includes('executor-kit'))
       .filter((entry) => attrsForExecutorKit(entry.code).benign_scan_outcome === true)

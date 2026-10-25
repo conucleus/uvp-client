@@ -44,8 +44,6 @@ export function registerChainCommands(program: Command): void {
       try {
         const poll = await watcher.pollOnce();
         console.log(stringifyForTransport({ watcher: watcher.describe(), storage, poll }));
-        // Honest exit code: submission errors folded into the poll result (or
-        // failed/dead-lettered jobs) must not masquerade as a successful run.
         if (chainPollExecutionFailed(poll)) {
           process.exitCode = 1;
         }
@@ -80,9 +78,6 @@ export function registerChainCommands(program: Command): void {
         console.log(stringifyForTransport({ watcher: watcher.describe(), storage }));
         const handle = await watcher.start();
         try {
-          // handle.done resolves on stop(); persistent poll failures are
-          // reported through the watcher's onError (stderr) with capped
-          // exponential backoff instead of aborting the loop.
           await Promise.race([
             handle.done,
             waitForShutdown(async () => {
@@ -93,8 +88,6 @@ export function registerChainCommands(program: Command): void {
           await handle.stop();
         }
       } finally {
-        // 取锁与 finally 之间的一切失败路径（describe/start 抛错）都必须
-        // 释放 state-dir 锁，否则泄漏的 watcher.lock 拒绝下一个进程。
         await stateLock?.release();
       }
     });
@@ -119,10 +112,6 @@ export function registerChainCommands(program: Command): void {
     .option('--wait-for-receipt', 'wait for tx receipt after broadcasting')
     .action(async (options: ChainSignalOptions) => {
       if (options.payloadRef) {
-        // The frozen UVPStateMachine submitSignal ABI has no payloadRef input,
-        // so this flag would be silently dropped and the operator would walk
-        // away with a "submitted" success that never carried the reference.
-        // Fail loudly; only the 32-byte payloadHash goes on chain.
         throw new ValidationError(
           '--payload-ref is not supported by chain-signal: submitSignal(planId, orderId, sourceId, signalId, payloadHash, idempotencyKey, attribution) has no reference field, so the flag would be silently dropped. Keep only the 32-byte --payload-hash on chain and record the off-chain payload reference in your own job/evidence store next to it.',
         );

@@ -131,8 +131,6 @@ export function registerProductCommands(program: Command): void {
         prepared,
         privateKeyEnv: options.privateKeyEnv,
         ...(options.walletAddress ? { walletAddress: options.walletAddress } : {}),
-        // 域锚（对齐浏览器端调用方）：锚来自操作方按部署配置声明的
-        // 选项，不从 prepared 载荷自取（循环信任）。
         ...(options.expectedChainId !== undefined || options.expectedVerifyingContract !== undefined
           ? {
               expectedDomain: {
@@ -189,9 +187,6 @@ async function printProductSubmissionProof(submissionId: string, options: Produc
 
 async function writePreparedSignalContainerFile(path: string, prepared: PreparedSignalContainer): Promise<void> {
   await writeFile(path, `${stringifyForTransport({ prepared })}\n`, { mode: 0o600 });
-  // writeFile's `mode` only applies to files it creates: overwriting an
-  // existing (possibly looser) prepared file must re-assert the owner-only
-  // mode, matching wallet.ts.
   await chmod(path, 0o600);
 }
 

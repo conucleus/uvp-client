@@ -18,7 +18,7 @@ const STATE_MACHINE = '0x0000000000000000000000000000000000000001';
 const WALLET_ADDRESS = '0x0000000000000000000000000000000000000002';
 const PLAN_ID = `0x${'77'.repeat(32)}` as Hex;
 const ORDER_ID = `0x${'11'.repeat(32)}` as Hex;
-const SOURCE_ID = keccak256(stringToBytes('buyer'));
+const SOURCE_ID = keccak256(stringToBytes('slot-a'));
 const SIGNAL_ID = keccak256(stringToBytes('exec.main.cmp'));
 const PAYLOAD_HASH = `0x${'44'.repeat(32)}` as Hex;
 const OWNER_STAGE_ID = `0x${'55'.repeat(32)}` as Hex;
@@ -40,7 +40,6 @@ const BASE_SIGNAL: StateMachineSignal = {
   idempotencyKey: IDEMPOTENCY_KEY,
 };
 
-/** Plan 冻结能力词表镜像：owner 阶段对 (sourceId, signalId) 的 relation=0 能力。 */
 const TABLES = {
   selectorBindings: [{ selectorStageId: SELECTOR_STAGE_ID, targetStageId: OWNER_STAGE_ID }],
   signalCapabilities: [{
@@ -55,7 +54,6 @@ describe('submitSignal calldata proof shape', () => {
   it('encodes the all-zero proof struct when no proof material is given', () => {
     const call = buildSubmitStateMachineSignalCall(CONFIG, BASE_SIGNAL, WALLET_ADDRESS);
 
-    // The 7-arg submitSignal selector, pinned against the v0.15 fixture shape.
     expect(call.data.slice(0, 10)).toBe(keccak256(
       stringToBytes('submitSignal(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,(bytes32,bytes32,bytes32,bytes32[]))'),
     ).slice(0, 10));
@@ -89,8 +87,6 @@ describe('submitSignal calldata proof shape', () => {
       stageId: OWNER_STAGE_ID,
       capabilityProof: attribution!.capabilityProof,
     });
-    // The proof round-trips through the calldata and still verifies against
-    // the plan-frozen capabilities root.
     const decoded = decodeFunctionData({
       abi: STATE_MACHINE_ABI,
       functionName: 'submitSignal',
@@ -101,16 +97,12 @@ describe('submitSignal calldata proof shape', () => {
       capabilityProof: readonly Hex[];
     };
     const root = capabilitiesRootOf(TABLES.selectorBindings, TABLES.signalCapabilities);
-    // A mismatching (wrong owner stage) leaf must not verify against the same
-    // root: the encoded proof is membership-bound, not free-form.
     expect(keccak256(stringToBytes('x'))).not.toBe(root);
     expect(decodedAttribution.stageId).toBe(OWNER_STAGE_ID);
     expect(decodedAttribution.capabilityProof).toEqual(attribution!.capabilityProof);
   });
 
   it('rejects a non-zero attribution whose fact key disagrees with the signal key', () => {
-    // The contract answers this with InvalidFactAttribution; the kit refuses
-    // to build the doomed tx instead (same caliber as the zero-planId guard).
     expect(() => buildSubmitStateMachineSignalCall(CONFIG, {
       ...BASE_SIGNAL,
       attribution: {
@@ -120,8 +112,6 @@ describe('submitSignal calldata proof shape', () => {
         capabilityProof: [],
       },
     })).toThrow(ValidationError);
-    // stageId==0 keeps the no-claim encoding legal regardless of the keys:
-    // the contract ignores the key fields in that branch.
     expect(() => buildSubmitStateMachineSignalCall(CONFIG, {
       ...BASE_SIGNAL,
       attribution: {
@@ -147,7 +137,6 @@ describe('submitSignal calldata proof shape', () => {
     const call = buildSubmitStateMachineSignalCall(CONFIG, proven);
     expect(call.args[6]).toMatchObject({ stageId: OWNER_STAGE_ID, sourceId: SOURCE_ID, signalId: SIGNAL_ID });
 
-    // Out-of-vocabulary fact: no attribution derived.
     const foreign = withCapabilityProofs({
       ...BASE_SIGNAL,
       sourceId: keccak256(stringToBytes('someone-else')),
@@ -155,10 +144,8 @@ describe('submitSignal calldata proof shape', () => {
     expect(foreign.attribution).toBeUndefined();
     expect(buildSubmitStateMachineSignalCall(CONFIG, foreign).args[6]).toEqual(ZERO_FACT_ATTRIBUTION);
 
-    // No tables (vocabulary-less plan): unchanged signal, zero encoding.
     expect(withCapabilityProofs(BASE_SIGNAL, undefined)).toBe(BASE_SIGNAL);
 
-    // Explicit proofs are not overwritten by derivation.
     const explicit = withCapabilityProofs({
       ...BASE_SIGNAL,
       attribution: {

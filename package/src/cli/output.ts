@@ -137,9 +137,6 @@ function stateMachineJobStatusToExecutorStatus(status: StateMachineJobStatus): E
     case 'submitted':
       return 'submitted';
     case 'confirmed':
-    // A completed void-handler run is a finished success on the product
-    // surface; the DTO vocabulary has no separate "done, nothing to deliver"
-    // slot, and minting one is not a product-facing fact.
     case 'completed':
       return 'confirmed';
     case 'dead_letter':
@@ -161,12 +158,6 @@ function stageCapabilitiesFromHandlerKey(key: string): readonly string[] {
   return [stage];
 }
 
-/**
- * True when one log-processing outcome carries an error or ended in a terminal
- * failure state. Used to drive honest process exit codes: a chain-once scan or
- * jobs retry whose callback submission failed must exit non-zero even though
- * the result object itself was produced without throwing.
- */
 export function executionOutcomeFailed(result: {
   readonly error?: unknown;
   readonly job?: { readonly status?: string };
@@ -176,13 +167,6 @@ export function executionOutcomeFailed(result: {
     || result.job?.status === 'dead_letter';
 }
 
-/**
- * Outcome error kinds that classify a skip, not a run failure:
- * `missing_handler` is a foreign HookReady event this executor is not
- * configured for (a shared chain always carries other suppliers' hooks), and
- * `duplicate_signal` is the chain's own dedupe fact for an already-delivered
- * signal. A scan that only met these must exit 0.
- */
 const BENIGN_SCAN_OUTCOME_ERROR_KINDS = new Set(['missing_handler', 'duplicate_signal']);
 
 export function chainPollExecutionFailed(poll: {

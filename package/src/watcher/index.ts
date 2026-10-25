@@ -1,9 +1,7 @@
 /**
- * Watcher-domain public surface: a pure re-export barrel so SDK consumers
- * depend on this single module boundary while the implementation is split
- * into the scan/jobs/storage/execution lifecycle modules below. DTO mappers
- * for operator display live in cli/output.ts and are re-exported by the
- * package index.
+ * Watcher-domain public surface: a pure re-export barrel over the
+ * scan/jobs/storage/execution modules. Operator-display DTO mappers live in
+ * cli/output.ts and are re-exported by the package index.
  */
 export { STATE_MACHINE_ABI } from '@uvp-eth/protocol-bindings';
 

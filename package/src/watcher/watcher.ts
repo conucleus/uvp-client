@@ -110,34 +110,13 @@ import {
 } from './internal.js';
 
 export const DEFAULT_STATE_MACHINE_POLL_INTERVAL_MS = 4_000;
-/** Cap on the poll-delay multiplier during consecutive-failure backoff. */
 export const POLL_FAILURE_BACKOFF_MULTIPLIER_CAP = 8;
-/**
- * Consecutive poll rounds a foreign run claim may stay held before the watcher
- * alerts. A healthy run releases its claim within the round that took it; a
- * claim held this long by a live-looking pid is either a wedged run or a
- * crashed holder whose pid the OS reused — and the pid-reuse case is otherwise
- * silent, because every recovery channel (later scans, manual retry,
- * dead-letter) gates on the claim reading alive.
- */
 export const HELD_FOREIGN_CLAIM_ALERT_ROUNDS = 3;
 
-/**
- * Runtime environment declaration, same value set as chain-services
- * CHAIN_SERVICES_RUNTIME_ENV. Non-local environments forbid the silent
- * finality default (see confirmations) — the same caliber as chain-services
- * requiring an explicit UVP_FINALITY_CONFIRMATIONS outside local.
- */
 export type StateMachineRuntimeEnvironment = 'local' | 'testnet' | 'staging' | 'production';
 
 export interface StateMachineWatchHandle {
   stop(): Promise<void> | void;
-  /**
-   * Resolves when the loop is stopped manually via stop(). The loop never
-   * aborts on its own: persistent poll failures are reported through onError
-   * and the poll cadence backs off exponentially (capped) so an RPC outage
-   * degrades the watcher instead of killing it.
-   */
   readonly done: Promise<void>;
 }
 
@@ -150,42 +129,12 @@ export interface StateMachineWatcherConfig extends SubmitStateMachineSignalConfi
   readonly pollIntervalMs?: number | string;
   readonly retry?: StateMachineRetryConfig;
   readonly resendBackoff?: StateMachineResendBackoffConfig;
-  /** Monotonic wall clock (ms) driving the resend backoff; defaults to Date.now. */
   readonly nowMs?: () => number;
-  /**
-   * Finality buffer in blocks (default DEFAULT_FINALITY_CONFIRMATIONS): each
-   * round scans only up to head - confirmations. 0 restores tip scanning for
-   * throwaway local chains. The silent default is only allowed for local (or
-   * undeclared) runtime environments: with runtimeEnvironment set to a
-   * non-local value, confirmations must be set explicitly to a positive
-   * integer — a silent 1-block buffer lets a single-block reorg flip
-   * already-processed logs past the cursor.
-   */
   readonly confirmations?: number | string;
-  /**
-   * Declared runtime environment (default: local caliber). Non-local values
-   * make an explicit confirmations setting mandatory.
-   */
   readonly runtimeEnvironment?: StateMachineRuntimeEnvironment;
-  /**
-   * Bounded reorg checkpoint window (default DEFAULT_REORG_WINDOW_BLOCKS):
-   * recent scanned block hashes kept for the common-ancestor rollback when a
-   * reorg slips past the finality buffer.
-   */
   readonly reorgWindow?: number | string;
-  /**
-   * Max blocks per eth_getLogs request (default DEFAULT_GET_LOGS_BLOCK_SPAN);
-   * larger scan ranges are chunked so deep-lag catch-up rounds do not trip
-   * provider query limits.
-   */
   readonly getLogsBlockSpan?: number | string;
   readonly jobStore?: StateMachineJobStore;
-  /**
-   * Optional durable store for the scan cursor (the next block to scan).
-   * When configured, the watcher persists the cursor after every successful
-   * round and restores it before the first poll, so a restart resumes instead
-   * of rescanning from fromBlock. Without it the cursor stays in process memory.
-   */
   readonly cursorStore?: StateMachineCursorStore;
   readonly now?: () => string;
   readonly onPoll?: (result: StateMachinePollResult) => void;
@@ -205,11 +154,6 @@ export interface StateMachineLogProcessResult {
   readonly submissions: readonly SubmitStateMachineSignalResult[];
   readonly job?: StateMachineWatcherJob;
   readonly error?: ClassifiedExecutorKitError;
-  /**
-   * True when the log matched the HookReady topic but could not be decoded
-   * (e.g. a mixed-ABI deployment). Such logs are skipped and recorded, never
-   * fatal: the scan advances past them instead of rescanning them forever.
-   */
   readonly decodeFailure?: boolean;
 }
 
@@ -218,7 +162,6 @@ export interface StateMachinePollResult {
   readonly toBlock: bigint;
   readonly scannedLogs: number;
   readonly results: readonly StateMachineLogProcessResult[];
-  /** How many scanned logs in this round were skipped as decode failures. */
   readonly decodeFailures: number;
 }
 
@@ -227,38 +170,12 @@ export class StateMachineWatcher {
   private nextBlock: bigint | undefined;
   private decodeFailuresTotal = 0;
   private cursorRestored = false;
-  /**
-   * True once a persisted cursor was adopted: only an adopted cursor can sit
-   * beyond the live chain head (a chain shrink the genesis identity could not
-   * catch), so the overshoot fallback to fromBlock is gated on this flag.
-   */
   private adoptedStoredCursor = false;
   private genesisHash: string | undefined;
-  /**
-   * Consecutive poll rounds the genesis (block-0) identity read stayed
-   * unreadable. Zero once the read succeeds; the streak is exposed through
-   * describe() so a permanently degraded identity (e.g. a pruned block 0)
-   * stays visible in status output instead of decaying into silence.
-   */
   private genesisIdentityUnknownRounds = 0;
-  /** Canonical hash of block nextBlock - 1 from the last successful round, when readable. */
   private cursorBlockHash: string | undefined;
   private checkpoints: StateMachineCursorCheckpoint[] = [];
-  /**
-   * Run claims whose release write failed (store fault): retried every poll
-   * round. A same-pid claim is always "held" for isHeldRunClaim, so a stuck
-   * release silently excludes the job from this process's scans and from
-   * manual retries forever — the opposite of the dead-holder takeover the
-   * pid check provides for crashed processes.
-   */
   private pendingClaimReleases = new Set<Hex>();
-  /**
-   * Consecutive rounds a foreign held claim was observed per job, plus the
-   * jobs already alerted in the current hold streak. pid liveness cannot tell
-   * a live holder from a crashed one whose pid the OS reused, so a dead claim
-   * can read alive forever — the counter turns that silent deadlock into an
-   * operator alert. Both reset the moment the claim stops reading held.
-   */
   private heldForeignClaimRounds = new Map<Hex, number>();
   private alertedHeldForeignClaims = new Set<Hex>();
 
@@ -298,36 +215,19 @@ export class StateMachineWatcher {
     };
   }
 
-  /**
-   * Resolve the watcher's chain identity and load the persisted scan cursor
-   * once per watcher instance before the first poll. A restored cursor
-   * replaces the initial fromBlock so a restarted watcher resumes where the
-   * previous process stopped instead of rescanning the already-processed
-   * range. A cursor belonging to another identity is reported through
-   * onError and discarded — silently adopting it is how a reset dev chain
-   * drops every event until the new head passes the stale position.
-   */
   async restoreCursor(client?: StateMachinePublicClient): Promise<void> {
     if (this.cursorRestored) {
       return;
     }
     const store = this.config.cursorStore;
     if (!store) {
-      // Nothing to restore; the latch only guards the store interaction.
       this.cursorRestored = true;
       return;
     }
-    // The genesis binding is resolved through observeGenesisIdentity so a
-    // failed read is loud BEFORE the identity decision below runs degraded.
     if (client) {
       await this.observeGenesisIdentity(client);
     }
     const result = await store.load(this.cursorContext());
-    // Latch only after the store reached a decision: a transient load failure
-    // (EACCES, EMFILE, a full disk) must retry on the next poll instead of
-    // permanently abandoning the persisted position — the next successful
-    // round would otherwise save a fresh cursor over anchors that were never
-    // read, silently discarding the old position and its checkpoints.
     this.cursorRestored = true;
     if (result.status === 'foreign') {
       const cause = result.reason === 'genesis'
@@ -348,35 +248,11 @@ export class StateMachineWatcher {
     }
   }
 
-  /**
-   * Resolve (or keep retrying) the chain genesis (block-0) hash that binds the
-   * persisted cursor to this chain's identity. A failed read used to leave the
-   * genesis check silently disabled: the restore latch adopted the cursor with
-   * a degraded identity, later saves re-wrote the file without the genesis
-   * binding, and nothing surfaced any of it (UA-16).
-   *
-   * Operational caliber: the watcher's documented rule is degrade-don't-die
-   * (see start(): persistent poll failures are reported through onError with
-   * capped backoff instead of killing the loop, and fail-fast is reserved for
-   * constructor-time validation), so the round continues scanning with the
-   * chain-id + state-machine identity only — but every round the read stays
-   * unreadable is reported through onError (the kit's degraded-condition alarm
-   * channel, same per-round cadence as the stuck claim-release retries) and
-   * exposed through describe()'s genesisIdentity status. The retry every poll
-   * round makes the binding self-heal: once block 0 is readable again, cursor
-   * saves re-bind the genesis identity, restoring reset-chain detection for
-   * later restarts.
-   */
   private async observeGenesisIdentity(client: StateMachinePublicClient): Promise<void> {
     if (!this.config.cursorStore || this.genesisHash !== undefined) {
       return;
     }
     if (typeof client.getBlock !== 'function') {
-      // A client without block support is a supported configuration the reorg
-      // defenses already treat as "no evidence": no genesis binding is ever
-      // expected there, so there is no degraded identity to report. Only an
-      // attempted-but-failed read (RPC hiccup, pruned block 0) disables a
-      // check this watcher was otherwise relying on — that is the loud case.
       return;
     }
     const hash = await tryGetBlockHash(client, 0n);
@@ -402,36 +278,22 @@ export class StateMachineWatcher {
   }
 
   async pollOnce(): Promise<StateMachinePollResult> {
-    // Claim-release retries run before any early return of the round: a stuck
-    // release must not wait for new blocks (the finality-lag path returns
-    // before scanning).
     await this.retryPendingClaimReleases();
     const client = getPublicClient(this.config);
     await ensureChainId(client, this.config.chainId);
     const cursorAlreadyRestored = this.cursorRestored;
     await this.restoreCursor(client);
     if (cursorAlreadyRestored) {
-      // Post-latch genesis retry (the restore path already observed it in its
-      // own round): while the read stays unreadable the identity check runs
-      // degraded, so it must be retried and re-reported every round instead of
-      // silently abdicating for the rest of the process lifetime.
       await this.observeGenesisIdentity(client);
     }
 
     const latestBlock = await client.getBlockNumber();
-    // Finality buffer: never scan the chain tip, so a short reorg cannot flip
-    // processed logs (and their confirmed submissions) behind the cursor.
     const toBlock = latestBlock > BigInt(this.config.confirmations)
       ? latestBlock - BigInt(this.config.confirmations)
       : 0n;
     let fromBlock = this.nextBlock ?? this.config.fromBlock ?? toBlock;
 
     if (fromBlock > latestBlock) {
-      // The cursor sits beyond the live chain head: the chain shrank under us
-      // (node rollback, or a reset the genesis identity could not catch).
-      // Alert instead of spinning silently, and when the overshoot came from a
-      // adopted cursor, fall back to the configured fromBlock as the corrected
-      // rescan floor.
       this.config.onError?.(new ExecutorKitError(
         `scan cursor ${fromBlock} is beyond the chain head ${latestBlock}${this.adoptedStoredCursor ? ' (persisted cursor is stale)' : ''}`
         + `; ${this.config.fromBlock !== undefined ? `rescanning from fromBlock ${this.config.fromBlock}` : 'waiting for the chain to grow'}`,
@@ -439,16 +301,9 @@ export class StateMachineWatcher {
       if (this.adoptedStoredCursor && this.config.fromBlock !== undefined && this.config.fromBlock <= toBlock) {
         fromBlock = this.config.fromBlock;
         this.adoptedStoredCursor = false;
-        // The adopted anchors sit at or beyond the stale cursor height: kept
-        // against the corrected floor, the next continuity check mismatches by
-        // construction and forces a false-reorg rollback to anchors the live
-        // chain no longer supports.
         this.checkpoints = [];
         this.cursorBlockHash = undefined;
       } else {
-        // 越头早退轮不扫块也不跑 later-scan，但 stuck-claim 告警的轮计数以
-        // 「每轮观测一次」为前提：跳过观测会让等链长回来的这段（可能无限
-        // 长）窗口里，持续持有的外来认领永远到不了告警阈值。
         this.trackHeldForeignClaims(await this.config.jobStore.list());
         return { fromBlock, toBlock, scannedLogs: 0, results: [], decodeFailures: 0 };
       }
@@ -457,9 +312,6 @@ export class StateMachineWatcher {
     }
 
     if (fromBlock > toBlock) {
-      // The finalized head has not caught up with the cursor yet — normal
-      // finality lag, nothing to scan this round. Open jobs behind the cursor
-      // still get their later-scan recheck: receipts do not wait for new blocks.
       const revisitResults = await this.revisitOpenJobs(fromBlock, new Set());
       return {
         fromBlock,
@@ -470,10 +322,6 @@ export class StateMachineWatcher {
       };
     }
 
-    // Chunk deep ranges: one unbounded eth_getLogs over a large gap is exactly
-    // the query RPC providers reject; a rejected catch-up round fails wholesale.
-    // All (deployment, range) pairs share one bounded in-flight pool: a long
-    // catch-up must not open hundreds of simultaneous getLogs requests.
     const scanRequests = this.config.stateMachines.flatMap((deployment) =>
       blockRanges(fromBlock, toBlock, BigInt(this.config.getLogsBlockSpan))
         .map((range) => ({ deployment, range })),
@@ -491,39 +339,16 @@ export class StateMachineWatcher {
     )
       .flatMap((logsForRequest, index) => {
         const deployment = scanRequests[index]?.deployment;
-        // A provider omitting the log address gets the requested deployment's.
         return logsForRequest.map((log) => (log.address ? log : deployment ? { ...log, address: deployment.stateMachineAddress } : log));
       })
       .sort(compareRawLogs);
-    // Jobs whose log this round's scan loop handles must not be re-entered by
-    // the later-scan pass: raws without a block number cannot be excluded by
-    // the pass's height comparison, so the dedupe keys on the log's event id.
     const scannedEventIds = scannedHookReadyEventIds(logs);
     const results: StateMachineLogProcessResult[] = [];
-    // Fail fast on unexpected log-processing errors: the round aborts before the
-    // cursor advances, so the failing block range is rescanned on the next
-    // successful poll. Decode failures are handled inside handleLog (skip and
-    // record) precisely so an undecodable log cannot trap the cursor here.
     for (const log of logs) {
       results.push(await this.handleLog(log));
     }
-    // Persistence is part of the round: save first, advance memory second. A
-    // save that fails after the memory advance leaves the process holding an
-    // unpersisted skip interval — combined with a crash, blocks would be
-    // silently never rescanned by this or any restarted instance.
     const nextBlock = toBlock + 1n;
-    // Stage this round's cursor evidence off to the side: persistence happens
-    // first and the in-memory anchors are committed only after the save
-    // succeeds. A save failure with the memory already updated left the next
-    // round's continuity check comparing the new height against hashes the
-    // persisted cursor never got — a false reorg that rolled the range back.
     const stagedCheckpoints = [...this.checkpoints];
-    // Remember canonical hashes for the scanned range (dense near the tip,
-    // exponentially sparser deeper) so a later reorg can locate the common
-    // ancestor instead of falling back to a full rescan. A failed read of the
-    // toBlock hash is "no evidence", not a reorg: keeping the previous round's
-    // hash against the new height would make the next round's continuity check
-    // mismatch by construction and roll back forever (a false-reorg loop).
     let roundCursorBlockHash: string | undefined;
     for (const anchorHeight of checkpointAnchorHeights(fromBlock, toBlock, this.config.reorgWindow)) {
       const anchorHash = await tryGetBlockHash(client, anchorHeight);
@@ -534,9 +359,6 @@ export class StateMachineWatcher {
         }
       }
     }
-    // Later-scan pass over open jobs behind the cursor (detected leftovers,
-    // unconfirmed broadcasts). It runs before the cursor advances so a crash
-    // mid-pass leaves the range (and the recheck) to the next round.
     results.push(...await this.revisitOpenJobs(fromBlock, scannedEventIds));
     if (this.config.cursorStore) {
       await this.config.cursorStore.save(
@@ -563,13 +385,7 @@ export class StateMachineWatcher {
   }
 
   async handleLog(log: StateMachineRawLog, options?: {
-    /**
-     * Manual-recovery escape hatch for reorg-invalidated confirmations: ignore
-     * the "already delivered" shortcuts and resubmit every signal. The chain's
-     * own idempotency keys absorb a duplicate when the prior signal survived.
-     */
     readonly resubmitDelivered?: boolean;
-    /** Manual retries skip the resend backoff: the operator asked for it now. */
     readonly bypassResendBackoff?: boolean;
   }): Promise<StateMachineLogProcessResult> {
     if (log.topics[0] !== HOOK_READY_TOPIC) {
@@ -583,16 +399,10 @@ export class StateMachineWatcher {
     try {
       const decoded = decodeHookReadyLog(log, this.config.artifact);
       if (!decoded) {
-        // Unreachable: decodeHookReadyLog returns undefined only for logs without
-        // the HookReady topic and throws when a topic-matching log fails to decode.
         throw new ValidationError('HookReady log matched the topic but did not decode into an event');
       }
       event = decoded;
     } catch (error) {
-      // A topic-matching log that cannot be decoded (e.g. a mixed-ABI deployment
-      // or corrupted data) must never abort the scan: rescan would hit the same
-      // deterministic failure every round until the watch loop gave up. Skip it,
-      // record the decision, and let the cursor advance past it.
       return this.isolateUndecodableLog(log, error);
     }
 
@@ -610,18 +420,6 @@ export class StateMachineWatcher {
         job,
       };
     }
-    // A `matched` job with no run claim and a recorded dry-run conclusion is
-    // a concluded pass's leftover. Under dry-run re-running its handler would
-    // replay handler side effects and pile simulated submissions onto the
-    // audit trail on every rescan, so it is skipped. The conclusion record is
-    // required because a conclusive write can fail while the finally-block
-    // claim release succeeds — that crashed leftover is otherwise
-    // field-identical (a void pass records no submissions), and skipping it
-    // stranded the job forever. Without the record the safe direction is to
-    // re-run: a dry-run replay has no chain side effects. Flipping dry-run
-    // off, or a manual retry (which re-opens the job as `detected`), still
-    // re-runs the job for real; a crashed mid-run job keeps its (dead) claim
-    // and is taken over instead of skipped.
     if (
       job.status === 'matched'
       && job.claim === undefined
@@ -645,11 +443,6 @@ export class StateMachineWatcher {
       return this.ignoredVerdictResult(event, await this.recordIgnoredVerdict(job, error), error);
     }
 
-    // 任务级原子认领：读-验-写竞态下两个执行器（watcher 扫描与手工
-    // `jobs retry`）可同时进入同一 handler，链上幂等键保护不了 handler 的
-    // 链外副作用。认领以 CAS 写入（expectStatus+expectClaimPid），输者读到
-    // 活认领即跳过本轮；持有者死亡（pid 不存活）时认领视为崩溃残留，可被
-    // 接管——搁浅的 matched 任务仍保留手工重试这条恢复通道。
     const claimOutcome = await this.claimForRun(job, resolved.key);
     if (claimOutcome.outcome !== 'claimed') {
       return {
@@ -662,9 +455,6 @@ export class StateMachineWatcher {
     try {
       return await this.processClaimedRun(claimOutcome.job, event, resolved, options);
     } finally {
-      // 认领保护的是"进行中的运行"，不是任务状态：dry-run 收敛等出口会
-      // 把任务留在 matched（非终态，等待真实运行接管），若只在终态写时
-      // 释放认领，这类任务会被一个早已结束的运行永久占住。
       await this.releaseRunClaim(job.id);
     }
   }
@@ -682,16 +472,10 @@ export class StateMachineWatcher {
     let currentJob = claimedJob;
     let attempts = currentJob.attempts;
     const jobSubmissions: StateMachineJobSubmission[] = [...currentJob.submissions];
-    // Effective submit config for this event: the emitting contract wins over
-    // the config-level default address. Shared by the direct submission path
-    // and the receipt-recovery path below.
     const eventSubmitConfig = {
       ...this.config,
       stateMachineAddress: event.stateMachineAddress ?? this.config.stateMachineAddress,
     };
-    // 能力造证材料（artifact 索引内嵌的两张 plan 冻结词表）：无表时为
-    // undefined，两条提交通道按全零缺省（词表外口径）提交。树是 plan
-    // 冻结的，现场重算成员证明与预生成等价。
     const capabilityTables = capabilityTablesOf(this.config.artifact);
     const submitSignalWithJobRetry = async (
       signal: StateMachineSignal,
@@ -705,26 +489,14 @@ export class StateMachineWatcher {
           appendJobSubmission(jobSubmissions, toJobSubmission(signalIndex, attemptForSignal, result));
           currentJob = await this.updateJob(job.id, {
             updatedAt: this.config.now(),
-            // The backoff anchors on real broadcast attempts only — the
-            // handler-context lane applies the same condition.
             ...(result.dryRun ? {} : { lastSignalAttemptAt: this.config.now() }),
             submissions: jobSubmissions,
           });
           return result;
         } catch (error) {
           const classified = classifyExecutorKitError(error);
-          // attempts is the job-level count of REAL failures: successes and
-          // per-signal bookkeeping must not consume the retry budget, or a
-          // completed multi-signal dry-run arrives at the manual retry entry
-          // already "exhausted" and gets dead-lettered without ever failing.
           attempts += 1;
           lastError = classified;
-          // Fail-closed audit trail: a tx that was broadcast before the failure
-          // (receipt reverted or receipt wait threw) must stay visible on the
-          // job, mirroring how chain-services failedResult carries txHash. The
-          // request stays on the record too: cross-run delivery evidence is
-          // attributed by content identity, and an evidence-less record cannot
-          // be attributed to anything.
           const broadcastTxHash = broadcastTxHashFromError(error);
           jobSubmissions.push({
             signalIndex,
@@ -740,13 +512,6 @@ export class StateMachineWatcher {
             submissions: jobSubmissions,
             lastError: classified,
           });
-          // Replay guard: when the failed attempt already broadcast a tx, the
-          // blind retry below would put a second transaction on chain for the
-          // same signal. Consult the receipt first; a receipt that cannot be
-          // obtained is NOT provable absence, so the run defers the signal to
-          // later scans (receipt recheck + resend backoff) instead of
-          // rebroadcasting on unknown evidence — regardless of the remaining
-          // in-run budget, an unknown outcome is never settled by retrying.
           if (classified.retryable && broadcastTxHash !== undefined) {
             const recovered = await this.recoverBroadcastSubmission(eventSubmitConfig, signal, broadcastTxHash);
             if (recovered) {
@@ -761,9 +526,6 @@ export class StateMachineWatcher {
             return { deferredBroadcast: true };
           }
           if (!classified.retryable || attemptForSignal >= this.config.retry.maxAttempts) {
-            // Keep the original error reachable through the cause chain: the
-            // terminal-status guard must tell a receipt-observed revert apart
-            // from a broadcast whose outcome is simply unknown.
             throw new ClassifiedStateMachineError(classified, { cause: error });
           }
           await delay(this.config.retry.baseDelayMs * attemptForSignal);
@@ -773,23 +535,8 @@ export class StateMachineWatcher {
       throw new ClassifiedStateMachineError(lastError ?? classifyExecutorKitError(new Error('submission failed')));
     };
 
-    // Context-channel submissions share the job audit trail with the
-    // returned-signals path (README: already-broadcast transactions are never
-    // dropped from it). signalIndex -1, -2, ... keeps context submissions from
-    // aliasing returned-signal indexes in the resume/backoff machinery.
-    // The channel also honors the same replay rules as the returned-signal
-    // lane: an already-delivered signal is answered from its recorded evidence
-    // instead of rebroadcast (unless the run resubmits delivered signals —
-    // the manual reorg-recovery channel), and an unresolved prior broadcast
-    // is settled by its receipt (or deferred under the resend backoff) before
-    // any new transaction goes out.
     let contextSubmissionCount = 0;
     let deferredResend = false;
-    // Negative indexes continue across runs instead of restarting at -1: the
-    // delivery-evidence set and the terminal-status computation treat the
-    // index as the context signal's identity, so a recycled index would let a
-    // re-run's different context signal inherit a prior signal's delivery
-    // evidence and mask its own unresolved broadcast.
     const priorContextSignalCount = new Set(
       jobSubmissions.filter((submission) => submission.signalIndex < 0).map((submission) => submission.signalIndex),
     ).size;
@@ -800,22 +547,13 @@ export class StateMachineWatcher {
         contextSubmissionCount += 1;
         const attempt = contextSubmissionCount;
         const submitConfig = normalizeSubmitConfig({ ...eventSubmitConfig, ...overrides });
-        // 词表材料在场时先造证：证明进 calldata，身份请求（与后续回放
-        // 守卫的 content identity）必须从同一份带证信号构建。
         const provenSignal = withCapabilityProofs(signal, capabilityTables);
-        // Signal identity for the replay decisions below: submitSignal calldata
-        // is a deterministic function of the four-tuple (plus an explicit key),
-        // so equal data across runs means the same logical signal.
         const identityRequest = buildSubmitStateMachineSignalCall(submitConfig, provenSignal);
         const priorRecords = jobSubmissions.filter((submission) => submission.request?.data === identityRequest.data);
         const deliveredPrior = options?.resubmitDelivered
           ? undefined
           : priorRecords.find(isDeliveredSubmission);
         if (deliveredPrior?.txHash !== undefined && !deliveredPrior.dryRun) {
-          // The chain already carries this signal by this job's own recorded
-          // evidence; rebroadcasting could only collect another revert. Under
-          // resubmitDelivered the operator declared that evidence invalid
-          // (reorg), so the shortcut must not answer from it.
           return {
             dryRun: false,
             request: deliveredPrior.request ?? identityRequest,
@@ -827,13 +565,8 @@ export class StateMachineWatcher {
           .filter((submission) => isUnconfirmedBroadcast(submission))
           .at(-1);
         if (unresolvedPrior?.txHash !== undefined) {
-          // Replay guard, same as the returned-signal lane: the prior
-          // broadcast's outcome is unknown until its receipt says otherwise.
           const recovered = await this.recoverBroadcastSubmission(submitConfig, provenSignal, unresolvedPrior.txHash);
           if (recovered) {
-            // The recovered record keeps the prior broadcast's index: one
-            // logical signal, one index in the history the terminal-status
-            // computation intersects over.
             appendJobSubmission(jobSubmissions, toJobSubmission(
               unresolvedPrior.signalIndex,
               nextSubmissionAttempt(jobSubmissions, unresolvedPrior.signalIndex),
@@ -858,9 +591,6 @@ export class StateMachineWatcher {
             deferredResend = true;
             return { deferredBroadcast: true };
           }
-          // Past the backoff window: fall through and rebroadcast — the
-          // contract's SignalAlreadyExists dedupe absorbs it if the prior
-          // transaction actually mined.
         }
         try {
           const result = await submitStateMachineSignal(submitConfig, provenSignal);
@@ -882,10 +612,6 @@ export class StateMachineWatcher {
             error: classified,
           });
           if (broadcastTxHash !== undefined && !carriesKnownRevert(error)) {
-            // The broadcast went out but its outcome is unknown. Handing the
-            // handler a retryable-looking error invited an immediate second
-            // transaction for the same signal; consult the receipt once and
-            // otherwise defer to the later-scan recheck under the backoff.
             const recovered = await this.recoverBroadcastSubmission(submitConfig, provenSignal, broadcastTxHash)
               .catch(() => undefined);
             if (recovered) {
@@ -927,7 +653,6 @@ export class StateMachineWatcher {
         break;
       } catch (error) {
         const classified = classifyExecutorKitError(error, 'handler_failure');
-        // See submitSignalWithJobRetry: attempts counts real failures only.
         attempts += 1;
         currentJob = await this.updateJob(job.id, {
           updatedAt: this.config.now(),
@@ -958,15 +683,6 @@ export class StateMachineWatcher {
     }
 
     const submissions: SubmitStateMachineSignalResult[] = [];
-    // The plan-scoped submitSignal ABI requires the order planId, resolved per
-    // signal: an explicit pin (handler-supplied or the config
-    // `signals[].planId` field) wins; otherwise the planId decoded from the
-    // HookReady event itself (the authoritative carrier, so it outranks any
-    // job-persisted value from older runs); the persisted job planId is the
-    // last resort. A sibling signal's explicit pin is deliberately NOT a
-    // fallback: multi-signal handlers may mix pinned and unpinned signals, and
-    // borrowing one signal's pin for its siblings broadcast a planId the event
-    // never carried — an on-chain revert that dead-lettered the whole job.
     const eventPlanId = event.planId !== ZERO_BYTES32 ? event.planId : undefined;
     const fallbackPlanId = eventPlanId ?? job.planId;
     if (eventPlanId !== undefined && job.planId === undefined) {
@@ -978,16 +694,6 @@ export class StateMachineWatcher {
         job = withPlanId;
       }
     }
-    // Resume support, by content identity: a signal whose delivery is
-    // evidenced (receipt-confirmed submission or duplicate_signal dedupe fact)
-    // is already on chain. A re-run — manual `jobs retry` or a later scan of
-    // an open job — reconciles the handler's returned set against that
-    // evidence through each signal's deterministic calldata, so the run
-    // continues with the pending signals instead of rebroadcasting delivered
-    // ones. Handlers should return their full signal set every run, but an
-    // incremental subset is equally safe: identity, not position, decides what
-    // is delivered — a surviving signal can never inherit a delivered
-    // sibling's evidence, and a pending one can never be credited with it.
     const resolvedSignals = normalizeHandlerResult(handlerResult).map((signal): StateMachineSignal => ({
       ...signal,
       ...(signal.planId === undefined && fallbackPlanId !== undefined ? { planId: fallbackPlanId } : {}),
@@ -995,13 +701,6 @@ export class StateMachineWatcher {
     const deliveredRequestDatas = options?.resubmitDelivered
       ? new Set<string>()
       : deliveredRequestDatasFromSubmissions(currentJob.submissions);
-    // Receipt recheck for every broadcast whose outcome is still unknown — the
-    // returned-signal lane, the handler-context `submitSignal` lane, and
-    // signals the handler no longer emits. A mined success settles the signal
-    // without a rebroadcast; a mined revert refutes the job whichever channel
-    // put the tx on chain (a `waitForReceipt:false` revert must not stay open
-    // forever); a receipt that cannot be obtained leaves the signal open for
-    // the next scan under the resend backoff.
     for (const submission of unresolvedBroadcasts(currentJob.submissions)) {
       let receiptStatus: 'success' | 'reverted' | undefined;
       try {
@@ -1009,10 +708,6 @@ export class StateMachineWatcher {
       } catch (error) {
         const classified = classifyExecutorKitError(error);
         attempts += 1;
-        // This path only fires on a receipt actually observed as 'reverted' —
-        // the one receipt outcome lookupBroadcastReceipt treats as terminal —
-        // so dead_letter/failed here never freezes a broadcast whose outcome
-        // is unknown.
         const failed = await this.concludeRun(job.id, {
           status: jobStatusForError(classified),
           updatedAt: this.config.now(),
@@ -1057,11 +752,6 @@ export class StateMachineWatcher {
     }
     const identityDatas: string[] = [];
     for (const [index, handlerSignal] of resolvedSignals.entries()) {
-      // The identity build sits inside the run's failure handling on purpose: a
-      // structurally unbuildable signal (e.g. no resolvable planId) must fail
-      // THIS job through the classified terminal path, not escape the run.
-      // Proof derivation shares the fate: an unresolvable signal cannot be
-      // attributed either.
       let resolvedSignal = handlerSignal;
       let identityRequest: SubmitStateMachineSignalCall;
       try {
@@ -1095,13 +785,6 @@ export class StateMachineWatcher {
         const priorUnconfirmedBroadcasts = unresolvedBroadcasts(currentJob.submissions)
           .filter((submission) => submission.request?.data === identityRequest.data).length;
         if (priorUnconfirmedBroadcasts > 0 && options?.bypassResendBackoff !== true) {
-          // resend backoff: a rescan must not put the same transaction on
-          // chain once per poll round — a growing, capped wait anchored to
-          // lastSignalAttemptAt throttles the rebroadcast. A missing or
-          // unparseable anchor loses the clock: the resend goes out
-          // immediately instead of deferring forever on an anchor that never
-          // existed (updatedAt is no substitute — it moves on unrelated
-          // bookkeeping every round).
           const requiredDelayMs = resendBackoffDelayMs(this.config.resendBackoff, priorUnconfirmedBroadcasts);
           const lastAttemptAtMs = Date.parse(currentJob.lastSignalAttemptAt ?? '');
           if (Number.isFinite(lastAttemptAtMs) && this.config.nowMs() - lastAttemptAtMs < requiredDelayMs) {
@@ -1111,8 +794,6 @@ export class StateMachineWatcher {
         }
         const result = await submitSignalWithJobRetry(resolvedSignal, index, identityRequest);
         if ('deferredBroadcast' in result) {
-          // The in-run replay guard deferred this signal (broadcast outcome
-          // unknown, receipt unavailable): keep the job open for later scans.
           deferredResend = true;
           continue;
         }
@@ -1125,9 +806,6 @@ export class StateMachineWatcher {
           ? error.classified
           : classifyExecutorKitError(error);
         if (classified.kind === 'duplicate_signal') {
-          // The chain already carries this signal: a deterministic dedupe fact,
-          // not a failure. Count it as delivered and keep the remaining
-          // signals progressing instead of parking the whole job.
           deliveredRequestDatas.add(identityRequest.data);
           continue;
         }
@@ -1155,8 +833,6 @@ export class StateMachineWatcher {
       jobSubmissions,
     });
     if (deferredResend) {
-      // A deferred signal keeps the job open. Preserve updatedAt: rewriting
-      // now() would restart the backoff clock on every deferred round.
       currentJob = await this.concludeRun(job.id, {
         status: finalStatus === 'matched' ? 'submitted' : finalStatus,
         updatedAt: currentJob.updatedAt,
@@ -1170,9 +846,6 @@ export class StateMachineWatcher {
         attempts,
         submissions: jobSubmissions,
         clearLastError: true,
-        // A concluded dry-run pass keeps the job in `matched` — recording the
-        // conclusion is what lets the rescan guard tell this leftover apart
-        // from a crashed run's (see the guard in handleLog).
         ...(this.config.dryRun && finalStatus === 'matched'
           ? { dryRunConcludedAt: this.config.now() }
           : {}),
@@ -1193,7 +866,6 @@ export class StateMachineWatcher {
       const result = await this.pollOnce();
       this.config.onPoll?.(result);
     };
-    // First-round failures still fail fast: a rejection here propagates out of start() itself.
     await run();
     let running = false;
     let stopped = false;
@@ -1213,9 +885,6 @@ export class StateMachineWatcher {
           consecutiveFailures = 0;
         })
         .catch((error: unknown) => {
-          // Keep watching, but slow down: a permanent clearInterval abort had
-          // no recovery path, so a transient RPC outage killed the listener
-          // until a human restarted the process.
           consecutiveFailures += 1;
           this.config.onError?.(error);
         })
@@ -1244,11 +913,6 @@ export class StateMachineWatcher {
   }
 
   private async updateJob(jobId: Hex, patch: StateMachineJobPatch): Promise<StateMachineWatcherJob> {
-    // 终态守卫：--force dead-letter 可在运行中途落地（清掉认领，但 handler 仍
-    // 在飞），此后 lastError 存的是操作员的人工处置理由；运行中的失败分类再
-    // 无条件写回会把它抹成机器错误，恢复成功路径的显式清除（clearLastError）
-    // 则把它整条抹掉——覆写与清除对人工裁决同样致命，须一并拦下。状态与结论
-    // 写入走 concludeRun 的 CAS，本就不覆写并发裁决。
     let guarded = patch;
     if ((patch.lastError !== undefined || patch.clearLastError === true) && await this.jobReachedTerminal(jobId)) {
       const { lastError: omittedError, clearLastError: omittedClear, ...rest } = patch;
@@ -1268,13 +932,6 @@ export class StateMachineWatcher {
     return current !== undefined && isTerminalJobStatus(current.status);
   }
 
-  /**
-   * Run-concluding write for a claimed run: the status only lands while the
-   * job is still in this run's `matched` state. A CAS miss means a concurrent
-   * verdict (operator dead-letter racing the claim gate) landed first — that
-   * write wins, so the run reports the stored job instead of overwriting its
-   * status or clearing its reason.
-   */
   private async concludeRun(jobId: Hex, patch: StateMachineJobPatch): Promise<StateMachineWatcherJob> {
     const concluded = await this.config.jobStore.update(jobId, {
       ...withConclusiveClaimRelease(patch),
@@ -1290,15 +947,6 @@ export class StateMachineWatcher {
     return current;
   }
 
-  /**
-   * Terminal `ignored` write for pre-claim verdicts (missing handler,
-   * undecodable log), guarded like a claimed run's conclusive write: the
-   * verdict only lands while the job is still in the state this process read
-   * and no live run holds it. A held claim (foreign or same pid) or a CAS miss
-   * means a concurrent writer owns the job — a missing-handler write that
-   * landed anyway would clear that live claim and strand the running handler
-   * on a job already terminal here, so the stored job decides instead.
-   */
   private async recordIgnoredVerdict(
     job: StateMachineWatcherJob,
     lastError: ClassifiedExecutorKitError,
@@ -1337,9 +985,6 @@ export class StateMachineWatcher {
         error,
       };
     }
-    // The concurrent writer's stored job is the verdict now; reporting this
-    // process's own missing-handler classification on it would misattribute
-    // the outcome.
     return {
       status: isTerminalJobStatus(verdict.job.status) ? 'ignored' : 'skipped',
       event,
@@ -1348,13 +993,6 @@ export class StateMachineWatcher {
     };
   }
 
-  /**
-   * Atomically take the run claim for this job. Returns:
-   * - `claimed`: this process owns the run (status `matched`, claim set);
-   * - `busy`: a live foreign claim holds the job — another executor is mid-run;
-   * - `terminal`: the job reached a terminal state since the caller last read it;
-   * - `lost`: the CAS write lost a race twice in a row — yield this round.
-   */
   private async claimForRun(
     job: StateMachineWatcherJob,
     matchedKey: string,
@@ -1379,9 +1017,6 @@ export class StateMachineWatcher {
         updatedAt: at,
         matchedKey,
         claim: { pid: process.pid, at },
-        // A new claim invalidates any recorded dry-run conclusion: if this
-        // run crashes before concluding, the leftover must read as crashed
-        // (re-run), not as a concluded pass's leftover (skipped).
         dryRunConcludedAt: null,
         expectStatus: fresh.status,
         expectClaimPid: fresh.claim?.pid ?? null,
@@ -1393,12 +1028,6 @@ export class StateMachineWatcher {
     return { outcome: 'lost' };
   }
 
-  /**
-   * Release this process's run claim; a no-op when the conclusive status write
-   * already released it (the CAS guard loses, which is fine). A release write
-   * that REJECTS is not fine: the claim stays held by this live pid, so it is
-   * queued for {@link retryPendingClaimReleases} and reported through onError.
-   */
   private async releaseRunClaim(jobId: Hex): Promise<void> {
     try {
       await this.config.jobStore.update(jobId, {
@@ -1415,12 +1044,6 @@ export class StateMachineWatcher {
     }
   }
 
-  /**
-   * Periodic retry of failed claim releases (each poll round, before any early
-   * return). A lost CAS race also counts as released: the claim is then no
-   * longer held by this process (conclusive write released it, or an operator
-   * cleared it).
-   */
   private async retryPendingClaimReleases(): Promise<void> {
     if (this.pendingClaimReleases.size === 0) {
       return;
@@ -1442,15 +1065,6 @@ export class StateMachineWatcher {
     }
   }
 
-  /**
-   * Direct receipt lookup shared by both recheck lanes. Resolves 'success' or
-   * 'reverted' for a mined transaction, and undefined when the receipt cannot
-   * be obtained (lookup threw, client cannot look receipts up, the tx is not
-   * mined yet, or the receipt carries a status string the kit does not
-   * recognize — an unrecognized value is an unknown outcome, not evidence of
-   * a revert) — "unavailable" is not provable absence, so callers must NOT
-   * rebroadcast on it.
-   */
   private async lookupBroadcastReceipt(
     config: NormalizedSubmitConfig,
     txHash: Hex,
@@ -1474,20 +1088,6 @@ export class StateMachineWatcher {
     return receipt.status === 'success' ? 'success' : undefined;
   }
 
-  /**
-   * Replay guard for retryable broadcast failures: consult the receipt of the
-   * already-broadcast transaction before any rebroadcast.
-   *
-   * - receipt mined with status success: returns a confirmed submission result
-   *   built from the recovered tx, so no second transaction is sent;
-   * - receipt mined with status 'reverted': the broadcast definitively
-   *   reverted, so rebroadcasting is pointless — throws the same
-   *   non-retryable receipt error as the direct receipt path;
-   * - receipt unavailable (or carrying an unrecognized status): returns
-   *   undefined. "Unavailable" is not provable absence, so callers must NOT
-   *   rebroadcast on it — the in-run retry defers the signal and later scans
-   *   re-check this receipt (under the resend backoff) until it resolves.
-   */
   private async recoverBroadcastSubmission(
     config: NormalizedSubmitConfig,
     signal: StateMachineSignal,
@@ -1515,17 +1115,6 @@ export class StateMachineWatcher {
     };
   }
 
-  /**
-   * Cursor block-hash continuity check plus bounded rollback, mirroring the
-   * chain-services indexer defenses. The stored hash anchors the last scanned
-   * height; a mismatch against the canonical chain means a reorg slipped past
-   * the finality buffer. The remembered checkpoints inside the reorg window
-   * are walked newest-first for the common ancestor, and the scan position is
-   * rolled back to it so the affected range is rescanned (job idempotency
-   * absorbs the overlap; on-chain idempotency keys absorb any rebroadcast).
-   * A reorg deeper than the window falls back to a full rescan from the
-   * configured floor instead of trusting a cursor that has provably diverged.
-   */
   private async enforceCursorContinuity(
     client: StateMachinePublicClient,
     fromBlock: bigint,
@@ -1565,21 +1154,6 @@ export class StateMachineWatcher {
     return rescanFloor;
   }
 
-  /**
-   * Later-scan pass over open jobs whose blocks are already behind the scan
-   * cursor: `detected` jobs stranded by a crash between detection and
-   * processing, `submitted` jobs whose broadcast was never confirmed, and
-   * `matched` jobs stranded by a crash between the claim and the conclusive
-   * status write — their claim holder is dead, so no run is in flight.
-   * README watcher semantics promise these are replayed/rechecked on later
-   * scans; without this pass the cursor moving past their block made that
-   * promise unreachable (handleLog only ever ran for logs inside the current
-   * poll window or via manual retry). A live claim keeps the job out: that
-   * run is in flight right now. Cost is bounded: handleLog resolves the
-   * receipt of an unconfirmed broadcast before anything else and the resend
-   * backoff throttles rebroadcasts. The listing here doubles as the per-round
-   * observation for stuck foreign claims (see trackHeldForeignClaims).
-   */
   private async revisitOpenJobs(
     fromBlock: bigint,
     scannedEventIds: ReadonlySet<Hex>,
@@ -1596,19 +1170,12 @@ export class StateMachineWatcher {
         return false;
       }
       if (job.raw.blockNumber !== undefined && job.raw.blockNumber !== null && job.raw.blockNumber >= fromBlock) {
-        // Inside (or ahead of) this round's window: the scan loop itself owns
-        // it this round, so the pass must not double-process it.
         return false;
       }
       if (scannedEventIds.has(job.eventId)) {
-        // Same ownership rule for raws the height comparison cannot place: a
-        // log without a block number that this round's scan loop already
-        // handled would otherwise be re-run within the same round.
         return false;
       }
       if (job.stateMachineAddress && !watched.has(normalizeAddress(job.stateMachineAddress, 'job.stateMachineAddress'))) {
-        // Belongs to a state machine this watcher no longer scans; its signals
-        // are not this deployment's to submit.
         return false;
       }
       return true;
@@ -1623,15 +1190,6 @@ export class StateMachineWatcher {
     return results;
   }
 
-  /**
-   * One observation per poll round (this pass lists every job each round) of
-   * which jobs are stuck behind a foreign claim that reads alive. A claim held
-   * by this process is its own in-flight run; a foreign pid that is dead is
-   * takeover-eligible and needs no alert — only the live-looking foreign
-   * claim is ambiguous, and after HELD_FOREIGN_CLAIM_ALERT_ROUNDS consecutive
-   * rounds it is reported once per hold streak with the manual override that
-   * can break it.
-   */
   private trackHeldForeignClaims(jobs: readonly StateMachineWatcherJob[]): void {
     for (const job of jobs) {
       const claim = job.claim;
@@ -1655,26 +1213,13 @@ export class StateMachineWatcher {
     }
   }
 
-  /**
-   * Record-and-skip path for HookReady-topic logs that fail to decode.
-   *
-   * The decision is persisted in the job store (as a terminal `ignored` job with
-   * sentinel ids and the raw log preserved for inspection) whenever the log has
-   * enough identity to derive an event id, reported through `onError`, and
-   * counted in poll results and `describe()`. It never throws: mixed-version
-   * deployments degrade to "these logs are skipped", not a crashed watcher.
-   */
   private async isolateUndecodableLog(log: StateMachineRawLog, error: unknown): Promise<StateMachineLogProcessResult> {
     const classified = classifyExecutorKitError(error, 'validation_failure');
     this.decodeFailuresTotal += 1;
-    // onError is the kit's log/metric channel for degraded conditions; the CLI
-    // wires it to stderr so operators see every skipped log.
     this.config.onError?.(error instanceof Error ? error : new Error(classified.message));
 
     const eventId = tryHookReadyEventId(log);
     if (!eventId) {
-      // The log cannot be identified (missing or invalid transactionHash/logIndex),
-      // so there is nothing to persist; skipping it still lets the round advance.
       return {
         status: 'ignored',
         submissions: [],
@@ -1689,9 +1234,6 @@ export class StateMachineWatcher {
       type: 'HookReady',
       eventId,
       ...(stateMachineAddress ? { stateMachineAddress } : {}),
-      // Sentinel ids: the real ids are unrecoverable from the undecodable log.
-      // The event id (derived from transactionHash+logIndex) keeps job ids unique
-      // per log, so distinct undecodable logs never collapse into one job.
       planId: ZERO_BYTES32,
       orderId: ZERO_BYTES32,
       hookId: ZERO_BYTES32,
@@ -1768,10 +1310,6 @@ function normalizeStateMachineWatcherConfig(config: StateMachineWatcherConfig): 
     ? parseNonNegativeSafeInteger(asNumberOrString(config.confirmations, 'confirmations'), 'confirmations')
     : undefined;
   if (runtimeEnvironment !== undefined && runtimeEnvironment !== 'local') {
-    // Same caliber as chain-services env.ts: outside local the finality buffer
-    // must be an explicit positive integer. The silent default 1 (and the
-    // explicit 0 tip-scanning opt-in) are local throwaway-chain conveniences
-    // that must not leak into shared environments.
     if (confirmations === undefined) {
       throw new ValidationError(
         `confirmations must be explicitly configured when runtimeEnvironment is ${runtimeEnvironment}:`
@@ -1872,10 +1410,6 @@ export function normalizeStateMachineDeploymentConfig(
   };
 }
 
-/**
- * Event ids of this round's scanned HookReady logs (the same derivation the
- * job store keys detections on, for both decodable and undecodable logs).
- */
 function scannedHookReadyEventIds(logs: readonly StateMachineRawLog[]): Set<Hex> {
   const eventIds = new Set<Hex>();
   for (const log of logs) {
@@ -1890,11 +1424,6 @@ function scannedHookReadyEventIds(logs: readonly StateMachineRawLog[]): Set<Hex>
   return eventIds;
 }
 
-/**
- * Poll delay after consecutive failures: exponential from the base interval,
- * capped at POLL_FAILURE_BACKOFF_MULTIPLIER_CAP so a long RPC outage slows the
- * watcher down instead of aborting it or flooding the dead endpoint.
- */
 function pollFailureDelayMs(pollIntervalMs: number, consecutiveFailures: number): number {
   const exponent = Math.min(Math.max(consecutiveFailures - 1, 0), 3);
   return pollIntervalMs * Math.min(2 ** exponent, POLL_FAILURE_BACKOFF_MULTIPLIER_CAP);

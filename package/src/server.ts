@@ -14,13 +14,11 @@ export const DEFAULT_EXECUTOR_TOKEN_ENV = 'UVP_EXECUTOR_TOKEN';
 export const DEFAULT_CALLBACK_TOKEN_ENV = 'UVP_CALLBACK_TOKEN';
 export const DEFAULT_CALLBACK_HMAC_SECRET_ENV = 'UVP_CALLBACK_HMAC_SECRET';
 export const DEFAULT_CALLBACK_HOST_ALLOWLIST_ENV = 'UVP_EXECUTOR_CALLBACK_HOST_ALLOWLIST';
-/** Bounded in-process callback delivery retries before a job lands in callback_failed. */
 export const DEFAULT_CALLBACK_MAX_ATTEMPTS = 3;
 export const DEFAULT_CALLBACK_RETRY_BASE_DELAY_MS = 250;
 export const WEBHOOK_SIGNATURE_HEADER = 'x-uvp-webhook-signature';
 export const WEBHOOK_TIMESTAMP_HEADER = 'x-uvp-webhook-timestamp';
 export const WEBHOOK_NONCE_HEADER = 'x-uvp-webhook-nonce';
-/** Acceptance window for the webhook timestamp; outside it a captured request cannot be verified. */
 export const DEFAULT_WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60_000;
 const DEFAULT_WEBHOOK_REPLAY_MAX_NONCES = 10_000;
 
@@ -48,11 +46,6 @@ export interface ExecutorDispatchRequest {
 
 export type ExecutorJobStatus = 'accepted' | 'callback_succeeded' | 'callback_failed' | 'handler_failed';
 
-/**
- * Truthful per-signal callback delivery record: which signals were delivered,
- * how many attempts each took, and the terminal error when delivery was
- * abandoned after exhausting the bounded retries.
- */
 export interface ExecutorCallbackDelivery {
   readonly signalIndex: number;
   readonly delivered: boolean;
@@ -73,11 +66,6 @@ export interface ExecutorJob {
 }
 
 export interface ExecutorJobStore {
-  /**
-   * Conditional insert: resolves false when a job with the same id already
-   * exists. The check and the write are one atomic operation so concurrent
-   * duplicate dispatches cannot both pass a read-then-create sequence.
-   */
   create(job: ExecutorJob): Promise<boolean>;
   update(
     jobId: string,
@@ -92,7 +80,6 @@ export interface ExecutorServerOptions {
   readonly handlers: Readonly<Record<string, RuntimeExecutorHandler>>;
   readonly executorToken: string;
   readonly callbackToken: string;
-  /** Optional shared secret for signing outbound callback bodies. */
   readonly callbackHmacSecret?: string;
   readonly host?: string;
   readonly port?: number;
@@ -100,7 +87,6 @@ export interface ExecutorServerOptions {
   readonly now?: () => string;
   readonly jobStore?: ExecutorJobStore;
   readonly callbackHostAllowlist?: readonly string[];
-  /** Bounded in-process retry policy for callback POST failures. */
   readonly callbackRetry?: {
     readonly maxAttempts?: number | string;
     readonly baseDelayMs?: number | string;
@@ -190,12 +176,6 @@ export function createHandlersFromExecutorConfig(config: ExecutorConfig): Readon
         stageIdentifier: handler.stageIdentifier,
         signalName: handler.signalName,
         senderId: handler.senderId ?? config.executorId,
-        // Same caliber as the watcher's fixed default (watcher.ts): the key
-        // carries the logical signal dimensions (order, source, signal). The
-        // emitting HookReady event anchor (eventId) is deliberately absent —
-        // a fresh key per event anchor turns a re-emitted HookReady into a
-        // guaranteed-reverting duplicate broadcast on chain, the exact defect
-        // the watcher lane already fixed.
         idempotencyKey: handler.idempotencyKey
           ?? ((effect) => `${effect.orderId}:${handler.source}:${handler.signalName}`),
         ...(handler.traceId ? { traceId: handler.traceId } : {}),
@@ -214,9 +194,6 @@ export async function startExecutorServer(options: ExecutorServerOptions): Promi
   const callbackHmacSecret = options.callbackHmacSecret?.trim() || undefined;
   const callbackHostAllowlist = options.callbackHostAllowlist ?? parseCallbackHostAllowlist(process.env[DEFAULT_CALLBACK_HOST_ALLOWLIST_ENV]);
   if (callbackHostAllowlist.length === 0) {
-    // Default deny: an implicit "loopback allowed" for an empty allowlist would
-    // let any dispatcher turn the executor into a probe proxy for the host's
-    // local services with the response readable back through the jobs API.
     throw new ValidationError(
       `callback host allowlist is empty: set ${DEFAULT_CALLBACK_HOST_ALLOWLIST_ENV}`
       + ' (comma-separated hosts, loopback included) or pass callbackHostAllowlist;'
@@ -356,13 +333,9 @@ async function processDispatch(
       return;
     }
 
-    // Validate once up front so a rejected callback URL fails fast instead of
-    // being retried; per-signal failures below are delivery failures.
     assertCallbackUrlAllowed(dispatch.callbackUrl, context.callbackHostAllowlist);
 
     const signals = result.signals ?? [];
-    // Each signal is retried independently and recorded truthfully: a partial
-    // failure must never erase the fact that earlier signals were delivered.
     const deliveries: ExecutorCallbackDelivery[] = [];
     for (const [signalIndex, signal] of signals.entries()) {
       deliveries.push(await deliverSignalCallback(context, dispatch.callbackUrl, signal, signalIndex));
@@ -379,10 +352,6 @@ async function processDispatch(
       } : {}),
     });
   } catch (error) {
-    // This catch is the last line of defense for a detached run
-    // (queueMicrotask + void: no caller is left to observe a rejection), so
-    // its own failure write must stay contained — a store fault here would
-    // otherwise escape as an unhandledRejection and take the process down.
     try {
       await context.jobStore.update(job.id, {
         status: 'callback_failed',
@@ -399,12 +368,6 @@ async function processDispatch(
   }
 }
 
-/**
- * POST one signal callback with bounded in-process retries (exponential
- * backoff starting at the configured base delay). Returns the truthful
- * delivery record; only after all attempts are exhausted is the failure
- * reported (with an error log) back to the caller.
- */
 async function deliverSignalCallback(
   context: Pick<ExecutorRequestContext, 'fetchImpl' | 'callbackToken' | 'callbackHmacSecret' | 'callbackHostAllowlist' | 'callbackMaxAttempts' | 'callbackRetryBaseDelayMs'>,
   callbackUrl: string,
@@ -440,9 +403,6 @@ async function postSignalCallback(
   const body = JSON.stringify({ signal });
   const response = await fetchImpl(callbackUrl, {
     method: 'POST',
-    // Never let fetch follow a redirect: the Authorization bearer (and the
-    // webhook signature header) would be replayed to whatever host the
-    // callback endpoint points at. A 3xx is a delivery failure, full stop.
     redirect: 'manual',
     headers: {
       'authorization': `Bearer ${callbackToken}`,
@@ -452,29 +412,13 @@ async function postSignalCallback(
     body,
   });
   if (!response.ok) {
-    // Includes every 3xx (and the status-0 opaqueredirect response a manual
-    // redirect policy yields): a redirecting callback endpoint failed. The
-    // body echo is bounded because it lands in the job record the jobs API
-    // reads back — the delivery error must not become an unbounded read
-    // channel for whatever the callback endpoint returned.
     const body = (await response.text()).slice(0, 512);
     throw new Error(`callback endpoint failed with ${response.status}: ${body}`);
   }
 }
 
-/**
- * Timestamp+nonce authenticated HMAC for outbound webhook callbacks.
- *
- * A bare HMAC over the body is replayable forever: capturing (body, signature)
- * is enough to re-deliver the callback at any later time. The MAC therefore
- * covers `timestamp.nonce.body`, the timestamp is rejected outside the
- * acceptance window, and the nonce is single-use per window via the replay
- * guard — a captured request dies with the window.
- */
 export interface WebhookSignatureFields {
-  /** Unix timestamp in seconds, sent as the timestamp header. */
   readonly timestamp: string;
-  /** Random hex nonce, sent as the nonce header. */
   readonly nonce: string;
 }
 
@@ -500,23 +444,12 @@ function webhookSignedPayload(body: string | Uint8Array, fields: WebhookSignatur
 }
 
 export interface VerifyWebhookSignatureOptions {
-  /** Value of the `x-uvp-webhook-timestamp` header (unix seconds). */
   readonly timestamp?: string;
-  /** Value of the `x-uvp-webhook-nonce` header. */
   readonly nonce?: string;
   readonly nowMs?: () => number;
   readonly toleranceMs?: number;
 }
 
-/**
- * Verify the `x-uvp-webhook-signature` value over the exact raw request body
- * together with its timestamp and nonce headers. Receivers should call this
- * before parsing JSON and reject false, malformed, missing, or stale
- * signatures. Constant-time comparison prevents timing leaks.
- *
- * Fail-closed on absent timestamp/nonce: a body-only signature is exactly
- * the permanently replayable shape this scheme exists to kill.
- */
 export function verifyWebhookSignature(
   body: string | Uint8Array,
   signature: string | undefined,
@@ -544,10 +477,6 @@ export function verifyWebhookSignature(
 }
 
 export interface WebhookReplayGuard {
-  /**
-   * Record a nonce sighting. Resolves false when the same nonce was already
-   * seen inside the acceptance window — the request is a replay.
-   */
   observe(nonce: string, timestampMs: number, nowMs?: number): boolean;
 }
 
@@ -567,12 +496,6 @@ export function createWebhookReplayGuard(options: {
       seen.delete(nonce);
       seen.set(nonce, timestampMs);
       if (seen.size > maxTrackedNonces) {
-        // A nonce dies with the acceptance window (the same tolerance that
-        // verifyWebhookSignature enforces — outside it the signature itself
-        // no longer verifies, so the entry can never matter again). Evict
-        // expired entries before any live one: stale entries must not hold
-        // tracked capacity and push unconsumed signed callbacks out of the
-        // guard while their window is still live.
         for (const [trackedNonce, observedMs] of seen) {
           if (seen.size <= maxTrackedNonces) {
             break;
@@ -711,8 +634,6 @@ export function assertCallbackUrlAllowed(callbackUrl: string, allowlist: readonl
     throw new ValidationError(`callbackUrl scheme must be http or https, got ${url.protocol}`);
   }
   const hostname = normalizeCallbackHost(url.hostname);
-  // Explicit allowlist only — loopback included. The executor must never be a
-  // default-open proxy into the host's local services.
   if (allowlist.includes(hostname)) {
     return;
   }

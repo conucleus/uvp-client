@@ -16,17 +16,10 @@ export interface ChainWatchOptions {
   fromBlock?: string;
   pollIntervalMs?: string;
   confirmations?: string;
-  /** Declared runtime environment; non-local values make --confirmations mandatory (no silent default 1). */
   runtimeEnv?: string;
   reorgWindow?: string;
-  /**
-   * `--max-get-logs-block-span`: commander camelCases the flag into this
-   * field, which must feed the watcher's `getLogsBlockSpan` config — any other
-   * field name silently drops the operator's value.
-   */
   maxGetLogsBlockSpan?: string;
   jobsFile?: string;
-  /** file (default) persists jobs and the scan cursor under --state-dir; memory keeps jobs and cursor in process memory. */
   jobStore?: string;
   stateDir?: string;
   dryRun?: boolean;
@@ -148,7 +141,6 @@ export interface JobsRetryOptions extends ChainWatchOptions {
 export interface JobsDeadLetterOptions extends JobsFileOptions {
   operator: string;
   reason: string;
-  /** Override a run claim that reads alive (pid-reuse deadlock unlock). */
   force?: boolean;
 }
 
@@ -191,7 +183,6 @@ export function parsePort(value: string): number {
   return port;
 }
 
-/** confirmations allows 0 (tip scanning for throwaway local chains). */
 export function parseNonNegativeIntegerOption(value: string, fieldName: string): number {
   if (!/^(0|[1-9][0-9]*)$/.test(value)) {
     throw new ValidationError(`${fieldName} must be a non-negative integer`);

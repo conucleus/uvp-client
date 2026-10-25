@@ -51,8 +51,6 @@ export class FileStateMachineJobStore implements StateMachineJobStore {
         eventId: event.eventId,
         ...(event.stateMachineAddress ? { stateMachineAddress: event.stateMachineAddress } : {}),
         orderId: event.orderId,
-        // See the in-memory store: the event planId must be persisted at detection
-        // so retries can resubmit the plan-scoped submitSignal ABI.
         ...(event.planId && event.planId !== ZERO_BYTES32 ? { planId: event.planId } : {}),
         hookId: event.hookId,
         stageId: event.stageId,
@@ -122,9 +120,6 @@ async function readStateMachineJobsFile(filePath: string): Promise<Map<Hex, Stat
   try {
     return parseStateMachineJobsFile(raw);
   } catch (error) {
-    // Quarantine-and-recover instead of throwing forever: an untreated
-    // truncated write poisons every later read and aborts the watch loop
-    // permanently.
     await quarantineCorruptStateFile(filePath, raw, error, 'jobs');
     return new Map();
   }
@@ -147,11 +142,6 @@ function parseStateMachineJobsFile(raw: string): Map<Hex, StateMachineWatcherJob
   }));
 }
 
-/**
- * Whole-file persistence must be tmp+rename: a plain writeFile that crashes
- * mid-write leaves a truncated file whose every later parse throws and
- * eventually aborts the watch loop.
- */
 export async function writeStateFileAtomically(filePath: string, contents: string): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
@@ -164,20 +154,11 @@ export async function writeStateFileAtomically(filePath: string, contents: strin
   }
 }
 
-/**
- * Keep the damaged bytes instead of deleting them silently: the operator can
- * still inspect the quarantined file while the process recovers with empty
- * state.
- */
 export async function quarantineCorruptStateFile(filePath: string, raw: string, error: unknown, kind: 'jobs' | 'cursor'): Promise<void> {
   const quarantinePath = `${filePath}.corrupt-${new Date().toISOString().replaceAll(/[:.]/g, '')}`;
   try {
     await rename(filePath, quarantinePath);
   } catch (renameError) {
-    // Recovery still proceeds (the caller starts from empty state), but the
-    // damaged file not moving aside is not a silent condition: it stays in the
-    // read path, so every later read re-trips the same parse failure until a
-    // successful write replaces the file.
     console.error(
       `executor-kit: ${kind} state file ${filePath} was unreadable (${error instanceof Error ? error.message : String(error)})`
       + ` and moving it aside to ${quarantinePath} failed too (${renameError instanceof Error ? renameError.message : String(renameError)});`

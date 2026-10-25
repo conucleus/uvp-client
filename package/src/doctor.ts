@@ -16,12 +16,6 @@ import {
 import { classifyExecutorKitError } from './errors.js';
 import { ValidationError, normalizeAddress, normalizeAddressChecksummed } from './validation.js';
 
-/**
- * Deadline for the reachability probe. A probe only needs the server to
- * answer, not to finish work, so it takes the periphery doctor's 10s budget
- * instead of the 60s prepare/submit budget: a hung base URL must fail the
- * check instead of pinning the CLI for a full request budget.
- */
 const PRODUCT_DOCTOR_REACHABILITY_TIMEOUT_MS = 10_000;
 
 export interface ProductDoctorInput extends ProductApiClientOptions {
@@ -49,7 +43,6 @@ export interface TaskReadinessResult {
   readonly canSubmit: boolean;
   readonly blockedReason?: string;
   readonly assigneeMatch: boolean;
-  /** True when no wallet address was supplied, so assignee ownership was not (and cannot be) verified. */
   readonly assigneeUnverified?: boolean;
   readonly configuredWallet: string;
   readonly taskAssignee?: string;
@@ -162,15 +155,10 @@ async function checkReachability(
     if (input.principalId && input.principalId.trim().length > 0) {
       headers['x-uvp-principal-id'] = input.principalId.trim();
     }
-    // Same redirect discipline as the product transport: the reachability
-    // probe carries the Authorization bearer from --auth-token-env and must
-    // never follow a 3xx that would replay it to another host.
     const response = await fetchFn(url, {
       method: 'GET',
       headers,
       redirect: 'manual',
-      // An explicit requestTimeoutMs wins so the same bounded-deadline
-      // contract is observable under test with a short budget.
       signal: AbortSignal.timeout(
         input.requestTimeoutMs === undefined
           ? PRODUCT_DOCTOR_REACHABILITY_TIMEOUT_MS
@@ -179,8 +167,6 @@ async function checkReachability(
     });
     const latencyMs = Date.now() - started;
     if (isProductApiRedirectStatus(response.status)) {
-      // Every 3xx (and the status-0 opaqueredirect response a manual redirect
-      // policy yields) is a failed probe, not a reachable API.
       return {
         ok: false,
         label: 'reachability',
@@ -289,10 +275,6 @@ async function checkTaskReadiness(
     const summary = summarizeSignalContainer(rawTask);
     const latencyMs = Date.now() - started;
 
-    // assigneeMatch is a verdict about evidence, not a default: true only when
-    // a wallet was supplied AND it matches the task assignee. Without a
-    // wallet, ownership was simply not checked — surfaced through
-    // assigneeUnverified instead of silently claiming a match.
     const assigneeUnverified = walletAddress === undefined;
     const assigneeMatch = walletAddress !== undefined && summary.assigneeWallet !== undefined
       ? normalizeAddress(summary.assigneeWallet, 'task.assigneeWallet') === normalizeAddress(walletAddress, 'walletAddress')
@@ -300,23 +282,12 @@ async function checkTaskReadiness(
     const now = new Date();
     const deadlineMs = parseTaskDeadlineMs(summary.deadline);
     const deadlineExpired = deadlineMs !== undefined ? deadlineMs <= now.getTime() : undefined;
-    // The server's canSubmit is the authoritative verdict. The locally
-    // computed deadline (and local clock) is display-only: a skew or timezone
-    // slip on this machine must not overturn the server's conclusion.
     const canSubmit = summary.canSubmit === true && (assigneeMatch || assigneeUnverified);
     const blockedReason = summary.canSubmit === false ? (summary.blockedReason ?? 'Submission not available') : undefined;
 
     let nextAction: TaskReadinessResult['nextAction'] = 'blocked';
     let nextActionLabel = 'This task is not ready for action.';
 
-    // Product's frozen TaskStatus vocabulary is open|submitted|blocked
-    // (ProductTaskDTO in @uvp-eth/product-dto; the /product/tasks endpoints
-    // return it verbatim). `submitted` is the executor-side terminal state:
-    // on-chain confirmation never flows back as a new task status (it lives
-    // in the submission receipt and the chain projection), so a submitted
-    // task is complete pending proof, while any status outside the
-    // vocabulary surfaces as not-ready instead of silently counting as
-    // complete.
     const taskComplete = summary.status === 'submitted';
     if (taskComplete) {
       nextAction = 'proof';
@@ -327,17 +298,10 @@ async function checkTaskReadiness(
         ? 'Ready to prepare, but assignee ownership was NOT verified (no wallet address configured). Run product prepare to build the signal container.'
         : 'Ready to prepare. Run product prepare to build the signal container.';
     } else if (blockedReason) {
-      // The server's own blockedReason wins the action guidance. The locally
-      // computed deadline is display context only (deadlineExpired above): a
-      // skewed local clock must not mask the server's stated conclusion with
-      // a fabricated "deadline expired" verdict.
       nextAction = 'wait';
       nextActionLabel = blockedReason;
     } else if (deadlineExpired) {
       nextAction = 'blocked';
-      // Display-only framing: no server verdict exists to contradict, so the
-      // local expiry may guide the operator, but the copy says where it came
-      // from (the local clock) instead of asserting it as an authority.
       nextActionLabel = 'Local clock shows the deadline has passed (display-only; no server verdict was provided).';
     } else if (walletAddress && !assigneeMatch) {
       nextAction = 'blocked';
@@ -347,10 +311,6 @@ async function checkTaskReadiness(
       nextActionLabel = 'Task is not yet ready for submission. Check the blocked reason.';
     }
 
-    // One readiness verdict drives both the outer check and the embedded
-    // readiness copy: the embedded check.ok must equal readiness.ok so
-    // consumers that only look at the nested check cannot miss a failure.
-    // The terminal `submitted` state is part of that verdict.
     const readinessOk = canSubmit || taskComplete;
     const readinessCheck = {
       ok: readinessOk,
@@ -385,7 +345,6 @@ async function checkTaskReadiness(
     };
   } catch (error) {
     const classified = classifyExecutorKitError(error, 'unknown');
-    // No synthesized placeholder task/readiness data: the report only carries the failed check.
     return {
       check: {
         ok: false,
@@ -409,12 +368,6 @@ function normalizeProbeTimeoutMs(value: number | string): number {
   return parsed;
 }
 
-/**
- * Deadline timestamp in ms. Naive strings (no offset designator) are parsed as
- * UTC: a local-timezone parse made the displayed expiry depend on the
- * operator's machine. An unparseable value yields undefined (unknown) instead
- * of fabricating a verdict from NaN comparisons.
- */
 function parseTaskDeadlineMs(value: string | undefined): number | undefined {
   if (!value || value.trim().length === 0) {
     return undefined;

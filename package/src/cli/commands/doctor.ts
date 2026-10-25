@@ -18,9 +18,6 @@ export function registerDoctorCommand(program: Command): void {
     .option('--verbose', 'include raw Product API payloads in checks')
     .action(async (options: DoctorOptions) => {
       if (options.taskId && !options.walletAddress) {
-        // The option help says --wallet-address is required with --task-id, and
-        // the readiness verdict is a lie without it: assignee ownership cannot
-        // be checked at all. Enforce instead of printing "Ready to prepare".
         throw new ValidationError('--task-id requires --wallet-address so per-task readiness can verify assignee ownership');
       }
       const report = await runProductDoctor({

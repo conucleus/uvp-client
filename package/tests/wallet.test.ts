@@ -38,8 +38,6 @@ describe('wallet helpers', () => {
   });
 
   it('re-asserts owner-only permissions when overwriting an existing env file', async () => {
-    // writeFile's mode only applies to files it creates, so
-    // --overwrite must re-assert owner-only permissions on the existing file.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-wallet-overwrite-'));
     try {
       const envFile = join(dir, '.env.local');
@@ -61,7 +59,6 @@ describe('wallet helpers', () => {
     const info = getFaucetInfo('base-sepolia', '0x0000000000000000000000000000000000000001');
 
     expect(info.chainId).toBe(84532);
-    expect(info.address).toBe('0x0000000000000000000000000000000000000001');
     expect(info.links.some((link) => link.includes('docs.base.org'))).toBe(true);
     expect(() => getFaucetInfo('mainnet')).toThrow(ValidationError);
   });

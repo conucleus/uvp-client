@@ -22,7 +22,6 @@ export interface StateMachineHookReady {
   readonly type: 'HookReady';
   readonly eventId: Hex;
   readonly stateMachineAddress?: Address;
-  /** 订单级事件全部 plan-scoped。 */
   readonly planId: Hex;
   readonly orderId: Hex;
   readonly hookId: Hex;
@@ -39,17 +38,7 @@ export interface StateMachineHookReady {
 export interface StateMachineArtifactIndex {
   readonly hooksByHookId?: Readonly<Record<string, StateMachineHookMetadata>>;
   readonly signals?: Readonly<Record<string, StateMachineSignalMetadata>>;
-  /**
-   * 阶段 selector 绑定表（plan 冻结能力词表的链下镜像）：内嵌进执行器
-   * 配置后，提交通道以该表解析事实属主阶段并现场造 attribution 证。
-   * 缺省（无表）按全零不声明提交。
-   */
   readonly selectorBindings?: readonly StageSelectorBindingTableEntry[];
-  /**
-   * 信号能力表（plan 冻结能力词表的链下镜像）：内嵌进执行器配置后，
-   * 提交通道用 protocol-bindings 的 factAttribution 现场造证。缺省
-   * （无表）按全零不声明提交。
-   */
   readonly signalCapabilities?: readonly SignalCapabilityTableEntry[];
 }
 
@@ -145,10 +134,6 @@ function normalizeLogIndex(value: number | bigint | null | undefined): bigint | 
   return BigInt(value);
 }
 
-/**
- * Best-effort event id for logs that failed to decode: returns undefined instead
- * of throwing when the log lacks a usable (transactionHash, logIndex) identity.
- */
 export function tryHookReadyEventId(log: StateMachineRawLog): Hex | undefined {
   try {
     return hookReadyEventId(log);

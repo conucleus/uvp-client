@@ -318,9 +318,6 @@ describe('executor CLI', () => {
     }
   });
   it('dead-letters a job stuck behind a live-looking claim only with --force', async () => {
-    // pid liveness cannot distinguish a live holder from a crashed one whose
-    // pid the OS reused; the CLI must refuse the silent override and expose
-    // the explicit escape hatch with the operator on record.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-jobs-force-'));
     const jobsFile = join(dir, 'jobs.json');
     const jobId = `0x${'aa'.repeat(32)}`;
@@ -384,8 +381,6 @@ describe('executor CLI', () => {
   });
 
   it('rejects chain-signal --payload-ref instead of silently dropping it', async () => {
-    // The frozen submitSignal ABI has no payloadRef field; before this guard the
-    // flag was parsed, discarded, and the command reported success anyway.
     await expect(main([
       'node',
       'uvp-executor',
@@ -401,7 +396,7 @@ describe('executor CLI', () => {
       '--plan-id',
       RETRY_PLAN_ID,
       '--source',
-      'buyer',
+      'slot-a',
       '--stage',
       'exec.main',
       '--signal-name',
@@ -417,12 +412,6 @@ describe('executor CLI', () => {
   });
 
   it('rejects --ready-event-id on chain-signal', async () => {
-    // The readyEventId explicit input surface is deleted:
-    // the off-chain HookReady anchor never participated in the chain identity
-    // or the default idempotency key, so the flag was dead input. Commander
-    // treats it as an unknown option and exits 1 (the CLI harness turns
-    // process.exit into a rejection) instead of accepting and silently
-    // dropping it.
     await expect(main([
       'node',
       'uvp-executor',
@@ -438,7 +427,7 @@ describe('executor CLI', () => {
       '--plan-id',
       RETRY_PLAN_ID,
       '--source',
-      'buyer',
+      'slot-a',
       '--stage',
       'exec.main',
       '--signal-name',
@@ -454,9 +443,6 @@ describe('executor CLI', () => {
 
 describe('honest execution exit codes', () => {
   it('rejects --state-machine alongside config stateMachines[] instead of silently ignoring the flag', async () => {
-    // With both present, config stateMachines[] silently overrode the flag
-    // for the scan set — the operator believed machine A was watched while
-    // only the config set was scanned, so coexistence is a hard error.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-flag-conflict-'));
     const configPath = join(dir, 'executor.json');
     try {
@@ -465,7 +451,7 @@ describe('honest execution exit codes', () => {
         chainId: 31_337,
         stateMachines: [{ stateMachineAddress: RETRY_STATE_MACHINE }],
         handlers: {
-          '*': { signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }] },
+          '*': { signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }] },
         },
       }));
 
@@ -484,8 +470,6 @@ describe('honest execution exit codes', () => {
 
   it('flags poll outcomes that carry errors or terminal failure states', () => {
     expect(chainPollExecutionFailed({ results: [{ status: 'handled', submissions: [] }] })).toBe(false);
-    // A foreign HookReady event (another supplier's hook on a shared chain) is
-    // a skip, not a run failure: a scan that only met these must exit 0.
     expect(chainPollExecutionFailed({
       results: [{
         status: 'ignored',
@@ -493,8 +477,6 @@ describe('honest execution exit codes', () => {
         error: { kind: 'missing_handler', message: 'no state machine handler', retryable: false },
       }],
     })).toBe(false);
-    // duplicate_signal is the chain's own dedupe fact for an already-delivered
-    // signal: a benign outcome that must not fail the scan exit code either.
     expect(chainPollExecutionFailed({
       results: [{
         status: 'ignored',
@@ -502,7 +484,6 @@ describe('honest execution exit codes', () => {
         error: { kind: 'duplicate_signal', message: 'SignalAlreadyExists()', retryable: false },
       }],
     })).toBe(false);
-    // Real submission failures still fail the scan.
     expect(chainPollExecutionFailed({
       results: [{
         status: 'handled',
@@ -560,7 +541,7 @@ describe('honest execution exit codes', () => {
         },
         handlers: {
           '*': {
-            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }],
           },
         },
       }));
@@ -620,8 +601,6 @@ describe('honest execution exit codes', () => {
           raw: RETRY_RAW_LOG,
         }],
       }));
-      // No handler matches exec.main#START: the outcome carries an error and
-      // the job is ignored — the process must not pretend this succeeded.
       await writeFile(configPath, JSON.stringify({
         supplierId: 'role-a',
         walletAddress: RETRY_WALLET,
@@ -634,7 +613,7 @@ describe('honest execution exit codes', () => {
         },
         handlers: {
           'nomatch.stage#X': {
-            signals: [{ source: 'buyer', stageIdentifier: 'nomatch.stage', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'nomatch.stage', signalName: 'cmp' }],
           },
         },
       }));
@@ -666,8 +645,6 @@ describe('honest execution exit codes', () => {
   });
 
   it('exits non-zero with an explicit notice when a concurrent executor beats the retry to the claim (skipped)', async () => {
-    // 重开 CAS 与运行认领之间被并发执行器抢先时，结果是 skipped：重跑没有
-    // 发生，退出码 0 会让脚本把"未执行"读成"已成功"。
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-exit-skipped-'));
     const jobsFile = join(dir, 'jobs.json');
     const configPath = join(dir, 'executor.json');
@@ -688,7 +665,6 @@ describe('honest execution exit codes', () => {
       async function (this: FileStateMachineJobStore, jobId: Hex, patch: StateMachineJobPatch) {
         const applied = await originalUpdate.call(this, jobId, patch);
         if (patch.status === 'detected' && patch.claim === null) {
-          // 模拟并发执行器：重开写刚落地即认领（同 pid 读作存活 → busy）。
           return await originalUpdate.call(this, jobId, {
             updatedAt: patch.updatedAt,
             claim: { pid: process.pid, at: patch.updatedAt },
@@ -730,7 +706,7 @@ describe('honest execution exit codes', () => {
         },
         handlers: {
           '*': {
-            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }],
           },
         },
       }));
@@ -761,9 +737,6 @@ describe('honest execution exit codes', () => {
   });
 
   it('registers --runtime-env/--confirmations on jobs retry and enforces the shared finality gate', async () => {
-    // jobs retry 与 chain-* 共用同一 watcher 构造：这两个旗标不在 retry 入口
-    // 注册时，重试要么被拒为未知旗标，要么静默丢失执行参数并绕过非 local
-    // finality 强检。
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-retry-flags-'));
     const jobsFile = join(dir, 'jobs.json');
     const configPath = join(dir, 'executor.json');
@@ -809,7 +782,7 @@ describe('honest execution exit codes', () => {
         },
         handlers: {
           '*': {
-            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }],
           },
         },
       }));
@@ -827,11 +800,9 @@ describe('honest execution exit codes', () => {
         ...extra,
       ];
 
-      // 非 local 运行环境未显式给 finality 缓冲：与 chain-* 同一条强检拒绝。
       await expect(main(retryArgv(['--runtime-env', 'staging'])))
         .rejects.toThrow(/confirmations must be explicitly configured/);
 
-      // 显式补齐后同一入口照常重投，参数真实进入 watcher 构造。
       await main(retryArgv(['--runtime-env', 'staging', '--confirmations', '3']));
       const output = JSON.parse(logs[0] ?? '{}') as { retry?: { status?: string; job?: { status?: string } } };
       expect(output.retry?.status).toBe('handled');
@@ -924,7 +895,7 @@ describe('watcher state storage', () => {
         },
         handlers: {
           '*': {
-            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }],
           },
         },
       }));
@@ -940,8 +911,6 @@ describe('watcher state storage', () => {
         ...extra,
       ];
 
-      // First run (head at block 13): the finality buffer holds the scan one
-      // block back, so 10..12 is scanned and cursor 13 persists.
       await main(argv());
       const firstRun = JSON.parse(logs[0] ?? '{}') as {
         watcher?: { nextBlock?: string; cursorStore?: string; jobStore?: string };
@@ -958,9 +927,6 @@ describe('watcher state storage', () => {
       expect(firstRun.watcher?.jobStore).toBe('file');
       expect(firstRun.watcher?.nextBlock).toBe('13');
       expect(firstRun.poll?.fromBlock).toBe('10');
-      // The config-only handler carries no planId and needs none: the planId
-      // decoded from the HookReady event feeds the submission, so the dry-run
-      // scan succeeds and exits 0.
       expect(process.exitCode).toBeUndefined();
 
       const storedCursor = JSON.parse(
@@ -983,12 +949,9 @@ describe('watcher state storage', () => {
       expect(storedJobs.jobs).toHaveLength(1);
       expect(storedJobs.jobs?.[0]?.status).toBe('matched');
       expect(storedJobs.jobs?.[0]?.lastError).toBeUndefined();
-      // The event planId is persisted on the job and leads the submitSignal args.
       expect(storedJobs.jobs?.[0]?.planId).toBe(RETRY_PLAN_ID);
       expect(storedJobs.jobs?.[0]?.submissions?.[0]?.request?.args?.[0]).toBe(RETRY_PLAN_ID);
 
-      // Restart (new process, head advanced to 15): resumes from the persisted
-      // cursor at block 13; the confirmed 10..12 range is not rescanned.
       logs.length = 0;
       stub.setHeadBlock('0xf');
       await main(argv());
@@ -1043,7 +1006,7 @@ describe('watcher state storage', () => {
         },
         handlers: {
           '*': {
-            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }],
           },
         },
       }));
@@ -1068,11 +1031,8 @@ describe('watcher state storage', () => {
       expect(run.storage).toEqual({ mode: 'memory' });
       expect(run.watcher?.cursorStore).toBe('memory');
       expect(run.watcher?.jobStore).toBe('memory');
-      await expect(readFile(join(stateDir, 'cursor.json'), 'utf8')).rejects.toThrow();
-      await expect(readFile(join(stateDir, 'jobs.json'), 'utf8')).rejects.toThrow();
-      // The dry-run submission takes its planId from the event and succeeds, so
-      // the run exits 0; the point here is that nothing was written to the
-      // state dir.
+      await expect(readFile(join(stateDir, 'cursor.json'), 'utf8')).rejects.toThrow(/ENOENT/);
+      await expect(readFile(join(stateDir, 'jobs.json'), 'utf8')).rejects.toThrow(/ENOENT/);
       expect(process.exitCode).toBeUndefined();
     } finally {
       stub.close();
@@ -1083,10 +1043,6 @@ describe('watcher state storage', () => {
   });
 
   it('passes --max-get-logs-block-span through to the watcher scan chunking', async () => {
-    // The flag must reach the watcher's getLogsBlockSpan config: a mismatched
-    // CLI field name left it silently dropped, so every run chunked at the
-    // default 9999 while describe() echoed the configured value — an operator
-    // capping provider query sizes was ignored without any signal.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-log-span-'));
     const configPath = join(dir, 'executor.json');
     const logs: string[] = [];
@@ -1111,13 +1067,11 @@ describe('watcher state storage', () => {
         },
         handlers: {
           '*': {
-            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }],
           },
         },
       }));
 
-      // Head 13 with the default 1-confirmation buffer scans 10..12; a span
-      // of 2 must split that range into two eth_getLogs calls instead of one.
       await main([
         'node', 'uvp-executor', 'chain-once',
         '--rpc-url', stub.url,
@@ -1147,17 +1101,11 @@ describe('watcher state storage', () => {
   });
 
   it('ships a bundled demo config that loads, defaults to real execution, and can actually match', async () => {
-    // the fixture must honor the documented real-execution default (no
-    // silent dryRun:true override) and key its handler through the artifact
-    // index — a stage#hookName text key never matches, and the demo must be
-    // able to actually submit.
     const config = await loadStateMachineHandlerConfig(
       new URL('../fixtures/state-machine-executor.config.json', import.meta.url).pathname,
     );
     expect(config.dryRun).toBeUndefined();
     expect(Object.keys(config.handlers)).toEqual(['*']);
-    // The bundled capability-vocabulary mirror survives config normalization:
-    // both table shapes stay loadable and feed on-the-fly proof derivation.
     expect(config.artifact?.signalCapabilities).toEqual([{
       stageId: '0x78031a308835b17e5b6df46f6c35320793bfe881d642607579223cce078be990',
       targetSourceId: '0x701be17d1f6581ca965b5e3e7e7f734c35574a65b3c87f991263bf0e069b5645',
@@ -1196,7 +1144,7 @@ describe('watcher state storage', () => {
         dryRun: true,
         handlers: {
           '*': {
-            signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }],
+            signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }],
           },
         },
       }));
@@ -1212,8 +1160,6 @@ describe('watcher state storage', () => {
         ...extra,
       ];
 
-      // Omitting the flag leaves the config dry-run active — but visibly.
-      // Head 11 keeps the 10..10 scan inside the chain (no overshoot noise).
       stub.setHeadBlock('0xb');
       await main(argv([]));
       expect(errors.some((line) => line.includes('dryRun:true in') && line.includes('nothing is broadcast')))
@@ -1221,7 +1167,6 @@ describe('watcher state storage', () => {
       const described = JSON.parse(logs[0] ?? '{}') as { watcher?: { dryRun?: boolean } };
       expect(described.watcher?.dryRun).toBe(true);
 
-      // An explicit --dry-run is the operator's own choice: no warning.
       errors.length = 0;
       logs.length = 0;
       await main(argv(['--dry-run']));
@@ -1236,8 +1181,6 @@ describe('watcher state storage', () => {
   });
 
   it('reads serve secrets only from named env vars, never from the command line', async () => {
-    // value flags were visible to every process listing command lines
-    // (ps); the serve command now accepts env var names only.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-serve-'));
     const configPath = join(dir, 'executor.json');
     const envName = 'UVP_EXECUTOR_TOKEN';
@@ -1248,7 +1191,7 @@ describe('watcher state storage', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -1265,8 +1208,6 @@ describe('watcher state storage', () => {
   });
 
   it('re-asserts owner-only permissions when overwriting a prepared file', async () => {
-    // writeFile's mode only applies at creation, so overwriting a
-    // world-readable prepared file kept the loose permissions.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-prepare-'));
     const preparedPath = join(dir, 'prepared.json');
     const originalLog = console.log;
@@ -1295,11 +1236,6 @@ describe('watcher state storage', () => {
   });
 });
 
-/**
- * Minimal JSON-RPC chain stub for chain-once: serves eth_chainId,
- * eth_blockNumber (movable head), and eth_getLogs. The stub chain carries one
- * HookReady event at block 12 for the RETRY_* fixtures above.
- */
 async function startChainStub(): Promise<{
   readonly url: string;
   readonly getLogsCalls: Array<{ address?: string; fromBlock?: string; toBlock?: string }>;
@@ -1325,10 +1261,6 @@ async function startChainStub(): Promise<{
       } else if (parsed.method === 'eth_blockNumber') {
         result = head;
       } else if (parsed.method === 'eth_getBlockByNumber') {
-        // Serve deterministic per-height blocks (including genesis) like a real
-        // chain would: the watcher binds its persisted-cursor identity to the
-        // block-0 hash, and a stub that cannot serve block 0 makes every
-        // chain-once run report a degraded genesis identity.
         const tag = String((parsed.params?.[0] ?? 'latest'));
         const tagged = tag === 'earliest' ? 0 : ['latest', 'pending', 'finalized', 'safe'].includes(tag)
           ? Number.parseInt(head, 16)
@@ -1411,7 +1343,6 @@ function productBytes32(suffix: string): `0x${string}` {
   return `0x${suffix.padStart(64, '0')}`;
 }
 
-/** Valid prepare-submit response for the product CLI tests. */
 function preparedProductResponse() {
   const planId = productBytes32('06');
   const sourceId = productBytes32('02');
@@ -1440,8 +1371,8 @@ function preparedProductResponse() {
     humanSummary: {
       purpose: 'Submit task evidence',
       orderId: 'order_1',
-      taskTitle: 'Confirm stage release',
-      stage: 'Stage A release',
+      taskTitle: 'Confirm stage-1',
+      stage: 'Stage A advance',
       action: 'Confirm stage',
       payloadHash,
       payloadRef: 'ipfs://payload',

@@ -18,13 +18,6 @@ export interface StateMachineJobReviveOptions {
   readonly now?: () => string;
 }
 
-/**
- * Manual revival channel for terminal `ignored` jobs: re-enqueues the job as
- * `detected` (the queue's pending state) with a fresh attempt budget, so the
- * next watcher scan — or an immediate `jobs retry` — re-runs it. Only
- * `ignored` is revivable: the operator declares the ignore verdict wrong
- * (handler now configured, duplicate verdict disputed). Never automatic.
- */
 export async function reviveStateMachineJob(
   jobStore: StateMachineJobStore,
   jobId: Hex | string,

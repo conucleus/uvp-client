@@ -29,8 +29,6 @@ export function registerServeCommand(program: Command): void {
     .option('--ready-json', 'print a ready JSON line after the server starts')
     .action(async (options: ServeOptions) => {
       const config = await loadExecutorConfig(options.config);
-      // Secrets come only from named env vars: a value passed as a flag is
-      // visible to every process listing command lines (ps).
       const handle = await startExecutorServer({
         executorId: config.executorId,
         handlers: createHandlersFromExecutorConfig(config),

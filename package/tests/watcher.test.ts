@@ -49,10 +49,9 @@ const HOOK_NAME_ID = `0x${'66'.repeat(32)}` as Hex;
 const TX_HASH = `0x${'33'.repeat(32)}` as Hex;
 const TX_HASH_2 = `0x${'35'.repeat(32)}` as Hex;
 const PAYLOAD_HASH = `0x${'44'.repeat(32)}` as Hex;
-const BUYER_SOURCE_ID = keccak256(stringToBytes('buyer'));
+const SLOT_A_SOURCE_ID = keccak256(stringToBytes('slot-a'));
 const EXEC_MAIN_CMP_ID = keccak256(stringToBytes('exec.main.cmp'));
 const ZERO_BYTES32_WORD = `0x${'00'.repeat(32)}` as Hex;
-/** Shared private-key env fixture for tests that exercise the broadcast path. */
 const KEY_ENV = 'UVP_RECEIPT_TEST_PRIVATE_KEY';
 const TEST_PRIVATE_KEY = `0x${'ab'.repeat(32)}`;
 const STATE_MACHINE_FIXTURE = JSON.parse(
@@ -132,7 +131,7 @@ describe('state machine chain watcher', () => {
           return {
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           };
@@ -155,13 +154,10 @@ describe('state machine chain watcher', () => {
     expect(result.job?.matchedKey).toBe('exec.main#START');
     expect(matchedKeys).toEqual(['exec.main#START']);
     expect(submission.request.functionName).toBe('submitSignal');
-    // planId is the first submitSignal argument; the proof struct closes the
-    // tuple as the all-zero no-claim encoding (no capability tables on this
-    // watcher's artifact).
     expect(submission.request.args).toEqual([
       PLAN_ID,
       ORDER_ID,
-      BUYER_SOURCE_ID,
+      SLOT_A_SOURCE_ID,
       EXEC_MAIN_CMP_ID,
       PAYLOAD_HASH,
       expect.any(String),
@@ -182,7 +178,7 @@ describe('state machine chain watcher', () => {
         'exec.main#START': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -194,10 +190,8 @@ describe('state machine chain watcher', () => {
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
-    // relation=0 能力命中：attribution 自证属主阶段（树是 plan 冻结的，
-    // 现场证明与预生成等价）。
     expect(submission.request.args[6]).toMatchObject({
-      sourceId: BUYER_SOURCE_ID,
+      sourceId: SLOT_A_SOURCE_ID,
       signalId: EXEC_MAIN_CMP_ID,
       stageId: STAGE_ID,
     });
@@ -230,7 +224,6 @@ describe('state machine chain watcher', () => {
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
-    // 词表外事实：不声明属主（relation=1 的同源能力也不构成属主声明）。
     expect(submission.request.args[6]).toEqual({
       sourceId: ZERO_BYTES32_WORD,
       signalId: ZERO_BYTES32_WORD,
@@ -253,7 +246,7 @@ describe('state machine chain watcher', () => {
           await context.submitSignal({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           });
@@ -266,7 +259,7 @@ describe('state machine chain watcher', () => {
     const recorded = result.job?.submissions?.[0]?.request;
     expect(recorded?.functionName).toBe('submitSignal');
     expect(recorded?.args[6]).toMatchObject({
-      sourceId: BUYER_SOURCE_ID,
+      sourceId: SLOT_A_SOURCE_ID,
       signalId: EXEC_MAIN_CMP_ID,
       stageId: STAGE_ID,
     });
@@ -286,7 +279,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -308,7 +301,6 @@ describe('state machine chain watcher', () => {
     const poll = await watcher.pollOnce();
 
     expect(poll.fromBlock).toBe(10n);
-    // The finality buffer holds the scan one block behind the head by default.
     expect(poll.toBlock).toBe(11n);
     expect(poll.scannedLogs).toBe(1);
     expect(poll.results[0]?.status).toBe('handled');
@@ -323,9 +315,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('bounds how many chunked getLogs requests are in flight during deep catch-up', async () => {
-    // A deep-lag round splits into one getLogs per block-span chunk; firing
-    // them all at once is exactly the burst RPC providers rate-limit (or that
-    // floods a local node) when catch-up matters most.
     let inFlight = 0;
     let maxInFlight = 0;
     const watcher = createStateMachineWatcher({
@@ -358,7 +347,6 @@ describe('state machine chain watcher', () => {
 
     const poll = await watcher.pollOnce();
 
-    // 12 one-block chunks, never more than the pool allows in flight.
     expect(poll.fromBlock).toBe(1n);
     expect(poll.toBlock).toBe(12n);
     expect(poll.scannedLogs).toBe(0);
@@ -394,8 +382,6 @@ describe('state machine chain watcher', () => {
     });
 
     await expect(watcher.pollOnce()).rejects.toThrow(/getLogs rejected/);
-    // Only the in-flight batch was started; the first rejection stops the
-    // pool from scheduling the remaining chunks.
     expect(started).toBe(DEFAULT_GET_LOGS_CONCURRENCY);
   });
 
@@ -417,7 +403,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -467,7 +453,7 @@ describe('state machine chain watcher', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -483,14 +469,11 @@ describe('state machine chain watcher', () => {
           },
           async getLogs(args) {
             getLogsCalls.push(args);
-            // The HookReady event exists at block 12 only.
             return args.fromBlock <= 12n && args.toBlock >= 12n ? [hookReadyLog()] : [];
           },
         },
       });
 
-      // First process: with the head at 13 the finalized range is 10..12, the
-      // event is handled, and cursor 13 persists.
       const first = buildWatcher();
       const firstPoll = await first.pollOnce();
       expect(firstPoll.fromBlock).toBe(10n);
@@ -509,8 +492,6 @@ describe('state machine chain watcher', () => {
         stateMachines: [STATE_MACHINE.toLowerCase()],
       });
 
-      // Restart: a fresh watcher instance with the same state files resumes at
-      // the persisted cursor; the confirmed 10..12 range is never rescanned.
       headBlock = 15n;
       const restarted = buildWatcher();
       const secondPoll = await restarted.pollOnce();
@@ -521,7 +502,6 @@ describe('state machine chain watcher', () => {
         { address: STATE_MACHINE, fromBlock: 10n, toBlock: 12n },
         { address: STATE_MACHINE, fromBlock: 13n, toBlock: 14n },
       ]);
-      // The job store also survived the restart (no duplicate detection).
       const jobs = await restarted.config.jobStore.list();
       expect(jobs).toHaveLength(1);
       expect(jobs[0]?.status).toBe('matched');
@@ -574,9 +554,6 @@ describe('state machine chain watcher', () => {
       });
       expect((await differentMachine.pollOnce()).fromBlock).toBe(10n);
 
-      // The foreign cursor was not adopted, and the next successful round
-      // overwrote the file with this watcher's identity, so a later restart
-      // resumes from it.
       const resumed = createStateMachineWatcher({
         rpcUrl: 'http://127.0.0.1:8545',
         stateMachineAddress: STATE_MACHINE_V2,
@@ -595,10 +572,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('resets and alerts when the chain genesis hash changes under the same chain id', async () => {
-    // The Anvil-reset shape: chain id and machines are unchanged, but the
-    // chain itself is new. Without the genesis in the cursor identity the
-    // stale cursor silently drops every event until the new head passes it
-    // and --from-block stays suppressed.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-cursor-genesis-'));
     const errors: unknown[] = [];
     try {
@@ -638,8 +611,6 @@ describe('state machine chain watcher', () => {
       const stored = JSON.parse(await readFile(cursorFile, 'utf8')) as { genesisHash?: string; nextBlock?: string };
       expect(stored).toMatchObject({ genesisHash: genesisA, nextBlock: '30' });
 
-      // Same chain id, new genesis (reset chain with a shorter head): the
-      // cursor is discarded with an alert instead of suppressing --from-block.
       const reset = createStateMachineWatcher({
         rpcUrl: 'http://127.0.0.1:8545',
         stateMachineAddress: STATE_MACHINE,
@@ -659,8 +630,6 @@ describe('state machine chain watcher', () => {
       expect(poll.toBlock).toBe(11n);
       expect(errors).toHaveLength(1);
       expect(String(errors[0])).toContain('genesis hash changed');
-      // The stale 40-block-position history is gone: the file now carries the
-      // new chain identity.
       const after = JSON.parse(await readFile(cursorFile, 'utf8')) as { genesisHash?: string; nextBlock?: string };
       expect(after).toMatchObject({ genesisHash: genesisB, nextBlock: '12' });
     } finally {
@@ -669,14 +638,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('reports a degraded genesis identity loudly instead of silently skipping the cursor chain check', async () => {
-    // UA-16: while the block-0 read fails (RPC hiccup, pruned node), the
-    // restore latch still adopts and re-saves the cursor with the genesis
-    // binding dropped — the one window where a same-chain-id reset goes
-    // undetected. That window must be reported every round it persists,
-    // exposed through describe(), and self-heal (re-bind the saved cursor)
-    // the moment block 0 becomes readable again, matching the watcher's
-    // degrade-don't-die caliber (an unreadable genesis must not kill the
-    // scan loop either).
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-cursor-genesis-loud-'));
     const errors: string[] = [];
     try {
@@ -719,14 +680,11 @@ describe('state machine chain watcher', () => {
         publicClient: client,
       });
 
-      // Seed a cursor bound to the real genesis, then blind the watcher to it.
       await new FileStateMachineCursorStore(cursorFile).save(
         { nextBlock: 22n },
         { chainId: 31_337, stateMachines: [STATE_MACHINE.toLowerCase()], genesisHash: genesis },
       );
 
-      // Degraded round 1: the cursor is still adopted (chain id and machine set
-      // match), but loudly — one alert per degraded round, status exposed.
       const degraded = buildWatcher();
       const degradedPoll = await degraded.pollOnce();
       expect(degradedPoll.fromBlock).toBe(22n);
@@ -734,21 +692,15 @@ describe('state machine chain watcher', () => {
       expect(errors[0]).toContain('chain genesis hash could not be read');
       expect(errors[0]).toContain('degraded for 1 poll round');
       expect(degraded.describe()).toMatchObject({ genesisIdentity: 'unknown', genesisIdentityUnknownRounds: 1 });
-      // The degraded save dropped the genesis binding from the file: the
-      // erosion itself is the visible symptom the operator alerts on.
       const eroded = JSON.parse(await readFile(cursorFile, 'utf8')) as { genesisHash?: string };
       expect(eroded.genesisHash).toBeUndefined();
 
-      // Degraded round 2 (head grew so the round scans and re-saves): the
-      // alert repeats while the condition persists.
       headBlock = 32n;
       await degraded.pollOnce();
       expect(errors).toHaveLength(2);
       expect(errors[1]).toContain('degraded for 2 poll round');
       expect(degraded.describe()).toMatchObject({ genesisIdentity: 'unknown', genesisIdentityUnknownRounds: 2 });
 
-      // Healed round 3: the retry succeeds, the recovery is reported once, and
-      // the cursor save re-binds the genesis identity for later restarts.
       genesisReadable = true;
       headBlock = 34n;
       const healedPoll = await degraded.pollOnce();
@@ -822,12 +774,7 @@ describe('state machine chain watcher', () => {
       },
     });
 
-    // A round whose cursor could not be persisted must not report success: the
-    // next poll (or a restart) would silently rescan already-processed blocks.
     await expect(watcher.pollOnce()).rejects.toThrow('disk full');
-    // The in-memory cursor must not advance past the failed save either —
-    // otherwise this process would skip the unpersisted interval even without
-    // a restart. It stays pinned at the configured fromBlock.
     expect(watcher.describe().nextBlock).toBe('10');
   });
 
@@ -848,9 +795,6 @@ describe('state machine chain watcher', () => {
       await expect(store.load({ chainId: 1, stateMachines: [STATE_MACHINE] })).resolves.toEqual({ status: 'foreign', reason: 'context' });
       await expect(store.load({ chainId: 31_337, stateMachines: [STATE_MACHINE_V2] })).resolves.toEqual({ status: 'foreign', reason: 'context' });
 
-      // A crash-truncated file must not poison the watcher forever: the bytes
-      // are quarantined beside the original path and the store recovers empty
-      // instead of throwing on every read.
       await writeFile(cursorFile, '{not json', 'utf8');
       await expect(store.load({ chainId: 31_337, stateMachines: [STATE_MACHINE] }))
         .resolves.toEqual({ status: 'empty' });
@@ -858,7 +802,6 @@ describe('state machine chain watcher', () => {
       expect(quarantined).toHaveLength(1);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('was unreadable'));
 
-      // Structurally invalid cursors get the same recoverable treatment.
       await writeFile(cursorFile, JSON.stringify({
         version: 2,
         nextBlock: '-3',
@@ -887,7 +830,6 @@ describe('state machine chain watcher', () => {
       await store.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
       expect((await store.list())).toHaveLength(1);
 
-      // Simulate a crash mid-write: the file is cut in half.
       const healthy = await readFile(jobsFile, 'utf8');
       await writeFile(jobsFile, healthy.slice(0, Math.floor(healthy.length / 2)), 'utf8');
 
@@ -897,7 +839,6 @@ describe('state machine chain watcher', () => {
       expect(quarantined).toHaveLength(1);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('was unreadable'));
 
-      // The store is usable again: a fresh detection persists normally.
       const recreated = await store.upsertDetected(event, { now: '2026-04-28T00:00:01.000Z', maxAttempts: 3 });
       expect(recreated.status).toBe('detected');
       expect((await store.list())).toHaveLength(1);
@@ -921,7 +862,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -947,9 +888,6 @@ describe('state machine chain watcher', () => {
 
     const poll = await watcher.pollOnce();
 
-    // The malformed log is skipped (it has no usable identity, so it cannot be
-    // persisted), the healthy log is still handled, and the cursor advances so
-    // the malformed log is not rescanned forever.
     expect(poll.decodeFailures).toBe(1);
     expect(poll.results[0]?.status).toBe('ignored');
     expect(poll.results[0]?.decodeFailure).toBe(true);
@@ -987,7 +925,6 @@ describe('state machine chain watcher', () => {
     expect(first.job?.status).toBe('ignored');
     expect(first.job?.orderId).toBe(`0x${'00'.repeat(32)}`);
     expect(first.job?.raw).toEqual(broken);
-    // Rescanning the same log is idempotent: same job, still terminal ignored.
     expect(second.job?.id).toBe(first.job?.id);
     expect(second.job?.status).toBe('ignored');
     expect(await watcher.config.jobStore.list()).toHaveLength(1);
@@ -1012,8 +949,6 @@ describe('state machine chain watcher', () => {
           return 31_337;
         },
         async getBlockNumber() {
-          // A new block every round so each poll rescans a range that still
-          // contains the undecodable log (restart/rescan semantics).
           return 12n + BigInt(polls);
         },
         async getLogs() {
@@ -1028,8 +963,6 @@ describe('state machine chain watcher', () => {
       aborted = true;
     });
 
-    // Far more consecutive rounds than any old failure threshold: decode
-    // failures must never count as failed polls or stop the loop.
     const deadline = Date.now() + 500;
     while (polls < 12 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1038,7 +971,6 @@ describe('state machine chain watcher', () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(aborted).toBe(false);
 
-    // The isolated decision persists: exactly one ignored job for the log.
     const jobs = await watcher.config.jobStore.list();
     expect(jobs).toHaveLength(1);
     expect(jobs[0]?.status).toBe('ignored');
@@ -1076,10 +1008,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('keeps the watch loop alive with backed-off retries when every poll keeps failing', async () => {
-    // a permanent clearInterval abort after a few consecutive failures
-    // has no recovery path — a transient RPC outage would kill the listener
-    // until a human restarted the process. The loop reports through onError and
-    // slows down (capped exponential backoff) instead of stopping.
     const errors: unknown[] = [];
     let polls = 0;
     const watcher = createStateMachineWatcher({
@@ -1118,15 +1046,12 @@ describe('state machine chain watcher', () => {
       rejected = error;
     });
 
-    // Far beyond the old 3-failure abort threshold.
     const deadline = Date.now() + 300;
     while (polls < 10 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(polls).toBeGreaterThanOrEqual(10);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    // The loop is still polling (no abort), every failed poll was reported,
-    // and done never rejected.
     expect(polls).toBeGreaterThan(10);
     expect(errors.length).toBe(polls - 1);
     expect(rejected).toBeUndefined();
@@ -1293,8 +1218,6 @@ describe('state machine chain watcher', () => {
 
     const result = await watcher.handleLog(hookReadyLog());
 
-    // Deterministic non-retryable failures dead-letter for human triage instead
-    // of parking in the retryable `failed` lane.
     expect(attempts).toBe(1);
     expect(result.job?.status).toBe('dead_letter');
     expect(stateMachineJobToExecutorJobDTO(result.job!).status).toBe('dead_letter');
@@ -1316,7 +1239,6 @@ describe('state machine chain watcher', () => {
       handlers: {
         '*': () => {
           attempts += 1;
-          // Native viem revert text without an explicit executor-kit code.
           throw new Error('Call revert exception: execution reverted: SignalAlreadyExists()');
         },
       },
@@ -1324,8 +1246,6 @@ describe('state machine chain watcher', () => {
 
     const result = await watcher.handleLog(hookReadyLog());
 
-    // duplicate_signal is a dedupe fact, not a failure: the job lands in the
-    // terminal ignored state even though the handler itself ran.
     expect(attempts).toBe(1);
     expect(result.status).toBe('handled');
     expect(result.job?.status).toBe('ignored');
@@ -1354,11 +1274,6 @@ describe('state machine chain watcher', () => {
 
     const result = await watcher.handleLog(hookReadyLog());
 
-    // A single attempt, no auto retry, and no keyword-derived kind: without an
-    // explicit code or a recognized error text the failure is conservatively
-    // non-retryable and dead-letters for human review.
-    // 'handler_failure' is the explicit structural fallback for thrown handlers,
-    // not a message-text guess.
     expect(attempts).toBe(1);
     expect(result.job?.status).toBe('dead_letter');
     expect(result.error?.kind).toBe('handler_failure');
@@ -1386,8 +1301,6 @@ describe('state machine chain watcher', () => {
 
     const result = await watcher.handleLog(hookReadyLog());
 
-    // Transient failures exhaust their in-run retries into `failed`, the one
-    // failure state that `jobs retry` still accepts.
     expect(attempts).toBe(2);
     expect(result.job?.status).toBe('failed');
     expect(result.error?.kind).toBe('rpc_network');
@@ -1396,10 +1309,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('counts only real failures in attempts so completed dry-run multi-signal jobs stay retryable', async () => {
-    // attempts must count only real failures: accumulating per signal x per
-    // attempt with successes included would let a finished dry-run multi-
-    // signal job hit the manual retry entry already >= maxAttempts, and the
-    // dead-letter branch would kill a job that never failed once.
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
       stateMachineAddress: STATE_MACHINE,
@@ -1410,15 +1319,14 @@ describe('state machine chain watcher', () => {
       retry: { maxAttempts: 3, baseDelayMs: 0 },
       handlers: {
         '*': (event) => ([
-          { planId: PLAN_ID, orderId: event.orderId, source: 'buyer', signalName: 'exec.main.cmp' },
-          { planId: PLAN_ID, orderId: event.orderId, source: 'seller', signalName: 'exec.main.cmp' },
+          { planId: PLAN_ID, orderId: event.orderId, source: 'slot-a', signalName: 'exec.main.cmp' },
+          { planId: PLAN_ID, orderId: event.orderId, source: 'slot-b', signalName: 'exec.main.cmp' },
         ]),
       },
     });
 
     const first = await watcher.handleLog(hookReadyLog());
     expect(first.job?.status).toBe('matched');
-    // One handler run plus two successful signal submissions: zero failures.
     expect(first.job?.attempts).toBe(0);
     expect(first.job?.submissions).toHaveLength(2);
 
@@ -1430,7 +1338,6 @@ describe('state machine chain watcher', () => {
       operator: 'ops@example.com',
       reason: 'flipping dry-run off for the real run',
     });
-    // No dead-letter: the retry entry saw zero real failures.
     expect(retried.error).toBeUndefined();
     expect(retried.job?.status).toBe('matched');
     expect(retried.job?.lastError).toBeUndefined();
@@ -1448,7 +1355,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -1459,8 +1366,6 @@ describe('state machine chain watcher', () => {
     if (!jobId) {
       throw new Error('expected job id');
     }
-    // Simulate an earlier transient failure: the job sits in `failed` with a
-    // retry budget remaining.
     await watcher.config.jobStore.update(jobId, {
       status: 'failed',
       attempts: 1,
@@ -1509,15 +1414,12 @@ describe('state machine chain watcher', () => {
         throw new Error('expected failed job id');
       }
 
-      // Transient failures exhaust into `failed`, the retriable lane.
       expect(failed.job?.status).toBe('failed');
       expect(stateMachineJobToExecutorJobDTO(failed.job).status).toBe('failed');
       const persistedAfterFailure = await store.get(jobId);
       expect(persistedAfterFailure?.status).toBe('failed');
       expect(persistedAfterFailure?.attempts).toBe(2);
 
-      // A manual retry starts a fresh bounded run even after automatic
-      // attempts are exhausted; it must not be a dead channel.
       const overLimit = await retryStateMachineJob(failedWatcher, jobId, {
         operator: 'ops@example.com',
         reason: 'pushing past the attempt budget',
@@ -1542,7 +1444,6 @@ describe('state machine chain watcher', () => {
         confirmedSignals: 0,
       });
 
-      // Operators can still explicitly dead-letter the reattempted job.
       const deadLetter = await deadLetterStateMachineJob(store, jobId, {
         operator: 'ops@example.com',
         reason: 'manual review required',
@@ -1558,10 +1459,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('revives an ignored job back into the scan queue (ignored -> detected -> re-run)', async () => {
-    // A-31: `ignored` had no revival channel — a handler set that was missing
-    // at scan time (missing_handler) or a handler-thrown duplicate verdict
-    // froze the job forever. `jobs revive` re-enqueues it as `detected` (the
-    // queue's pending state); the next scan pass re-runs it. Never automatic.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-state-machine-revive-'));
     const jobsFile = join(dir, 'jobs.json');
     try {
@@ -1596,15 +1493,12 @@ describe('state machine chain watcher', () => {
         { action: 'revive', operator: 'ops@example.com', at: '2026-04-28T00:01:00.000Z', reason: 'handler now configured' },
       ]);
 
-      // Only `ignored` is revivable: every other status keeps its own channel.
       await expect(reviveStateMachineJob(store, jobId, {
         operator: 'ops@example.com',
         reason: 'not ignored anymore',
         now: () => '2026-04-28T00:01:30.000Z',
       })).rejects.toThrow(/cannot be revived from status detected/u);
 
-      // The re-enqueued job is not a dead channel: the later-scan pass behind
-      // the cursor picks the detected job up and re-runs it.
       let effects = 0;
       const runWatcher = createStateMachineWatcher({
         rpcUrl: 'http://127.0.0.1:8545',
@@ -1629,7 +1523,7 @@ describe('state machine chain watcher', () => {
         handlers: {
           '*': (event) => {
             effects += 1;
-            return [{ orderId: event.orderId, source: 'buyer', signalName: 'cmp' }];
+            return [{ orderId: event.orderId, source: 'slot-a', signalName: 'cmp' }];
           },
         },
       });
@@ -1644,11 +1538,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('re-opens a confirmed job through the manual retry channel with forced resubmission', async () => {
-    // `confirmed` must not be a permanent lock: a reorg that flips the
-    // confirmation off the canonical chain would leave the job stuck with
-    // no human recovery if retry refused it. The retry resubmits every signal
-    // (the on-chain idempotency key absorbs a duplicate when the signal
-    // actually survived).
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -1664,7 +1553,7 @@ describe('state machine chain watcher', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -1687,8 +1576,6 @@ describe('state machine chain watcher', () => {
         now: () => '2026-04-28T00:00:30.000Z',
       });
 
-      // The delivered-set shortcut was ignored for the forced recovery: the
-      // signal was rebroadcast (and re-confirmed by the receipt stub).
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(recovered.status).toBe('handled');
       expect(recovered.job?.status).toBe('confirmed');
@@ -1700,16 +1587,11 @@ describe('state machine chain watcher', () => {
   });
 
   it('rolls the scan cursor back to the common ancestor when a reorg flips the cursor block hash', async () => {
-    // With no hash continuity check, a short fork let the cursor pass a
-    // block that left the canonical chain, and everything on the orphaned
-    // branch was silently never rescanned.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-reorg-'));
     const errors: unknown[] = [];
     const getLogsCalls: unknown[] = [];
     try {
       const cursorFile = join(dir, 'cursor.json');
-      // A tiny deterministic chain: hash(h) encodes the height, and the fork
-      // swaps the hash of one height to simulate the reorg.
       let forkedAt: bigint | undefined = undefined;
       const hashAt = (height: bigint): string => `0x${(Number(height) + (forkedAt !== undefined && height >= forkedAt ? 1000 : 0)).toString(16).padStart(64, '0')}`;
       const client: StateMachinePublicClient = {
@@ -1742,24 +1624,17 @@ describe('state machine chain watcher', () => {
         publicClient: client,
       });
 
-      // Round 1: scan 10..19 and anchor canonical hashes at 19, 18, 16, 12
-      // (dense near the tip, exponential deeper).
       const first = buildWatcher();
       await first.pollOnce();
       const stored = JSON.parse(await readFile(cursorFile, 'utf8')) as { nextBlock?: string; blockHash?: string; checkpoints?: Array<{ blockNumber: string }> };
       expect(stored).toMatchObject({ nextBlock: '20' });
       expect(stored.checkpoints?.map((checkpoint) => checkpoint.blockNumber)).toEqual(['12', '16', '18', '19']);
 
-      // A reorg rewrites block 18 (and everything above): the stored hash for
-      // height 19 no longer matches the canonical chain. The newest surviving
-      // anchor below the fork is 16, so the scan rolls back to 17.
       forkedAt = 18n;
       errors.length = 0;
       const second = buildWatcher();
       const poll = await second.pollOnce();
 
-      // Continuity check fired: the cursor rolled back to the common
-      // ancestor anchor and the round rescanned 17..19.
       expect(errors).toHaveLength(1);
       expect(String(errors[0])).toContain('rolling the scan cursor back');
       expect(getLogsCalls.at(-1)).toMatchObject({ fromBlock: 17n, toBlock: 19n });
@@ -1777,14 +1652,12 @@ describe('state machine chain watcher', () => {
       walletAddress: WALLET_ADDRESS,
       dryRun: true,
       artifact: artifactIndex(),
-      // Every run (handler + each submission) consumes attempts; give this test
-      // a generous budget so the manual retry below stays inside the limit.
       retry: { maxAttempts: 12 },
       handlers: {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -1795,18 +1668,15 @@ describe('state machine chain watcher', () => {
     if (!jobId) {
       throw new Error('expected job id');
     }
-    // Simulate a broadcast whose receipt was never observed.
     await watcher.config.jobStore.update(jobId, {
       status: 'submitted',
       updatedAt: '2026-04-28T00:00:02.000Z',
     });
 
-    // A rescan of the same HookReady log reprocesses the open job instead of ignoring it.
     const rescan = await watcher.handleLog(hookReadyLog());
     expect(rescan.status).toBe('handled');
     expect(rescan.job?.id).toBe(jobId);
 
-    // Manual retry accepts an unconfirmed submitted job.
     const retried = await retryStateMachineJob(watcher, jobId, {
       operator: 'ops@example.com',
       reason: 'receipt never observed',
@@ -1816,10 +1686,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('throttles rebroadcasts of unconfirmed signals with capped exponential backoff', async () => {
-    // the rescan keeps meeting the open job every poll round; without a
-    // backoff the same unconfirmed signal was rebroadcast once per round. The
-    // chain idempotency key stays the dedupe anchor (accepted stance) — this
-    // only stops the per-round gas burn.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -1842,7 +1708,7 @@ describe('state machine chain watcher', () => {
             '*': (event) => ({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             }),
@@ -1866,27 +1732,22 @@ describe('state machine chain watcher', () => {
             attempt: 1,
             dryRun: false,
             txHash: TX_HASH,
-            request: seedRequest('buyer', PAYLOAD_HASH),
+            request: seedRequest('slot-a', PAYLOAD_HASH),
             error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true },
           },
         ],
       });
 
-      // One second after the failed broadcast: still inside the 30s base
-      // delay, so the rescan defers instead of rebroadcasting.
       clockMs = anchorAt + 1_000;
       const deferred = await watcher.handleLog(hookReadyLog());
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(0);
       expect(deferred.job?.status).toBe('submitted');
 
-      // Past the base delay the rescan rebroadcasts exactly once.
       clockMs = anchorAt + 30_001;
       const resent = await watcher.handleLog(hookReadyLog());
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(resent.job?.status).toBe('confirmed');
 
-      // Manual retry never waits on the throttle, even with four prior
-      // unconfirmed broadcasts (uncapped delay would be 30s * 2^3 = 240s).
       await watcher.config.jobStore.update(seeded.id, {
         status: 'submitted',
         updatedAt: '2026-04-28T00:01:00.000Z',
@@ -1895,7 +1756,7 @@ describe('state machine chain watcher', () => {
           attempt,
           dryRun: false,
           txHash: TX_HASH,
-          request: seedRequest('buyer', PAYLOAD_HASH),
+          request: seedRequest('slot-a', PAYLOAD_HASH),
           error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true } as const,
         })),
       });
@@ -1913,8 +1774,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('caps the resend backoff so a long-unconfirmed signal is never starved', async () => {
-    // Four prior unconfirmed broadcasts: uncapped delay would be 30s * 2^3 =
-    // 240s; the 60s cap keeps the wait bounded and the resend happens.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -1935,7 +1794,7 @@ describe('state machine chain watcher', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -1955,7 +1814,7 @@ describe('state machine chain watcher', () => {
           attempt,
           dryRun: false,
           txHash: TX_HASH,
-          request: seedRequest('buyer', PAYLOAD_HASH),
+          request: seedRequest('slot-a', PAYLOAD_HASH),
           error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true } as const,
         })),
       });
@@ -1970,14 +1829,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('resumes a partially delivered multi-signal job from the next pending signal instead of replaying', async () => {
-    // Retry resume contract: after a partial multi-signal failure, retrying
-    // must not resubmit signals whose delivery is already evidenced — the
-    // chain would answer the already delivered one with SignalAlreadyExists
-    // and the job would park in terminal `ignored`, which `jobs retry`
-    // rejects — a dead-locked job. Delivery evidence is reconciled by content
-    // identity: the seeded signal-0 broadcast carries no observed receipt, so
-    // the retry re-checks it (mined success) and adopts it without
-    // rebroadcasting.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -2007,15 +1858,12 @@ describe('state machine chain watcher', () => {
         retry: { maxAttempts: 3, baseDelayMs: 0 },
         handlers: {
           '*': (event) => ([
-            { planId: PLAN_ID, orderId: event.orderId, source: 'buyer', signalName: 'exec.main.cmp' },
-            { planId: PLAN_ID, orderId: event.orderId, source: 'seller', signalName: 'exec.main.cmp' },
+            { planId: PLAN_ID, orderId: event.orderId, source: 'slot-a', signalName: 'exec.main.cmp' },
+            { planId: PLAN_ID, orderId: event.orderId, source: 'slot-b', signalName: 'exec.main.cmp' },
           ]),
         },
       });
 
-      // Seed the exact post-partial-failure state: signal 0 was really
-      // broadcast but its receipt was never observed, signal 1 failed and
-      // exhausted the run.
       const event = decodeHookReadyLog(hookReadyLog(), artifactIndex())!;
       const seeded = await watcher.config.jobStore.upsertDetected(event, {
         now: '2026-04-28T00:00:00.000Z',
@@ -2026,11 +1874,11 @@ describe('state machine chain watcher', () => {
         updatedAt: '2026-04-28T00:00:01.000Z',
         attempts: 3,
         submissions: [
-          { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, request: seedRequest('buyer') },
+          { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, request: seedRequest('slot-a') },
           {
             signalIndex: 1,
             attempt: 3,
-            request: seedRequest('seller'),
+            request: seedRequest('slot-b'),
             error: { kind: 'rpc_network', message: 'fetch failed', retryable: true },
           },
         ],
@@ -2042,15 +1890,10 @@ describe('state machine chain watcher', () => {
         reason: 'rpc recovered',
       });
 
-      // Signal 0 was adopted from its mined receipt (no rebroadcast); only the
-      // pending signal went out — one broadcast total.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(result.status).toBe('handled');
       expect(result.job?.status).toBe('confirmed');
       expect(result.job?.lastError).toBeUndefined();
-      // Audit trail: the seeded history is preserved, signal 0's delivery is
-      // recorded as a confirmed receipt-recovery entry, and exactly one new
-      // broadcast submission (signalIndex 1) was appended.
       const submissions = result.job?.submissions ?? [];
       expect(submissions).toHaveLength(4);
       expect(submissions[2]).toMatchObject({ signalIndex: 0, dryRun: false, txHash: TX_HASH, confirmed: true });
@@ -2063,9 +1906,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('treats a duplicate signal on resume as delivered and keeps later signals progressing', async () => {
-    // The deadlock variant without prior state: the first signal is already on
-    // chain (chain answers SignalAlreadyExists) while the second still has to
-    // go out. The duplicate advances the run instead of ending it.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub({
       estimateGasError: { code: 3, message: 'execution reverted: SignalAlreadyExists()', times: 1 },
@@ -2081,16 +1921,14 @@ describe('state machine chain watcher', () => {
         retry: { maxAttempts: 3, baseDelayMs: 0 },
         handlers: {
           '*': (event) => ([
-            { planId: PLAN_ID, orderId: event.orderId, source: 'buyer', signalName: 'exec.main.cmp' },
-            { planId: PLAN_ID, orderId: event.orderId, source: 'seller', signalName: 'exec.main.cmp' },
+            { planId: PLAN_ID, orderId: event.orderId, source: 'slot-a', signalName: 'exec.main.cmp' },
+            { planId: PLAN_ID, orderId: event.orderId, source: 'slot-b', signalName: 'exec.main.cmp' },
           ]),
         },
       });
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // Signal 0 answered duplicate (estimateGas revert), signal 1 broadcast
-      // and confirmed: exactly one tx went out and the job finished.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(result.status).toBe('handled');
       expect(result.job?.status).toBe('confirmed');
@@ -2105,25 +1943,17 @@ describe('state machine chain watcher', () => {
   });
 
   it('reconciles an incremental retry return set by content identity instead of slot inheritance', async () => {
-    // Run 1 returned [A, B]: A confirmed, B failed and exhausted the run. The
-    // retry handler returns only [B]. Positional delivery bookkeeping
-    // credited B with A's slot-0 evidence: zero new broadcasts and a terminal
-    // `confirmed` while B never reached the chain — a silently lost on-chain
-    // signal behind a success ledger. Evidence attribution is by submitSignal
-    // calldata: B must broadcast its own request, whoever sat at slot 0
-    // before it.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub({
-      // Run 1: A broadcasts (call 1); B's three in-run attempts fail.
       sendRawTransactionErrors: [2, 3, 4],
     });
     try {
       let pendingOnly = false;
-      const buyerSignal = (orderId: Hex) => ({
-        planId: PLAN_ID, orderId, source: 'buyer', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH,
+      const slotASignal = (orderId: Hex) => ({
+        planId: PLAN_ID, orderId, source: 'slot-a', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH,
       });
-      const sellerSignal = (orderId: Hex) => ({
-        planId: PLAN_ID, orderId, source: 'seller', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH,
+      const slotBSignal = (orderId: Hex) => ({
+        planId: PLAN_ID, orderId, source: 'slot-b', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH,
       });
       const watcher = createStateMachineWatcher({
         rpcUrl: stub.url,
@@ -2135,8 +1965,8 @@ describe('state machine chain watcher', () => {
         retry: { maxAttempts: 3, baseDelayMs: 0 },
         handlers: {
           '*': (event) => pendingOnly
-            ? [sellerSignal(event.orderId)]
-            : [buyerSignal(event.orderId), sellerSignal(event.orderId)],
+            ? [slotBSignal(event.orderId)]
+            : [slotASignal(event.orderId), slotBSignal(event.orderId)],
         },
       });
 
@@ -2144,21 +1974,18 @@ describe('state machine chain watcher', () => {
       expect(first.job?.status).toBe('failed');
       const sendsAfterRun1 = stub.methods.filter((method) => method === 'eth_sendRawTransaction').length;
 
-      // The incremental retry set: only the pending signal B comes back.
       pendingOnly = true;
       const retried = await retryStateMachineJob(watcher, first.job!.id, { operator: 'ops@example.com' });
 
-      // Exactly one new broadcast — B's own — and the ledger matches the
-      // chain: B's delivery is recorded under B's content identity.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction').length).toBe(sendsAfterRun1 + 1);
       expect(retried.status).toBe('handled');
       expect(retried.job?.status).toBe('confirmed');
       expect(retried.submissions).toHaveLength(1);
-      const sellerIdentity = seedRequest('seller', PAYLOAD_HASH).data;
-      expect(retried.submissions[0]?.request.data).toBe(sellerIdentity);
-      const sellerDelivered = (retried.job?.submissions ?? []).filter(
-        (submission) => submission.request?.data === sellerIdentity && submission.confirmed === true);
-      expect(sellerDelivered).toHaveLength(1);
+      const slotBIdentity = seedRequest('slot-b', PAYLOAD_HASH).data;
+      expect(retried.submissions[0]?.request.data).toBe(slotBIdentity);
+      const slotBDelivered = (retried.job?.submissions ?? []).filter(
+        (submission) => submission.request?.data === slotBIdentity && submission.confirmed === true);
+      expect(slotBDelivered).toHaveLength(1);
     } finally {
       await stub.close();
       delete process.env[KEY_ENV];
@@ -2166,9 +1993,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('refuses to retry an attempts-exhausted submitted job instead of dead-lettering it', async () => {
-    // A broadcast-but-unconfirmed submitted job must not be moved
-    // straight to dead_letter once attempts are exhausted. deadLetter refuses
-    // that state, and retry must refuse it too: the tx may still confirm.
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
       stateMachineAddress: STATE_MACHINE,
@@ -2181,7 +2005,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -2208,9 +2032,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('accepts a manual retry for a detected job stranded by a crash', async () => {
-    // A crash between detection and processing leaves the job in
-    // `detected` with no run at all — the manual retry channel must accept
-    // that status, or the job is unreachable even for human recovery.
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
       stateMachineAddress: STATE_MACHINE,
@@ -2222,7 +2043,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -2243,11 +2064,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('revisits open jobs behind the cursor on later scans instead of stranding them', async () => {
-    // handleLog only ran for logs inside the current poll window, so an
-    // open job whose block the cursor already passed was never revisited —
-    // the README's later-scan promise had no implementation. The poll now
-    // replays open jobs (detected/submitted) from the store whose blocks are
-    // behind the window.
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
       stateMachineAddress: STATE_MACHINE,
@@ -2260,7 +2076,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -2277,7 +2093,6 @@ describe('state machine chain watcher', () => {
         },
       },
     });
-    // A detected job from block 12 — long behind the 20..21 scan window.
     const event = decodeHookReadyLog(hookReadyLog(), artifactIndex())!;
     await watcher.config.jobStore.upsertDetected(event, {
       now: '2026-04-28T00:00:00.000Z',
@@ -2294,10 +2109,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('does not re-enter a scanned raw without a block number in the same round\'s later-scan pass', async () => {
-    // Providers and persisted raws can omit the block number, so the pass's
-    // height comparison cannot tell the raw sits inside this round's window —
-    // without the event-id dedupe the pass re-ran the job the scan loop had
-    // just handled, firing the handler's off-chain effects twice in one round.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -2331,7 +2142,7 @@ describe('state machine chain watcher', () => {
             return {
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             };
@@ -2352,10 +2163,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('rechecks the receipt of an unconfirmed broadcast when a later scan revisits the job', async () => {
-    // A waitForReceipt:false broadcast returned without error and was
-    // permanently counted as delivered — a reverted tx could never be
-    // rechecked. Unconfirmed broadcasts are now resolved by receipt evidence
-    // on the next scan, without a rebroadcast when the receipt shows success.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -2385,19 +2192,17 @@ describe('state machine chain watcher', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
         },
       });
 
-      // First run: broadcast without waiting — outcome unknown, job open.
       const first = await watcher.handleLog(hookReadyLog());
       expect(first.job?.status).toBe('submitted');
       expect(first.job?.submissions[0]?.confirmed).toBeUndefined();
 
-      // Later scan, receipt now visible: adopted as confirmed, no rebroadcast.
       receipt = { status: 'success' };
       const second = await watcher.handleLog(hookReadyLog());
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
@@ -2412,14 +2217,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('derives distinct default idempotency keys for distinct sources and stable keys across re-emitted events', async () => {
-    // The default key carries the source dimension: an orderId:hookId:-
-    // signalName key would judge different sources behind one signalName as
-    // the same fact. It deliberately does NOT carry the event dimension: the
-    // key mirrors the contract's
-    // SignalAlreadyExists tuple (planId, orderId, sourceId, signalId), so a
-    // HookReady re-emitted in a new transaction after a deep reorg reuses the
-    // same key instead of minting a fresh one per event anchor and putting a
-    // guaranteed-reverting duplicate broadcast on chain.
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
       stateMachineAddress: STATE_MACHINE,
@@ -2431,8 +2228,8 @@ describe('state machine chain watcher', () => {
         handlers: {
           '*': {
             signals: [
-              { source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' },
-              { source: 'seller', stageIdentifier: 'exec.main', signalName: 'cmp' },
+              { source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' },
+              { source: 'slot-b', stageIdentifier: 'exec.main', signalName: 'cmp' },
             ],
           },
         },
@@ -2442,28 +2239,18 @@ describe('state machine chain watcher', () => {
     const first = await watcher.handleLog(hookReadyLog());
     const keys = first.submissions.map((submission) =>
       submission.dryRun ? submission.request.args[5] : undefined);
-    // Distinct sources behind the same signalName are distinct facts.
     expect(keys[0]).not.toBe(keys[1]);
 
-    // The same (order, hook) re-emitted in a new log is the same logical
-    // signal: the key is anchored to the contract's dedupe tuple, not to the
-    // volatile (txHash, logIndex) event identity.
     const reEmitLog = { ...hookReadyLog(), transactionHash: `0x${'34'.repeat(32)}` as Hex, logIndex: 9 };
     const reEmit = await watcher.handleLog(reEmitLog);
     const reEmitKey = reEmit.submissions[0]?.dryRun ? reEmit.submissions[0].request.args[5] : undefined;
     expect(reEmitKey).toBe(keys[0]);
 
-    // Replaying the same event is converged (see the dry-run replay test): no
-    // second simulation, no new key.
     const replay = await watcher.handleLog(hookReadyLog());
     expect(replay.submissions).toHaveLength(0);
   });
 
   it('converges a replayed dry-run job instead of replaying the handler and growing the audit trail', async () => {
-    // a finished dry-run pass must converge to terminal: staying
-    // non-terminal forever would re-run the handler on every rescan
-    // (replaying its side effects) and append the full simulated submission
-    // set again — jobs.json would grow without bound.
     let handlerRuns = 0;
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
@@ -2478,7 +2265,7 @@ describe('state machine chain watcher', () => {
           return {
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           };
@@ -2491,14 +2278,11 @@ describe('state machine chain watcher', () => {
     expect(first.job?.submissions).toHaveLength(1);
     expect(handlerRuns).toBe(1);
 
-    // Rescan of the same log: the converged dry-run job is skipped, not re-run.
     const replay = await watcher.handleLog(hookReadyLog());
     expect(replay.status).toBe('ignored');
     expect(handlerRuns).toBe(1);
     expect(replay.job?.submissions).toHaveLength(1);
 
-    // A manual retry re-opens the job and re-simulates without duplicating the
-    // persisted record.
     const jobId = first.job?.id;
     if (!jobId) {
       throw new Error('expected job id');
@@ -2509,11 +2293,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('converges a real-mode void-handler job to terminal completed and never re-runs it', async () => {
-    // A handler that finishes successfully with zero signals is a finished
-    // execution. Landing it non-terminal (`matched`) made every later scan
-    // re-claim and re-run the handler — its external side effects fired once
-    // per poll round, forever, across restarts, with only the chain's dedupe
-    // as a safety net (which cannot see off-chain effects at all).
     let handlerRuns = 0;
     const store = new InMemoryStateMachineJobStore();
     const buildWatcher = (extra: Record<string, unknown> = {}) => createStateMachineWatcher({
@@ -2536,13 +2315,10 @@ describe('state machine chain watcher', () => {
     expect(first.job?.status).toBe('completed');
     expect(handlerRuns).toBe(1);
 
-    // Terminal: a rescan does not even claim the job again.
     const rescan = await watcher.handleLog(hookReadyLog());
     expect(rescan.status).toBe('ignored');
     expect(handlerRuns).toBe(1);
 
-    // Restart: a fresh watcher over the same persisted store must not
-    // re-claim the terminal job on the later-scan pass.
     const restarted = buildWatcher({
       fromBlock: 20,
       publicClient: {
@@ -2561,8 +2337,6 @@ describe('state machine chain watcher', () => {
     expect(poll.results).toHaveLength(0);
     expect(handlerRuns).toBe(1);
 
-    // The manual retry stays the recovery channel when the void outcome is
-    // declared wrong (the handler now emits signals).
     const jobId = first.job?.id;
     if (!jobId) {
       throw new Error('expected job id');
@@ -2573,10 +2347,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('skips a concluded dry-run void pass without re-running the handler, and a real pass still runs it', async () => {
-    // The dry-run convergence guard asks whether a run CONCLUDED leaving the
-    // job matched, not whether simulated submissions exist: a void dry-run
-    // pass records nothing, and re-running it would replay the handler's side
-    // effects on every rescan all the same.
     let handlerRuns = 0;
     const store = new InMemoryStateMachineJobStore();
     const buildWatcher = (dryRun?: boolean) => createStateMachineWatcher({
@@ -2602,8 +2372,6 @@ describe('state machine chain watcher', () => {
     expect(replay.status).toBe('ignored');
     expect(handlerRuns).toBe(1);
 
-    // Flipping dry-run off re-opens the same job for its real pass, which
-    // then converges terminally.
     const real = buildWatcher();
     const realRun = await real.handleLog(hookReadyLog());
     expect(realRun.job?.status).toBe('completed');
@@ -2611,20 +2379,9 @@ describe('state machine chain watcher', () => {
   });
 
   it('re-runs a dry-run job left by a crashed conclusive write instead of skipping it forever', async () => {
-    // The dry-run skip guard keys on matched + no claim. A conclusive write
-    // that throws (store fault) while the finally-block claim release still
-    // succeeds leaves exactly that shape with no conclusion record — a void
-    // dry-run pass records no submissions either, so the crashed leftover is
-    // field-identical to a concluded pass's. Skipping on status alone
-    // stranded such a job forever; the guard must also require the conclusion
-    // record a finished pass writes, and re-run without it: a dry-run replay
-    // has no chain side effects, so the safe direction is to run more, not
-    // less.
     let handlerRuns = 0;
     const inner = new InMemoryStateMachineJobStore();
     let updateCalls = 0;
-    // Update 1 claims, update 2 is the post-handler bookkeeping write, update
-    // 3 is the conclusive status write — fail exactly that one.
     const failUpdates = new Set<number>([3]);
     const store: StateMachineJobStore = {
       kind: 'memory+fault',
@@ -2654,9 +2411,6 @@ describe('state machine chain watcher', () => {
       },
     });
 
-    // The pass crashes at its conclusive write; the claim release in the
-    // finally block succeeds, so the job is left matched, unclaimed, and
-    // without any record that a pass ever concluded.
     await expect(watcher.handleLog(hookReadyLog())).rejects.toThrow(/simulated store fault/);
     expect(handlerRuns).toBe(1);
     const [stranded] = await store.list();
@@ -2665,26 +2419,18 @@ describe('state machine chain watcher', () => {
     expect(stranded?.submissions).toHaveLength(0);
     expect(stranded?.dryRunConcludedAt).toBeUndefined();
 
-    // The rescan re-runs the job (it never concluded) instead of skipping it.
     const recovery = await watcher.handleLog(hookReadyLog());
     expect(recovery.status).toBe('handled');
     expect(handlerRuns).toBe(2);
     expect(recovery.job?.status).toBe('matched');
     expect(recovery.job?.dryRunConcludedAt).toBeDefined();
 
-    // With the conclusion record present, the converged pass is skipped
-    // again — the crash window closed without giving up convergence.
     const replay = await watcher.handleLog(hookReadyLog());
     expect(replay.status).toBe('ignored');
     expect(handlerRuns).toBe(2);
   });
 
   it('records handler-context submitSignal broadcasts in the job audit trail', async () => {
-    // The handler-context submitSignal channel must go through the job
-    // submissions bookkeeping: a bypassing broadcast txHash would silently
-    // leave the audit trail the README promises is never dropped from.
-    // Context submissions are recorded with negative signal indexes so they
-    // never alias returned-signal indexes.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -2700,7 +2446,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -2723,10 +2469,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('resolves the planId per signal so a sibling pin never leaks into unpinned signals', async () => {
-    // the planId must be resolved per signal: reusing the first explicit
-    // signal planId as the whole job's fallback would broadcast an unpinned
-    // sibling with a planId the event never carried — a guaranteed on-chain
-    // revert that dead-letters the job.
     const pinnedPlanId = `0x${'99'.repeat(32)}` as Hex;
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
@@ -2737,8 +2479,8 @@ describe('state machine chain watcher', () => {
       artifact: artifactIndex(),
       handlers: {
         '*': (event) => ([
-          { planId: pinnedPlanId, orderId: event.orderId, source: 'buyer', signalName: 'exec.main.cmp' },
-          { orderId: event.orderId, source: 'seller', signalName: 'exec.main.cmp' },
+          { planId: pinnedPlanId, orderId: event.orderId, source: 'slot-a', signalName: 'exec.main.cmp' },
+          { orderId: event.orderId, source: 'slot-b', signalName: 'exec.main.cmp' },
         ]),
       },
     });
@@ -2746,17 +2488,11 @@ describe('state machine chain watcher', () => {
     const result = await watcher.handleLog(hookReadyLog());
     const planIds = result.submissions.map((submission) =>
       submission.dryRun ? submission.request.args[0] : undefined);
-    // The pinned signal keeps its pin; the unpinned sibling takes the event
-    // planId, never the sibling's pin.
     expect(planIds).toEqual([pinnedPlanId, PLAN_ID]);
     expect(result.job?.planId).toBe(PLAN_ID);
   });
 
   it('refutes a reverted handler-context broadcast on a later scan instead of leaving it open forever', async () => {
-    // the handler-context submitSignal channel did not participate in
-    // the receipt recheck or the terminal-state computation, so a
-    // waitForReceipt:false context broadcast that actually reverted could never
-    // be refuted.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -2787,7 +2523,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -2795,15 +2531,10 @@ describe('state machine chain watcher', () => {
         },
       });
 
-      // First run: context broadcast without a receipt wait — outcome unknown.
       const first = await watcher.handleLog(hookReadyLog());
       expect(first.job?.status).toBe('submitted');
       expect(first.job?.submissions[0]?.signalIndex).toBe(-1);
 
-      // Later scan, receipt shows the broadcast reverted: the job is refuted,
-      // not parked in the open lane forever. The context channel consults the
-      // prior broadcast's receipt before sending again, so no second
-      // transaction went out.
       receipt = { status: 'reverted' };
       const second = await watcher.handleLog(hookReadyLog());
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
@@ -2846,7 +2577,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -2859,11 +2590,6 @@ describe('state machine chain watcher', () => {
 
       receipt = { status: 'success' };
       const second = await watcher.handleLog(hookReadyLog());
-      // The context channel consults the prior broadcast's receipt before
-      // sending again, so the mined success is adopted without a second
-      // transaction, and the run finishes. The adopted record keeps the prior
-      // broadcast's signal index (slot -1) — one recovery record per fact,
-      // not one per scan that observed it.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(second.job?.status).toBe('confirmed');
       const submissions = second.job?.submissions ?? [];
@@ -2876,10 +2602,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('keeps a job open when a later-scan receipt carries an unrecognized status instead of clipping it to reverted', async () => {
-    // Only a receipt observed as 'reverted' is a known revert. A node may
-    // return a status string outside the kit's vocabulary; clipping every
-    // non-success value to reverted terminalized broadcasts whose outcome was
-    // merely unknown.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -2910,7 +2632,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -2933,9 +2655,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('resubmits a delivered handler-context signal when the manual retry declares the confirmation invalid', async () => {
-    // retry out of `confirmed` passes resubmitDelivered: the recorded delivery
-    // evidence is exactly what the operator declared invalid (reorg), so the
-    // context channel must rebroadcast instead of answering from evidence.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -2953,7 +2672,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -2975,11 +2694,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('continues context signal numbering across runs so a re-run signal never inherits a prior signal slot', async () => {
-    // Context indexes are the signal identity for the delivery-evidence set
-    // and the terminal-status intersection. Restarting at -1 every run let a
-    // re-run's new context signal adopt the prior signal's delivery evidence
-    // and land the job a false `confirmed` while its own broadcast was
-    // unobserved.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -3012,7 +2726,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: payload,
             });
@@ -3020,14 +2734,10 @@ describe('state machine chain watcher', () => {
         },
       });
 
-      // First run: the context broadcast is resolved as success by the
-      // recheck, so the job lands `confirmed` with slot -1 delivered.
       const first = await watcher.handleLog(hookReadyLog());
       expect(first.job?.status).toBe('confirmed');
       expect(first.job?.submissions.map((submission) => submission.signalIndex)).toEqual([-1, -1]);
 
-      // Manual retry emits a DIFFERENT context signal; its own receipt stays
-      // unobserved (lookup #2 returns null), so the job must remain open.
       payload = `0x${'45'.repeat(32)}` as Hex;
       const retried = await retryStateMachineJob(watcher, first.job!.id, { operator: 'ops@example.com' });
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2);
@@ -3041,12 +2751,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('finishes a receipt-confirmed handler-context run as terminal confirmed instead of looping', async () => {
-    // The terminal computation must count returned-signal and context-channel
-    // submissions alike as "observed this run": counting only returned-signal
-    // submissions would land even a fully receipt-confirmed context-channel
-    // run in the open `submitted` lane — the handler would then re-run on
-    // every scan and rebroadcast into a guaranteed
-    // SignalAlreadyExists revert.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -3064,7 +2768,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -3076,7 +2780,6 @@ describe('state machine chain watcher', () => {
       expect(first.job?.status).toBe('confirmed');
       expect(handlerRuns).toBe(1);
 
-      // Terminal: a later scan must not re-run the handler at all.
       const rescan = await watcher.handleLog(hookReadyLog());
       expect(rescan.status).toBe('ignored');
       expect(handlerRuns).toBe(1);
@@ -3088,9 +2791,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('applies the resend backoff and receipt consult to handler-context rebroadcasts', async () => {
-    // waitForReceipt:false with the receipt unavailable: the context channel
-    // defers inside the backoff window and only rebroadcasts past it —
-    // never rebroadcasting on every scan with no throttle.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -3125,12 +2825,10 @@ describe('state machine chain watcher', () => {
             const result = await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
-            // A deferred outcome is a marker the handler must not mistake
-            // for success; anything else carries the submission result.
             expect('deferredBroadcast' in result || 'txHash' in result).toBe(true);
           },
         },
@@ -3140,15 +2838,11 @@ describe('state machine chain watcher', () => {
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(first.job?.status).toBe('submitted');
 
-      // One second later: inside the 30s base delay — the rescan defers
-      // instead of putting a second transaction on chain.
       clockMs = anchorAt + 1_000;
       const deferred = await watcher.handleLog(hookReadyLog());
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(deferred.job?.status).toBe('submitted');
 
-      // Past the window the rebroadcast goes out; the chain's idempotency
-      // key absorbs the duplicate if the prior transaction mined.
       clockMs = anchorAt + 30_001;
       const resent = await watcher.handleLog(hookReadyLog());
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2);
@@ -3160,10 +2854,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('defers a handler-context broadcast whose receipt wait failed instead of inviting an immediate rebroadcast', async () => {
-    // A retryable receipt-wait timeout after a successful broadcast must not
-    // be rethrown into the handler-retry loop, which would answer it with an
-    // immediate second transaction for the same signal. The context channel
-    // resolves with the deferred marker and keeps the job open.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -3199,7 +2889,7 @@ describe('state machine chain watcher', () => {
             const result = await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -3210,8 +2900,6 @@ describe('state machine chain watcher', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // Exactly one broadcast and exactly one handler run: the unknown
-      // outcome defers to the later-scan receipt recheck.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(handlerRuns).toBe(1);
       expect(sawDeferredMarker).toBe(true);
@@ -3224,9 +2912,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('keeps a job with unresolved broadcasts in the open lane when the handler stops emitting signals', async () => {
-    // an empty handler result must not flip a job with an unconfirmed
-    // broadcast down to `matched` — that takes it out of the revisit lane
-    // exactly when its broadcast still needs the automatic receipt recheck.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -3257,7 +2942,7 @@ describe('state machine chain watcher', () => {
             ? {
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             }
@@ -3271,8 +2956,6 @@ describe('state machine chain watcher', () => {
       emitSignals = false;
       const rescan = await watcher.handleLog(hookReadyLog());
       expect(rescan.job?.status).toBe('submitted');
-      // The orphaned broadcast is still rechecked: its receipt was consulted
-      // (unavailable here) and no rebroadcast happened for an unemitted signal.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
     } finally {
       await stub.close();
@@ -3281,12 +2964,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('terminally converges an incremental empty return once every signal is delivered', async () => {
-    // README blesses the incremental subset return: a handler may return only
-    // its pending signals, and when everything is already delivered that set
-    // is legitimately empty. Landing that run in the open `submitted` lane
-    // re-claimed and re-ran the handler (its off-chain effects) on every scan
-    // forever while no receipt was ever going to change the outcome — the
-    // ledger said "all delivered" and the status machine never terminated.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -3319,28 +2996,23 @@ describe('state machine chain watcher', () => {
             return pendingOnly
               ? []
               : ([
-                { planId: PLAN_ID, orderId: event.orderId, source: 'buyer', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH },
-                { planId: PLAN_ID, orderId: event.orderId, source: 'seller', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH },
+                { planId: PLAN_ID, orderId: event.orderId, source: 'slot-a', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH },
+                { planId: PLAN_ID, orderId: event.orderId, source: 'slot-b', signalName: 'exec.main.cmp', payloadHash: PAYLOAD_HASH },
               ]);
           },
         },
       });
 
-      // Run 1: both signals broadcast, receipts unavailable — open lane.
       const first = await watcher.handleLog(hookReadyLog());
       expect(first.job?.status).toBe('submitted');
       expect(handlerRuns).toBe(1);
 
-      // Run 2: both receipts now observed as success; the handler's
-      // incremental return is empty because nothing is pending. The job must
-      // terminate instead of re-opening for a re-run every scan.
       pendingOnly = true;
       const second = await watcher.handleLog(hookReadyLog());
       expect(handlerRuns).toBe(2);
       expect(second.job?.status).toBe('confirmed');
       expect(second.job?.lastError).toBeUndefined();
 
-      // Terminal: a third scan does not re-run the handler at all.
       const third = await watcher.handleLog(hookReadyLog());
       expect(third.status).toBe('ignored');
       expect(handlerRuns).toBe(2);
@@ -3351,13 +3023,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('terminally converges a context signal whose resend confirmed while the original receipt stays unknown', async () => {
-    // One logical context signal can occupy several indexes across runs: the
-    // first broadcast's receipt may stay unknown forever, so a later scan
-    // rebroadcasts under a fresh index and THAT transaction confirms. From
-    // then on the signal is delivered by content identity, but counting
-    // delivered indexes against allocated indexes kept the job in the open
-    // `submitted` lane forever (the old index's receipt is never coming), and
-    // the handler re-ran on every scan.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub({
       sendRawTransactionTxHashes: [TX_HASH, TX_HASH_2],
@@ -3383,8 +3048,6 @@ describe('state machine chain watcher', () => {
             return [];
           },
           async getTransactionReceipt({ hash }) {
-            // The first broadcast's receipt is permanently unavailable; the
-            // resend's receipt resolves once the run asks for it.
             if (hash === TX_HASH_2) {
               return receiptForSecondBroadcast ? { status: 'success' } : null;
             }
@@ -3398,7 +3061,7 @@ describe('state machine chain watcher', () => {
             await context.submitSignal({
               planId: PLAN_ID,
               orderId: event.orderId,
-              source: 'buyer',
+              source: 'slot-a',
               signalName: 'exec.main.cmp',
               payloadHash: PAYLOAD_HASH,
             });
@@ -3406,32 +3069,24 @@ describe('state machine chain watcher', () => {
         },
       });
 
-      // Run 1: context broadcast (tx 1) with an unavailable receipt — the job
-      // stays open for the later-scan recheck.
       const first = await watcher.handleLog(hookReadyLog());
       expect(first.job?.status).toBe('submitted');
       expect(handlerRuns).toBe(1);
       const firstSubmissions = first.job?.submissions ?? [];
       expect(firstSubmissions.map((submission) => submission.signalIndex)).toEqual([-1]);
 
-      // Run 2: the receipt is still unknown, the resend backoff is disabled —
-      // the same logical signal is rebroadcast under a new index.
       const second = await watcher.handleLog(hookReadyLog());
       expect(handlerRuns).toBe(2);
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2);
       expect(second.job?.status).toBe('submitted');
       expect(second.job?.submissions.map((submission) => submission.signalIndex)).toEqual([-1, -2]);
 
-      // Run 3: the resend's receipt confirms. The signal is delivered by its
-      // content identity — the job must terminate even though the old index's
-      // receipt is never observed.
       receiptForSecondBroadcast = true;
       const third = await watcher.handleLog(hookReadyLog());
       expect(handlerRuns).toBe(3);
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2);
       expect(third.job?.status).toBe('confirmed');
 
-      // Terminal: a fourth scan does not re-run the handler.
       const fourth = await watcher.handleLog(hookReadyLog());
       expect(fourth.status).toBe('ignored');
       expect(handlerRuns).toBe(3);
@@ -3442,9 +3097,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('keeps dry-run submissions off the resend backoff anchor', async () => {
-    // The anchor throttles real rebroadcasts; a dry-run pass never broadcast
-    // anything, so anchoring on it would stall the first real rebroadcast once
-    // the operator flips dry-run off.
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
       stateMachineAddress: STATE_MACHINE,
@@ -3456,7 +3108,7 @@ describe('state machine chain watcher', () => {
         '*': (event) => ({
           planId: PLAN_ID,
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
@@ -3471,9 +3123,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('resends immediately when the backoff anchor is missing instead of starving the signal', async () => {
-    // the anchor fell back to updatedAt, which is rewritten on unrelated
-    // bookkeeping every round — jobs persisted before lastSignalAttemptAt
-    // existed deferred their rebroadcast forever.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -3493,7 +3142,7 @@ describe('state machine chain watcher', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -3504,8 +3153,6 @@ describe('state machine chain watcher', () => {
         now: new Date(at).toISOString(),
         maxAttempts: 3,
       });
-      // No lastSignalAttemptAt at all; updatedAt is as fresh as "now" — an
-      // updatedAt fallback would defer this rebroadcast on every round.
       await watcher.config.jobStore.update(seeded.id, {
         status: 'submitted',
         updatedAt: new Date(at).toISOString(),
@@ -3515,7 +3162,7 @@ describe('state machine chain watcher', () => {
             attempt: 1,
             dryRun: false,
             txHash: TX_HASH,
-            request: seedRequest('buyer', PAYLOAD_HASH),
+            request: seedRequest('slot-a', PAYLOAD_HASH),
             error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true },
           },
         ],
@@ -3531,9 +3178,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('retries the cursor restore on the next poll after a transient store failure', async () => {
-    // one failed cursor read permanently abandoned the persisted
-    // position; the next successful round then saved a fresh cursor over
-    // anchors that were never read.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-cursor-load-fail-'));
     const errors: unknown[] = [];
     try {
@@ -3587,12 +3231,9 @@ describe('state machine chain watcher', () => {
         publicClient: client,
       });
 
-      // First poll dies on the transient load; the cursor is NOT silently
-      // abandoned (the failure surfaces instead of a fresh-start scan).
       const first = buildWatcher();
       await expect(first.pollOnce()).rejects.toThrow(/transient fs fault/);
 
-      // Second watcher instance (fresh memory) restores the persisted cursor.
       loadFails = false;
       const second = buildWatcher();
       const poll = await second.pollOnce();
@@ -3603,10 +3244,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('does not commit in-memory cursor anchors when persistence fails', async () => {
-    // checkpoints and the cursor hash must be updated in memory only after
-    // the save: updating them before would make a failed save leave the next
-    // round's continuity check mismatch by construction — a false reorg
-    // rolling the whole range back.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-cursor-save-fail-'));
     const errors: unknown[] = [];
     try {
@@ -3658,15 +3295,11 @@ describe('state machine chain watcher', () => {
       let stored = JSON.parse(await readFile(cursorFile, 'utf8')) as { nextBlock?: string };
       expect(stored).toMatchObject({ nextBlock: '12' });
 
-      // Round 2 fails to persist: the round rejects and the in-memory anchors
-      // stay on the persisted position.
       saveFails = true;
       head = 14n;
       const failing = buildWatcher();
       await expect(failing.pollOnce()).rejects.toThrow(/disk full/);
 
-      // Round 3 persists again: no false reorg, the scan continues from the
-      // last persisted cursor.
       saveFails = false;
       head = 16n;
       const poll = await buildWatcher().pollOnce();
@@ -3680,9 +3313,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('clears stale adopted anchors when the overshoot correction rewinds to fromBlock', async () => {
-    // an overshoot fallback would keep checkpoints from beyond the chain
-    // head, so the next round's continuity check mismatched by construction
-    // and fired a false reorg rollback.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-overshoot-'));
     const errors: unknown[] = [];
     try {
@@ -3727,16 +3357,12 @@ describe('state machine chain watcher', () => {
         },
       });
 
-      // Round 1: the adopted cursor sits beyond the head; the watcher alerts
-      // and rewinds to fromBlock.
       const first = buildWatcher();
       const poll1 = await first.pollOnce();
       expect(poll1.fromBlock).toBe(10n);
       expect(errors).toHaveLength(1);
       expect(String(errors[0])).toContain('beyond the chain head');
 
-      // Round 2 on the same watcher: the stale anchors are gone, so the
-      // continuity check does not fire a false reorg.
       head = 16n;
       const poll2 = await first.pollOnce();
       expect(poll2.fromBlock).toBe(12n);
@@ -3747,9 +3373,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('serializes concurrent file-store writers so no update is silently lost', async () => {
-    // the jobs file read-modify-write had no cross-process exclusion;
-    // two concurrent writers (e.g. `jobs retry` against a running watcher)
-    // dropped each other's updates.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-jobs-lock-'));
     try {
       const jobsFile = join(dir, 'jobs.json');
@@ -3766,7 +3389,6 @@ describe('state machine chain watcher', () => {
       const jobs = await storeA.list();
       expect(new Set(jobs.map((job) => job.id)).size).toBe(2);
 
-      // A stale lock (crashed holder) must not block the store forever.
       const lockPath = `${jobsFile}.lock`;
       await writeFile(lockPath, '999999\n');
       const oneHourAgo = new Date(Date.now() - 3_600_000);
@@ -3783,12 +3405,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('never preempts a live jobs-lock holder however old the marker reads (pid+age)', async () => {
-    // A-31: the jobs-file lock broke on mtime age alone, so a paused or slow
-    // writer lost its lock after 10s and two read-modify-write cycles could
-    // drop each other's updates. pid+age (the state-dir lock paradigm): an
-    // alive holder is never broken — the contender fails loudly on the lock
-    // timeout instead of stealing the lock. The assertion must outlast the
-    // lock's own 5s deadline, hence the explicit test timeout.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-jobs-lock-live-'));
     try {
       const jobsFile = join(dir, 'jobs.json');
@@ -3796,8 +3412,6 @@ describe('state machine chain watcher', () => {
       const event = decodeHookReadyLog(hookReadyLog(), artifactIndex())!;
       const created = await store.upsertDetected(event, { now: '2026-04-28T00:00:00.000Z', maxAttempts: 3 });
 
-      // Live holder (this process) whose marker already reads older than the
-      // stale window: age alone must not break it.
       const lockPath = `${jobsFile}.lock`;
       await writeFile(lockPath, `${process.pid}\n`);
       const oneHourAgo = new Date(Date.now() - 3_600_000);
@@ -3815,9 +3429,6 @@ describe('state machine chain watcher', () => {
   }, 15_000);
 
   it('racing breakers of the same stale jobs lock cannot double-hold it (no lost updates)', async () => {
-    // rm+wx 式陈旧接管里，同时判陈旧的写者互删对方刚建的新锁而同时持锁，
-    // 各自的读改写互相覆盖、丢更新。原子接管（唯一竞争文件 + link + rename
-    // 挪走复核）下同一把陈旧锁只有一个赢家，其余落回等待，逐个串行完成。
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-jobs-lock-race-'));
     try {
       const jobsFile = join(dir, 'jobs.json');
@@ -3832,7 +3443,6 @@ describe('state machine chain watcher', () => {
       const jobs = await stores[0]!.list();
       expect(jobs).toHaveLength(stores.length);
 
-      // 陈旧锁：六个写者并发进入时都会判它陈旧而走接管路径。
       const lockPath = `${jobsFile}.lock`;
       await writeFile(lockPath, '999999\n');
       const oneHourAgo = new Date(Date.now() - 3_600_000);
@@ -3854,10 +3464,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('rejects a signal without source attribution instead of hashing the empty string', async () => {
-    // keccak("") minted one constant pseudo sourceId for every
-    // unattributed signal, collapsing the chain's (…, sourceId, signalId)
-    // identity across producers. The CLI already requires --source; the SDK
-    // path must refuse just as loudly.
     expect(() => buildSubmitStateMachineSignalCall({
       rpcUrl: 'http://127.0.0.1:8545',
       stateMachineAddress: STATE_MACHINE,
@@ -3871,9 +3477,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('trims stored reorg checkpoints to the reorg window instead of growing forever', async () => {
-    // trimming must apply to the stored checkpoint array, not the read view
-    // alone: append-only storage (with a per-round sort) grows unbounded with
-    // every scanned round.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-checkpoint-trim-'));
     try {
       const cursorFile = join(dir, 'cursor.json');
@@ -3915,11 +3518,6 @@ describe('state machine chain watcher', () => {
   });
 
   it('treats a failed toBlock hash read as no evidence instead of saving a stale hash', async () => {
-    // a transient getBlock failure after a successful round must not
-    // persist the OLD cursor hash next to the NEW height — the next round's
-    // continuity check would mismatch by construction and roll the cursor
-    // back forever (a false-reorg loop). No evidence means no saved hash: the
-    // finality buffer alone covers the round until hashes come back.
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-hash-read-fail-'));
     const errors: unknown[] = [];
     try {
@@ -3958,13 +3556,10 @@ describe('state machine chain watcher', () => {
         },
       });
 
-      // Round 1 anchors normally: cursor 12 with the canonical hash of 11.
       await buildWatcher().pollOnce();
       let stored = JSON.parse(await readFile(cursorFile, 'utf8')) as { nextBlock?: string; blockHash?: string };
       expect(stored).toMatchObject({ nextBlock: '12', blockHash: hashAt(11n) });
 
-      // Round 2 cannot read any block hash: the cursor advances WITHOUT a
-      // hash instead of pairing the new height with block 11's old hash.
       blockReadsFail = true;
       head = 14n;
       await buildWatcher().pollOnce();
@@ -3972,8 +3567,6 @@ describe('state machine chain watcher', () => {
       expect(stored).toMatchObject({ nextBlock: '14' });
       expect(stored.blockHash).toBeUndefined();
 
-      // Round 3 reads hashes again: continuity restarts from this round's own
-      // anchor — no false reorg alert, no rollback loop.
       blockReadsFail = false;
       errors.length = 0;
       head = 16n;
@@ -3998,7 +3591,7 @@ describe('state machine callback tx helper', () => {
     }, {
       planId: PLAN_ID,
       orderId: ORDER_ID,
-      source: 'seller',
+      source: 'slot-b',
       signalName: 'ship.pickup.done',
       payloadHash: PAYLOAD_HASH,
       idempotencyKey: 'order-1:pickup:done',
@@ -4013,11 +3606,10 @@ describe('state machine callback tx helper', () => {
     expect(result.request.chainId).toBe(31_337);
     expect(result.request.functionName).toBe('submitSignal');
     expect(result.request.data.slice(0, 10)).toBe(STATE_MACHINE_FIXTURE.functions.submitSignal.selector);
-    // planId leads the ABI arguments.
     expect(result.request.args.slice(0, 5)).toEqual([
       PLAN_ID,
       ORDER_ID,
-      keccak256(stringToBytes('seller')),
+      keccak256(stringToBytes('slot-b')),
       keccak256(stringToBytes('ship.pickup.done')),
       PAYLOAD_HASH,
     ]);
@@ -4046,7 +3638,7 @@ describe('state machine callback tx helper', () => {
     }, {
       planId: PLAN_ID,
       orderId: ORDER_ID,
-      source: 'seller',
+      source: 'slot-b',
       signalName: 'ship.pickup.done',
       payloadHash: PAYLOAD_HASH,
     });
@@ -4055,10 +3647,6 @@ describe('state machine callback tx helper', () => {
   });
 
   it('refuses to build a submitSignal tx when the signal has no plan id', async () => {
-    // submitSignal(planId, ...) is plan-scoped. A missing
-    // planId (or the builder's zero placeholder) must fail loudly instead of
-    // producing a tx that can only revert on the on-chain (planId, orderId)
-    // existence check.
     for (const broken of [
       {},
       { planId: `0x${'00'.repeat(32)}` as Hex },
@@ -4072,7 +3660,7 @@ describe('state machine callback tx helper', () => {
         dryRun: true,
       }, {
         orderId: ORDER_ID,
-        source: 'seller',
+        source: 'slot-b',
         signalName: 'ship.pickup.done',
         payloadHash: PAYLOAD_HASH,
         ...broken,
@@ -4084,7 +3672,7 @@ describe('state machine callback tx helper', () => {
       chainId: 31_337,
     }, {
       orderId: ORDER_ID,
-      source: 'seller',
+      source: 'slot-b',
       signalName: 'ship.pickup.done',
     })).toThrow(/planId is required/);
   });
@@ -4100,28 +3688,21 @@ describe('state machine callback tx helper', () => {
       handlers: {
         '*': (event) => ({
           orderId: event.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           signalName: 'exec.main.cmp',
           payloadHash: PAYLOAD_HASH,
         }),
       },
     });
 
-    // A HookReady log with the zero planId placeholder: the event cannot
-    // provide one either, so nothing may be broadcast.
     const result = await watcher.handleLog(hookReadyLog(STATE_MACHINE, `0x${'00'.repeat(32)}` as Hex));
 
-    // No planId anywhere: nothing may be broadcast, and the job records the
-    // structural reason so the operator can fix the handler config.
     expect(result.submissions).toHaveLength(0);
     expect(result.job?.status).toBe('dead_letter');
     expect(result.error?.message).toContain('planId is required');
   });
 
   it('feeds the HookReady event planId into config-driven signals and persists it on the job', async () => {
-    // The HookReady event planId is the default planId source for
-    // config-driven signals that do not declare one; without it such jobs
-    // die in dead_letter with "planId is required".
     const store = new InMemoryStateMachineJobStore();
     const watcher = createStateMachineWatcher({
       rpcUrl: 'http://127.0.0.1:8545',
@@ -4133,7 +3714,7 @@ describe('state machine callback tx helper', () => {
       jobStore: store,
       handlers: createStateMachineHandlersFromConfig({
         handlers: {
-          '*': { signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }] },
+          '*': { signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }] },
         },
       }),
     });
@@ -4161,20 +3742,17 @@ describe('state machine callback tx helper', () => {
       artifact: artifactIndex(),
       handlers: createStateMachineHandlersFromConfig({
         handlers: {
-          '*': { signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp', planId: configPlanId }] },
+          '*': { signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp', planId: configPlanId }] },
         },
       }),
     });
 
-    // The event carries PLAN_ID, but the explicit config signal planId wins.
     const result = await watcher.handleLog(hookReadyLog());
     const submission = result.submissions[0];
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
     expect(submission.request.args[0]).toBe(configPlanId);
-    // The job record itself keeps the event-sourced planId (the log is the
-    // authoritative carrier); the per-signal override lives in the submission.
     expect(result.job?.planId).toBe(PLAN_ID);
   });
 });
@@ -4298,30 +3876,23 @@ describe('executor error classification', () => {
     expect(classifyExecutorKitError(new CodedExecutorKitError('MISSING_HANDLER')))
       .toMatchObject({ kind: 'missing_handler', retryable: false, code: 'MISSING_HANDLER' });
 
-    // The code is honored across a wrapped cause chain.
     const wrapped = new Error('submission failed', { cause: new CodedExecutorKitError('RPC_NETWORK', 'timeout') });
     expect(classifyExecutorKitError(wrapped)).toMatchObject({ kind: 'rpc_network', retryable: true, code: 'RPC_NETWORK' });
   });
 
   it('classifies real viem and ethereum error texts without explicit codes', () => {
-    // Contract revert: decoded custom-error name for an already-known signal.
     expect(classifyExecutorKitError(new Error('Call revert exception: execution reverted: SignalAlreadyExists()')))
       .toMatchObject({ kind: 'duplicate_signal', retryable: false });
-    // Raw revert data carrying the SignalAlreadyExists() selector 0xa2e92828.
     expect(classifyExecutorKitError(new Error('execution reverted: 0xa2e92828')))
       .toMatchObject({ kind: 'duplicate_signal', retryable: false });
-    // OpenZeppelin authorization revert names surface verbatim in viem messages.
     expect(classifyExecutorKitError(new Error('AccessControlUnauthorizedAccount submitter')))
       .toMatchObject({ kind: 'unauthorized', retryable: false });
-    // Gas shortfall: recoverable by funding, so it stays in the retry lane.
     expect(classifyExecutorKitError(new Error('insufficient funds for gas * price + value')))
       .toMatchObject({ kind: 'insufficient_funds', retryable: true });
-    // Tx-pool and nonce races: transient broadcast conditions.
     expect(classifyExecutorKitError(new Error('nonce too low')))
       .toMatchObject({ kind: 'nonce_conflict', retryable: true });
     expect(classifyExecutorKitError(new Error('nonce has already been used')))
       .toMatchObject({ kind: 'nonce_conflict', retryable: true });
-    // Transport and rate-limit conditions.
     expect(classifyExecutorKitError(new Error('connect ECONNREFUSED 127.0.0.1:8545')))
       .toMatchObject({ kind: 'rpc_network', retryable: true });
     expect(classifyExecutorKitError(new Error('HTTP request failed with status 429: Too Many Requests')))
@@ -4332,21 +3903,17 @@ describe('executor error classification', () => {
       .toMatchObject({ kind: 'rpc_network', retryable: true });
     expect(classifyExecutorKitError(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8545'), { code: 'ECONNREFUSED' })))
       .toMatchObject({ kind: 'rpc_network', retryable: true });
-    // The text is recognized across a wrapped cause chain (viem nests causes).
     const wrapped = new Error('submission failed', { cause: new Error('fetch failed: socket hang up') });
     expect(classifyExecutorKitError(wrapped)).toMatchObject({ kind: 'rpc_network', retryable: true });
   });
 
   it('keeps unrecognized failures conservatively non-retryable for human review', () => {
-    // Plain errors with no recognized shape keep their message but get no
-    // keyword-derived classification.
     expect(classifyExecutorKitError(new Error('handler exploded in a way no pattern matches'))).toEqual({
       kind: 'unknown',
       message: 'handler exploded in a way no pattern matches',
       retryable: false,
     });
 
-    // ValidationError remains an explicit type-based classification.
     expect(classifyExecutorKitError(new ValidationError('payloadHash must be a 32-byte hex value')))
       .toMatchObject({ kind: 'validation_failure', retryable: false });
   });
@@ -4356,7 +3923,7 @@ describe('submitSignal receipt visibility', () => {
   const SIGNAL = {
     planId: PLAN_ID,
     orderId: ORDER_ID,
-    source: 'buyer',
+    source: 'slot-a',
     signalName: 'exec.main.cmp',
     payloadHash: PAYLOAD_HASH,
   };
@@ -4403,8 +3970,6 @@ describe('submitSignal receipt visibility', () => {
         publicClient: fakeReceiptClient(31_337, { status: 'reverted' }),
       }, SIGNAL).catch((caught: unknown) => caught);
 
-      // The tx was broadcast (eth_sendRawTransaction returned TX_HASH); the
-      // receipt failure must not lose the hash of what already went on chain.
       expect(error).toBeInstanceOf(SubmitSignalReceiptError);
       expect((error as SubmitSignalReceiptError).txHash).toBe(TX_HASH);
       expect((error as Error).message).toContain('submitSignal transaction receipt status reverted');
@@ -4442,7 +4007,6 @@ describe('submitSignal receipt visibility', () => {
 
       expect(error).toBeInstanceOf(SubmitSignalReceiptError);
       expect((error as SubmitSignalReceiptError).txHash).toBe(TX_HASH);
-      // The wrapped transport fault stays classifiable as retryable network noise.
       expect(classifyExecutorKitError(error)).toMatchObject({ kind: 'rpc_network', retryable: true });
     } finally {
       await stub.close();
@@ -4465,7 +4029,7 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -4474,9 +4038,7 @@ describe('submitSignal receipt visibility', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // Non-retryable receipt revert dead-letters for human triage...
       expect(result.job?.status).toBe('dead_letter');
-      // ...but the broadcast tx stays in the job's audit trail with the failure attached.
       const submission = result.job?.submissions[0];
       expect(submission?.txHash).toBe(TX_HASH);
       expect(submission?.error?.message).toContain('receipt status reverted');
@@ -4487,12 +4049,6 @@ describe('submitSignal receipt visibility', () => {
   });
 
   it('defers instead of blind-rebroadcasting when the broadcast receipt cannot be checked', async () => {
-    // Replay-guard unknown-outcome branch: after a receipt-wait timeout the tx
-    // is already on chain (or in flight); this client cannot look receipts up
-    // at all, so the outcome is simply unknown. The in-run bounded retry used
-    // to rebroadcast once per attempt (2 txs); now the run defers — one
-    // broadcast, the failure and its txHash stay in the audit trail, and the
-    // job stays open (`submitted`) for later scans to resolve.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -4521,7 +4077,7 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -4530,8 +4086,6 @@ describe('submitSignal receipt visibility', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // Exactly one broadcast: a receipt that cannot be checked is not proof
-      // of absence, so no second transaction went out in this run.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(result.job?.status).toBe('submitted');
       const submissions = result.job?.submissions ?? [];
@@ -4546,8 +4100,6 @@ describe('submitSignal receipt visibility', () => {
 
   it('treats a real SignalAlreadyExists revert on replay as delivered instead of failing the job', async () => {
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
-    // Restart replay of an already-committed signal: the chain rejects the
-    // resubmission with the real contract revert text.
     const stub = await startJsonRpcStub({
       estimateGasError: { code: 3, message: 'execution reverted: SignalAlreadyExists()' },
     });
@@ -4564,7 +4116,7 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -4573,12 +4125,6 @@ describe('submitSignal receipt visibility', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // The duplicate is a dedupe fact, not a failure: recognized from the real
-      // revert text without any explicit code and counted as delivered. The
-      // contract's SignalAlreadyExists verdict on the four-tuple is itself the
-      // delivery judgment, so a fully duplicate-delivered job completes as
-      // terminal `confirmed` — parking it in the open lane re-ran the handler
-      // on every scan for a signal the chain already carries.
       expect(result.status).toBe('handled');
       expect(result.job?.status).toBe('confirmed');
       expect(result.error).toBeUndefined();
@@ -4590,9 +4136,6 @@ describe('submitSignal receipt visibility', () => {
       });
       expect(submissions[submissions.length - 1]?.error?.message).toContain('SignalAlreadyExists');
 
-      // Terminal means terminal: a later scan must not re-run the handler (and
-      // its off-chain side effects) for an already-delivered job. The duplicate
-      // reverts at gas estimation, so no transaction was ever broadcast.
       const rescan = await watcher.handleLog(hookReadyLog());
       expect(rescan.status).toBe('ignored');
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(0);
@@ -4603,10 +4146,6 @@ describe('submitSignal receipt visibility', () => {
   });
 
   it('consults the receipt before rebroadcasting after a retryable broadcast failure', async () => {
-    // A receipt-wait timeout is retryable, but the tx may
-    // already be mined: blind rebroadcast would put a second transaction on
-    // chain for the same signal. The retry loop consults the receipt first
-    // and adopts the mined tx as a confirmed submission.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -4638,7 +4177,7 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -4647,8 +4186,6 @@ describe('submitSignal receipt visibility', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // Exactly one broadcast: the receipt-wait failure was answered by a
-      // receipt lookup that found the mined tx, so no rebroadcast happened.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(result.job?.status).toBe('confirmed');
       expect(result.job?.lastError).toBeUndefined();
@@ -4665,10 +4202,6 @@ describe('submitSignal receipt visibility', () => {
   });
 
   it('keeps the operator dead-letter reason when the recovery clear lands on a terminal job', async () => {
-    // 恢复成功的善后写入用 clearLastError 清掉失败痕迹；任务若已被操作员
-    // --force dead-letter（终态、理由存于 lastError），这次清除与失败分类一
-    // 样不得碰掉人工裁决。失败分类写入与恢复写入之间唯一的中断点是收据查
-    // 询：操作员裁决从那里落地，正好卡在守卫要拦的清除写入之前。
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -4713,7 +4246,7 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -4722,11 +4255,9 @@ describe('submitSignal receipt visibility', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // 恢复本身照常完成：一次广播，收据恢复仍进审计轨迹。
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       const submissions = result.job?.submissions ?? [];
       expect(submissions[submissions.length - 1]).toMatchObject({ dryRun: false, txHash: TX_HASH, confirmed: true });
-      // 人工裁决胜出：终态与理由都不被运行中的清除写入抹掉。
       expect(result.job?.status).toBe('dead_letter');
       expect(result.job?.lastError?.message).toBe('operator verdict');
       const stored = await watcher.config.jobStore.get(
@@ -4740,11 +4271,6 @@ describe('submitSignal receipt visibility', () => {
   });
 
   it('throws the receipt error and never rebroadcasts when the recovered receipt reverted', async () => {
-    // Replay-guard reverted branch: the receipt-wait timed out (retryable, tx
-    // already broadcast), but the receipt lookup finds the tx mined with a
-    // reverted status. Rebroadcasting the same signal is pointless, so the
-    // recovery throws the same non-retryable SubmitSignalReceiptError as the
-    // direct receipt path instead of returning a retry decision.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -4776,14 +4302,13 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
         },
       });
 
-      // The recovery path itself throws the receipt error for a reverted tx.
       const recovery = watcher as unknown as {
         recoverBroadcastSubmission(config: unknown, signal: unknown, txHash: Hex): Promise<unknown>;
       };
@@ -4792,13 +4317,10 @@ describe('submitSignal receipt visibility', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // Exactly one broadcast: the reverted receipt is a definitive answer, so
-      // the bounded retry budget is never spent rebroadcasting it.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(result.job?.status).toBe('dead_letter');
       expect(result.error?.retryable).toBe(false);
       expect(result.error?.message).toContain('submitSignal transaction receipt status reverted');
-      // The already-broadcast tx stays visible in the audit trail.
       const submissions = result.job?.submissions ?? [];
       expect(submissions[submissions.length - 1]?.txHash).toBe(TX_HASH);
     } finally {
@@ -4808,11 +4330,6 @@ describe('submitSignal receipt visibility', () => {
   });
 
   it('defers an unconfirmed broadcast to later scans when the receipt is not available', async () => {
-    // Replay-guard null-receipt branch: getTransactionReceipt resolves null
-    // (the tx is not mined yet) — "no evidence", not provable absence. The
-    // run defers instead of rebroadcasting once per attempt (3 txs), and the
-    // immediate rescan re-checks the receipt again
-    // before the resend backoff allows any rebroadcast.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -4844,7 +4361,7 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -4853,15 +4370,12 @@ describe('submitSignal receipt visibility', () => {
 
       const result = await watcher.handleLog(hookReadyLog());
 
-      // One broadcast; the unknown outcome keeps the job open, not `failed`.
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(result.job?.status).toBe('submitted');
       expect(result.job?.submissions).toHaveLength(1);
       expect(result.job?.submissions[0]?.txHash).toBe(TX_HASH);
       expect(result.job?.lastError?.kind).toBe('rpc_network');
 
-      // Immediate rescan: the receipt is still unavailable and the resend
-      // backoff window is open — still exactly one broadcast on chain.
       const rescan = await watcher.handleLog(hookReadyLog());
       expect(stub.methods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1);
       expect(rescan.job?.status).toBe('submitted');
@@ -4872,11 +4386,6 @@ describe('submitSignal receipt visibility', () => {
   });
 
   it('keeps a job with an unknown-outcome broadcast open instead of dead-lettering it on an unclassifiable receipt failure', async () => {
-    // The receipt wait failed with an error no classifier pattern matches
-    // (non-retryable fallback) after the transaction was already broadcast:
-    // the terminal decision must not dead-letter the job while its
-    // transaction is still in flight. An unknown outcome stays in the
-    // open lane so the later-scan receipt recheck can observe the real one.
     process.env[KEY_ENV] = TEST_PRIVATE_KEY;
     const stub = await startJsonRpcStub();
     try {
@@ -4905,7 +4414,7 @@ describe('submitSignal receipt visibility', () => {
           '*': (event) => ({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           }),
@@ -4980,39 +4489,32 @@ describe('submitSignal receipt visibility', () => {
 });
 
 describe('run terminal-status computation', () => {
-  const buyerRequest = seedRequest('buyer', PAYLOAD_HASH);
-  const sellerRequest = seedRequest('seller', PAYLOAD_HASH);
+  const slotARequest = seedRequest('slot-a', PAYLOAD_HASH);
+  const slotBRequest = seedRequest('slot-b', PAYLOAD_HASH);
 
   it('confirms the incremental empty return when every recorded signal is delivered', () => {
-    // The handler returns its pending subset; when everything is already
-    // delivered that subset is empty and the vacuous every() must not sink
-    // the run into the open lane — the delivery history is the payload.
     const status = statusForCompletedRun({
       dryRun: false,
       identityDatas: [],
       jobSubmissions: [
-        { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest, confirmed: true },
-        { signalIndex: 1, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: sellerRequest, confirmed: true },
+        { signalIndex: 0, attempt: 1, dryRun: false, txHash: TX_HASH, request: slotARequest, confirmed: true },
+        { signalIndex: 1, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: slotBRequest, confirmed: true },
       ],
     });
     expect(status).toBe('confirmed');
   });
 
   it('keeps the zero-history void run terminal completed', () => {
-    // Nothing was ever delivered and nothing is pending: a void handler is a
-    // finished execution, not a job waiting for a recheck.
     expect(statusForCompletedRun({
       dryRun: false,
       identityDatas: [],
       jobSubmissions: [],
     })).toBe('completed');
-    // A void return after attempts that never reached the chain terminates
-    // the same way: no broadcast is outstanding, so nothing can still land.
     expect(statusForCompletedRun({
       dryRun: false,
       identityDatas: [],
       jobSubmissions: [
-        { signalIndex: 0, attempt: 1, request: buyerRequest, error: { kind: 'rpc_network', message: 'fetch failed', retryable: true } },
+        { signalIndex: 0, attempt: 1, request: slotARequest, error: { kind: 'rpc_network', message: 'fetch failed', retryable: true } },
       ],
     })).toBe('completed');
   });
@@ -5020,22 +4522,18 @@ describe('run terminal-status computation', () => {
   it('keeps dry-run passes non-terminal', () => {
     expect(statusForCompletedRun({
       dryRun: true,
-      identityDatas: [buyerRequest.data],
-      jobSubmissions: [{ signalIndex: 0, attempt: 1, dryRun: true, request: buyerRequest }],
+      identityDatas: [slotARequest.data],
+      jobSubmissions: [{ signalIndex: 0, attempt: 1, dryRun: true, request: slotARequest }],
     })).toBe('matched');
   });
 
   it('completes a context signal by content identity when its resend confirmed on another index', () => {
-    // One logical context signal, two indexes: the original broadcast's
-    // receipt is permanently unknown, the rebroadcast confirmed. The content
-    // identity is delivered, so the job terminates no matter how many indexes
-    // the signal accumulated.
     const status = statusForCompletedRun({
       dryRun: false,
       identityDatas: [],
       jobSubmissions: [
-        { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest },
-        { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: buyerRequest, confirmed: true },
+        { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: slotARequest },
+        { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: slotARequest, confirmed: true },
       ],
     });
     expect(status).toBe('confirmed');
@@ -5047,16 +4545,13 @@ describe('run terminal-status computation', () => {
       identityDatas: [],
       jobSubmissions: submissions,
     });
-    // A second logical context signal that never landed keeps the job open.
     expect(contextProbe([
-      { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest, confirmed: true },
-      { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: sellerRequest },
+      { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: slotARequest, confirmed: true },
+      { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: slotBRequest },
     ])).toBe('submitted');
-    // The healthy shape stays confirmed: distinct signals, each delivered on
-    // its own index.
     expect(contextProbe([
-      { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: buyerRequest, confirmed: true },
-      { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: sellerRequest, confirmed: true },
+      { signalIndex: -1, attempt: 1, dryRun: false, txHash: TX_HASH, request: slotARequest, confirmed: true },
+      { signalIndex: -2, attempt: 1, dryRun: false, txHash: TX_HASH_2, request: slotBRequest, confirmed: true },
     ])).toBe('confirmed');
   });
 });
@@ -5094,7 +4589,6 @@ function artifactIndex() {
   };
 }
 
-/** Plan 冻结能力词表镜像：BUYER_SOURCE_ID/EXEC_MAIN_CMP_ID 的属主阶段与 selector 绑定。 */
 function capabilityArtifact() {
   const otherSourceId = keccak256(stringToBytes('someone-else'));
   const otherSignalId = keccak256(stringToBytes('exec.other.done'));
@@ -5104,20 +4598,13 @@ function capabilityArtifact() {
       { selectorStageId: `0x${'66'.repeat(32)}`, targetStageId: STAGE_ID },
     ],
     signalCapabilities: [
-      // relation=1 能力不构成属主声明：同键也必须查不出 attribution。
       { stageId: STAGE_ID, targetSourceId: otherSourceId, signalId: otherSignalId, relation: 1 as const },
-      { stageId: STAGE_ID, targetSourceId: BUYER_SOURCE_ID, signalId: EXEC_MAIN_CMP_ID, relation: 0 as const },
+      { stageId: STAGE_ID, targetSourceId: SLOT_A_SOURCE_ID, signalId: EXEC_MAIN_CMP_ID, relation: 0 as const },
     ],
   };
 }
 
-/**
- * Deterministic submitSignal calldata for a seeded buyer/seller signal: the
- * content identity the watcher attributes cross-run delivery evidence by.
- * Seeds must carry it — a record without its request cannot attribute
- * evidence to a signal and forces a (dedupe-answered) resubmit instead.
- */
-function seedRequest(source: 'buyer' | 'seller', payloadHash?: Hex) {
+function seedRequest(source: 'slot-a' | 'slot-b', payloadHash?: Hex) {
   return buildSubmitStateMachineSignalCall(
     { rpcUrl: 'http://127.0.0.1:8545', stateMachineAddress: STATE_MACHINE, chainId: 31_337 },
     {
@@ -5132,16 +4619,9 @@ function seedRequest(source: 'buyer' | 'seller', payloadHash?: Hex) {
 
 type JsonRpcRequest = { readonly id?: unknown; readonly method?: string };
 
-/**
- * Minimal JSON-RPC endpoint so viem's wallet transport can broadcast locally
- * without a real chain; only the broadcast path is exercised this way — receipt
- * waiting comes from an injected StateMachinePublicClient.
- */
 async function startJsonRpcStub(options: {
   readonly estimateGasError?: { readonly code: number; readonly message: string; readonly times?: number };
-  /** 1-based eth_sendRawTransaction call indexes that fail with a network error. */
   readonly sendRawTransactionErrors?: readonly number[];
-  /** Per-send tx hashes (1-based); sends past the list fall back to TX_HASH. */
   readonly sendRawTransactionTxHashes?: readonly Hex[];
 } = {}): Promise<{
   readonly url: string;
@@ -5275,7 +4755,6 @@ describe('watcher finality runtime-environment gate', () => {
         .toThrow(ValidationError);
       expect(() => createStateMachineWatcher({ ...gateBaseConfig(), runtimeEnvironment }))
         .toThrow(/confirmations must be explicitly configured/);
-      // 0 (tip scanning) is a local throwaway-chain convenience only.
       expect(() => createStateMachineWatcher({ ...gateBaseConfig(), runtimeEnvironment, confirmations: 0 }))
         .toThrow(/must be a positive integer/);
       const watcher = createStateMachineWatcher({ ...gateBaseConfig(), runtimeEnvironment, confirmations: 5 });
@@ -5308,8 +4787,6 @@ describe('watcher run-claim release retry', () => {
       kind: 'flaky-memory',
       upsertDetected: (event, options) => inner.upsertDetected(event, options),
       async update(jobId, patch) {
-        // Only the run-claim release write (claim:null + expectClaimPid guard,
-        // no status change) fails here; every other store write passes.
         if (patch.claim === null && patch.status === undefined && failRelease) {
           throw new Error('EACCES: jobs store unavailable');
         }
@@ -5328,8 +4805,6 @@ describe('watcher run-claim release retry', () => {
       artifact: artifactIndex(),
       jobStore: store,
       handlers: {
-        // 无信号返回：dry-run 收敛为 matched（结论写入不带释放），运行结束
-        // 只能靠 finally 里的 releaseRunClaim 释放认领——正是要演练的路径。
         '*': () => undefined,
       },
       onError: (error) => {
@@ -5353,14 +4828,10 @@ describe('watcher run-claim release retry', () => {
     if (!jobId) {
       throw new Error('expected a processed job');
     }
-    // The release write failed: the claim is still held by this live pid, and
-    // the operator channel saw the alert instead of silence.
     const stuck = await store.get(jobId);
     expect(stuck?.claim?.pid).toBe(process.pid);
     expect(errors.some((message) => message.includes('failed to release the run claim'))).toBe(true);
 
-    // Store recovers: the next poll round retries the release and frees the
-    // job for scans and manual retries.
     failRelease = false;
     await watcher.pollOnce();
     const released = await store.get(jobId);
@@ -5370,27 +4841,20 @@ describe('watcher run-claim release retry', () => {
 
 describe('dry-run submission record dedupe', () => {
   it('dedupes replayed dry-run records by request content across indexes', () => {
-    // The context lane allocates a fresh monotonically decreasing index every
-    // run, so an index-scoped dedupe key let each replay append one more
-    // record; the dry-run simulation of one deterministic request must key on
-    // the request's content identity alone, with the index display-only.
-    const request: SubmitStateMachineSignalCall = seedRequest('buyer');
+    const request: SubmitStateMachineSignalCall = seedRequest('slot-a');
     const submissions: StateMachineJobSubmission[] = [];
     appendJobSubmission(submissions, { signalIndex: -1, attempt: 1, dryRun: true, request });
-    // A later run's replay of the same logical signal lands on a fresh index.
     appendJobSubmission(submissions, { signalIndex: -2, attempt: 1, dryRun: true, request });
     expect(submissions).toHaveLength(1);
 
-    // Different request content is a different simulated signal: kept.
     appendJobSubmission(submissions, {
       signalIndex: -3,
       attempt: 1,
       dryRun: true,
-      request: seedRequest('seller'),
+      request: seedRequest('slot-b'),
     });
     expect(submissions).toHaveLength(2);
 
-    // A real broadcast of the same content is a distinct on-chain fact: kept.
     appendJobSubmission(submissions, { signalIndex: -1, attempt: 2, dryRun: false, txHash: TX_HASH, request });
     expect(submissions).toHaveLength(3);
   });
@@ -5411,7 +4875,7 @@ describe('dry-run submission record dedupe', () => {
           await context.submitSignal({
             planId: PLAN_ID,
             orderId: event.orderId,
-            source: 'buyer',
+            source: 'slot-a',
             signalName: 'exec.main.cmp',
             payloadHash: PAYLOAD_HASH,
           });
@@ -5427,9 +4891,6 @@ describe('dry-run submission record dedupe', () => {
     expect(first.job?.submissions).toHaveLength(1);
     expect(first.job?.submissions[0]?.signalIndex).toBe(-1);
 
-    // The manual retry re-runs the handler, which re-submits the same
-    // deterministic request under a fresh context index: the audit trail must
-    // stay at one simulated record instead of growing once per re-run.
     const retried = await retryStateMachineJob(watcher, jobId, {
       operator: 'ops@example.com',
     });
@@ -5440,11 +4901,6 @@ describe('dry-run submission record dedupe', () => {
 
 describe('watcher held foreign claim alert', () => {
   it('alerts once when a live-looking foreign claim persists across poll rounds and points at the manual override', async () => {
-    // pid liveness is the only claim-aliveness signal: after a crash the OS can
-    // hand the dead holder's pid to an unrelated process, and the claim then
-    // reads alive forever — silently blocking later scans, manual retries, and
-    // dead-lettering. The watcher must turn that deadlock into an operator
-    // alert instead of passing it in silence.
     const store = new InMemoryStateMachineJobStore();
     const errors: string[] = [];
     const watcher = createStateMachineWatcher({
@@ -5473,9 +4929,6 @@ describe('watcher held foreign claim alert', () => {
       },
     });
 
-    // Seed a matched job claimed by a live foreign pid (the test process's
-    // parent): exactly the field state a crashed executor leaves behind once
-    // its pid is reused.
     const event = decodeHookReadyLog(hookReadyLog(), artifactIndex());
     if (!event) {
       throw new Error('expected a decoded HookReady event');
@@ -5495,8 +4948,6 @@ describe('watcher held foreign claim alert', () => {
       throw new Error('expected the claim write to apply');
     }
 
-    // Below the round threshold the claim is ambiguous but not yet alarming:
-    // a healthy foreign run can legitimately span a couple of rounds.
     for (let round = 0; round < HELD_FOREIGN_CLAIM_ALERT_ROUNDS - 1; round += 1) {
       await watcher.pollOnce();
     }
@@ -5508,16 +4959,12 @@ describe('watcher held foreign claim alert', () => {
     expect(errors[0]).toContain('jobs dead-letter');
     expect(errors[0]).toContain('--force');
 
-    // One alert per hold streak: later rounds stay silent instead of flooding
-    // the error channel on every poll.
     await watcher.pollOnce();
     await watcher.pollOnce();
     expect(errors).toHaveLength(1);
   });
 
   it('re-arms the alert after a streak ends: a release clears the counters, a new persistent hold alerts again', async () => {
-    // 计数与已告警集合在 claim 停止读作持有时必须同步清零——否则第二次
-    // 持续持有永远命中"已告警过"的短路，新的死锁回到静默。
     const store = new InMemoryStateMachineJobStore();
     const errors: string[] = [];
     const watcher = createStateMachineWatcher({
@@ -5562,14 +5009,12 @@ describe('watcher held foreign claim alert', () => {
       claim: { pid: foreignPid, at: '2026-04-28T00:00:01.000Z' },
     });
 
-    // 第一次持续持有：满阈值告警一次。
     await hold();
     for (let round = 0; round < HELD_FOREIGN_CLAIM_ALERT_ROUNDS; round += 1) {
       await watcher.pollOnce();
     }
     expect(errors).toHaveLength(1);
 
-    // 认领释放：下一轮观测清零计数与已告警集合（本进程接管重跑后释放）。
     await store.update(detected.id, {
       updatedAt: '2026-04-28T00:02:00.000Z',
       claim: null,
@@ -5578,7 +5023,6 @@ describe('watcher held foreign claim alert', () => {
     await watcher.pollOnce();
     expect(errors).toHaveLength(1);
 
-    // 同一任务再次被外来 pid 持续持有：阈值内沉默，满阈值必须再次告警。
     await hold();
     for (let round = 0; round < HELD_FOREIGN_CLAIM_ALERT_ROUNDS - 1; round += 1) {
       await watcher.pollOnce();
@@ -5590,8 +5034,6 @@ describe('watcher held foreign claim alert', () => {
   });
 
   it('observes held foreign claims on cursor-overshoot early-return rounds', async () => {
-    // 越头早退轮不扫块也不跑 later-scan：早退前不做一次 list()+观测的话，
-    // 等链长回来的整段窗口里持续持有的外来认领到不了告警阈值。
     const dir = await mkdtemp(join(tmpdir(), 'uvp-watcher-overshoot-alert-'));
     const errors: string[] = [];
     try {
@@ -5678,8 +5120,6 @@ describe('jobs dead-letter force', () => {
       throw new Error('expected the claim write to apply');
     }
 
-    // Without --force the held-claim gate stands: dead-lettering under a live
-    // run would strand the running handler on a job it no longer owns.
     await expect(deadLetterStateMachineJob(store, detected.id, {
       operator: 'ops@example.com',
       reason: 'stuck claim',
@@ -5697,11 +5137,9 @@ describe('jobs dead-letter force', () => {
       action: 'dead_letter',
       operator: 'ops@example.com',
       reason: 'holder pid verified reused; executor crashed',
-      // --force 的审计可区分性：回看时必须能识别"操作员断言持有者已死"的人工接管。
       forced: true,
     });
 
-    // 常规 dead-letter（无 --force）不得带 forced 标记。
     const quietEvent = decodeHookReadyLog(
       { ...hookReadyLog(), transactionHash: `0x${'36'.repeat(32)}` as Hex, logIndex: 9 },
       artifactIndex(),

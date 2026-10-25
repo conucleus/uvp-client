@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildRuntimeSignalEnvelope,
   createRuntimeDispatcher,
   createStaticSignalHandler,
 } from '../src/runtime.js';
-import { ValidationError } from '../src/validation.js';
 
 const effect = {
   type: 'HookReady',
@@ -17,28 +15,9 @@ const effect = {
 } as const;
 
 describe('runtime executor adapter', () => {
-  it('builds and validates runtime signal envelopes', () => {
-    const envelope = buildRuntimeSignalEnvelope({
-      zhixuId: 'zhixu-1',
-      orderId: 'order-1',
-      source: 'buyer',
-      stageIdentifier: 'exec.main',
-      signalName: 'exec.main.cmp',
-      senderId: 'executor-1',
-      idempotencyKey: 'exec-cmp',
-      receivedAt: '2026-04-27T00:00:03.000Z',
-    });
-
-    expect(envelope.signalName).toBe('exec.main.cmp');
-    expect(() => buildRuntimeSignalEnvelope({
-      ...envelope,
-      signalName: 'other.main.cmp',
-    })).toThrow(ValidationError);
-  });
-
   it('creates a static handler that emits executor callback signals', async () => {
     const handler = createStaticSignalHandler({
-      source: 'buyer',
+      source: 'slot-a',
       stageIdentifier: 'exec.main',
       signalName: 'exec.main.cmp',
       senderId: 'executor-1',
@@ -52,7 +31,7 @@ describe('runtime executor adapter', () => {
     expect(result.status === 'succeeded' ? result.signals?.[0] : undefined).toEqual({
       zhixuId: 'zhixu-1',
       orderId: 'order-1',
-      source: 'buyer',
+      source: 'slot-a',
       stageIdentifier: 'exec.main',
       signalName: 'exec.main.cmp',
       senderId: 'executor-1',

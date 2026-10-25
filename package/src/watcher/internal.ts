@@ -1,9 +1,7 @@
 /**
  * Watcher-internal leaf helpers shared across the scan/jobs/storage/execution
- * modules (process liveness, error shaping, small parse/coerce utilities).
- * Module-level exports only — none of these are part of the SDK surface.
+ * modules; not part of the SDK surface.
  */
-/** Signal 0 探测存活；EPERM 表示进程存在但属主不同，仍算存活。 */
 import { ValidationError } from '../validation.js';
 
 export function isProcessAlive(pid: number): boolean {

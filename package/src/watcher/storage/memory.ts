@@ -31,10 +31,6 @@ export class InMemoryStateMachineJobStore implements StateMachineJobStore {
       eventId: event.eventId,
       ...(event.stateMachineAddress ? { stateMachineAddress: event.stateMachineAddress } : {}),
       orderId: event.orderId,
-      // Persist the event planId from day one: the plan-scoped submitSignal ABI
-      // needs it on every (re)submission, and dropping it here forced every
-      // config-driven job into dead_letter on the first attempt. The zero
-      // sentinel (undecodable-log isolation) is not a known plan and is skipped.
       ...(event.planId && event.planId !== ZERO_BYTES32 ? { planId: event.planId } : {}),
       hookId: event.hookId,
       stageId: event.stageId,

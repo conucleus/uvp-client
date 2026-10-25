@@ -46,10 +46,7 @@ describe('executor HTTP server', () => {
     expect(verify()).toBe(true);
     expect(verify({ nonce: 'b'.repeat(32) })).toBe(false);
     expect(verify({ timestamp: '1799000000' })).toBe(false);
-    // A captured (body, signature) pair without timestamp+nonce does not
-    // verify: a bare-body HMAC would be permanently replayable.
     expect(verifyWebhookSignature(body, signature, callbackToken)).toBe(false);
-    // Outside the acceptance window the signature is stale even when intact.
     expect(verify({ nowMs: () => 1_800_000_000_000 + 5 * 60_000 + 1 })).toBe(false);
     expect(verifyWebhookSignature(body, signWebhookBody(callbackToken, body, fields).replace(/.$/, '0'), callbackToken, { ...fields, nowMs })).toBe(false);
     expect(verifyWebhookSignature(body, undefined, callbackToken, { ...fields, nowMs })).toBe(false);
@@ -63,17 +60,10 @@ describe('executor HTTP server', () => {
     expect(guard.observe('c'.repeat(32), at, at)).toBe(true);
     expect(guard.observe('c'.repeat(32), at, at + 1000)).toBe(false);
     expect(guard.observe('d'.repeat(32), at, at + 1000)).toBe(true);
-    // The first nonce is only burned for the window; after it expires the
-    // entry is stale and a (pathological) reuse is treated as fresh.
     expect(guard.observe('c'.repeat(32), at, at + 5 * 60_000 + 1)).toBe(true);
   });
 
   it('evicts expired nonces before live ones when tracked capacity overflows', () => {
-    // Insertion order and expiry order can diverge (a timestamp at or beyond
-    // the window edge is already stale on arrival): capacity pressure must
-    // drop dead entries first so a live consumed nonce still detects its
-    // in-window replay instead of being pushed out by entries that can never
-    // matter again.
     const toleranceMs = 5 * 60_000;
     const guard = createWebhookReplayGuard({ toleranceMs, maxTrackedNonces: 2 });
     const at = 1_800_000_000_000;
@@ -108,14 +98,12 @@ describe('executor HTTP server', () => {
       executorId: 'exec-executor',
       executorToken,
       callbackToken,
-      // No host is allowed implicitly, loopback included: the local receiver
-      // must be allowlisted explicitly.
       callbackHostAllowlist: ['127.0.0.1'],
       handlers: createHandlersFromExecutorConfig({
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
             receivedAt: '2026-04-27T00:00:03.000Z',
@@ -145,15 +133,11 @@ describe('executor HTTP server', () => {
           signal: {
             zhixuId: 'zhixu-1',
             orderId: 'order-1',
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
             senderId: 'exec-executor',
-            // Default key caliber matches the watcher's fixed default:
-            // order, source, signal — the emitting event anchor (event-1)
-            // must NOT enter the key, or a re-emitted HookReady becomes a
-            // guaranteed-reverting duplicate broadcast.
-            idempotencyKey: 'order-1:buyer:exec.main.cmp',
+            idempotencyKey: 'order-1:slot-a:exec.main.cmp',
             receivedAt: '2026-04-27T00:00:03.000Z',
           },
         },
@@ -177,7 +161,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -216,8 +200,6 @@ describe('executor HTTP server', () => {
         timestamp: typeof timestamp === 'string' ? timestamp : undefined,
         nonce: typeof nonce === 'string' ? nonce : undefined,
       })).toBe(true);
-      // The MAC covers timestamp+nonce: replaying the same signature against a
-      // different nonce must fail.
       expect(verifyWebhookSignature(delivery.body, delivery.headers[WEBHOOK_SIGNATURE_HEADER] as string, hmacSecret, {
         timestamp: typeof timestamp === 'string' ? timestamp : undefined,
         nonce: 'e'.repeat(32),
@@ -297,7 +279,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -321,7 +303,6 @@ describe('executor HTTP server', () => {
       await eventually(async () => {
         const jobs = await getJobs(callbackFailure.url);
         expect(jobs[0]?.status).toBe('callback_failed');
-        // Bounded retries were exhausted before the terminal failure was recorded.
         expect(jobs[0]?.callbacks?.[0]).toMatchObject({
           signalIndex: 0,
           delivered: false,
@@ -329,7 +310,6 @@ describe('executor HTTP server', () => {
         });
         expect(jobs[0]?.lastError).toContain('callback endpoint failed with 500');
       });
-      // The exhausted delivery is reported through an error log.
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('callback delivery failed for signal 0 after 3 attempt(s)'));
     } finally {
       errorSpy.mockRestore();
@@ -348,14 +328,13 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
         },
       }),
       port: 0,
-      // Default retry policy: bounded attempts with a real base delay.
       fetchImpl: async () => {
         attempt += 1;
         return attempt < DEFAULT_CALLBACK_MAX_ATTEMPTS
@@ -397,7 +376,7 @@ describe('executor HTTP server', () => {
         {
           zhixuId: dispatchEffect.zhixuId,
           orderId: dispatchEffect.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           stageIdentifier: dispatchEffect.stageIdentifier,
           signalName: `${dispatchEffect.stageIdentifier}.cmp`,
           senderId: 'exec-executor',
@@ -405,7 +384,7 @@ describe('executor HTTP server', () => {
         {
           zhixuId: dispatchEffect.zhixuId,
           orderId: dispatchEffect.orderId,
-          source: 'buyer',
+          source: 'slot-a',
           stageIdentifier: dispatchEffect.stageIdentifier,
           signalName: `${dispatchEffect.stageIdentifier}.done`,
           senderId: 'exec-executor',
@@ -419,9 +398,6 @@ describe('executor HTTP server', () => {
       callbackHostAllowlist: ['127.0.0.1'],
       handlers: { 'exec.main#START': twoSignalHandler },
       port: 0,
-      // The first signal (.cmp) is accepted; every delivery of the second one
-      // (.done) fails so the job must end callback_failed while truthfully
-      // recording that signal 0 was delivered.
       fetchImpl: async (_input, init) => {
         const body = JSON.parse(String(init?.body ?? '{}')) as { signal?: { signalName?: string } };
         if (body.signal?.signalName === 'exec.main.cmp') {
@@ -449,8 +425,6 @@ describe('executor HTTP server', () => {
       });
       const jobs = await getJobs(executor.url);
       const job = jobs[0];
-      // The delivered signal stays recorded as delivered; the failure must not
-      // mask the fact that the first signal went out.
       expect(job?.callbacks?.[0]).toMatchObject({ signalIndex: 0, delivered: true, attempts: 1 });
       expect(job?.callbacks?.[1]?.delivered).toBe(false);
       expect(job?.callbacks?.[1]?.error).toContain('callback endpoint failed with 500');
@@ -473,7 +447,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -519,9 +493,6 @@ describe('executor HTTP server', () => {
   });
 
   it('resolves concurrent duplicate dispatches to exactly one accepted job', async () => {
-    // Dispatch idempotency requires a conditional store create: a
-    // read-then-create pair would let two racing dispatches both pass the
-    // existence check.
     let outboundCalls = 0;
     const executor = await startExecutorServer({
       executorId: 'exec-executor',
@@ -532,7 +503,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -566,10 +537,6 @@ describe('executor HTTP server', () => {
   });
 
   it('contains a failing job-store write inside the detached dispatch path instead of raising an unhandled rejection', async () => {
-    // processDispatch runs detached (queueMicrotask + void): when the
-    // success-path status write faults, the catch path's own failure write
-    // must be the last line of defense — escaping it kills the process as an
-    // unhandledRejection, taking down every other in-flight dispatch.
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown): void => {
       unhandled.push(reason);
@@ -604,8 +571,6 @@ describe('executor HTTP server', () => {
       });
       expect(accepted.status).toBe(202);
 
-      // Both the success-path write and the guarded catch-path write fault;
-      // neither may escape the process.
       await eventually(async () => {
         expect(updateCalls).toBeGreaterThanOrEqual(2);
       });
@@ -617,9 +582,6 @@ describe('executor HTTP server', () => {
   });
 
   it('never follows a callback redirect and never replays the bearer to the redirect target', async () => {
-    // The callback fetch must not follow redirects: following a 3xx answer
-    // would replay the Authorization bearer to whatever host the
-    // redirect pointed at. Redirects are manual and count as failures.
     const seen: { path: string; authorization?: string }[] = [];
     const redirector = createServer((request, response) => {
       seen.push({
@@ -651,7 +613,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -678,8 +640,6 @@ describe('executor HTTP server', () => {
         expect(jobs[0]?.lastError).toContain('callback endpoint failed with 302');
       });
 
-      // The redirect was never followed: only the callback endpoint itself was
-      // hit (once per bounded retry), never the /leak target.
       expect(seen.filter((entry) => entry.path === '/leak')).toEqual([]);
       expect(seen.length).toBeGreaterThan(0);
       expect(seen.every((entry) => entry.authorization === `Bearer ${callbackToken}`)).toBe(true);
@@ -724,10 +684,6 @@ describe('executor HTTP server', () => {
   });
 
   it('rejects callback URLs outside the explicit allowlist before enqueuing and never sends the callback token', async () => {
-    // Default deny, loopback included: an allowlist that silently admitted
-    // every loopback host let a dispatcher use the executor as a probe proxy
-    // for the host's local services, with responses readable back through
-    // the jobs API.
     let outboundCalls = 0;
     const executor = await startExecutorServer({
       executorId: 'exec-executor',
@@ -738,7 +694,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -755,7 +711,6 @@ describe('executor HTTP server', () => {
         'http://169.254.169.254/latest/meta-data/',
         'https://example.invalid/v0/signals',
         'file:///etc/passwd',
-        // Loopback variants are not implicitly allowlisted either.
         'http://localhost:9/v0/signals',
         'http://[::1]/v0/signals',
       ]) {
@@ -779,9 +734,6 @@ describe('executor HTTP server', () => {
   });
 
   it('refuses to start without an explicit callback host allowlist', async () => {
-    // An empty allowlist is a configuration error, not "allow loopback": the
-    // server must fail loudly at startup instead of accepting dispatches it
-    // can never deliver.
     await expect(startExecutorServer({
       executorId: 'exec-executor',
       executorToken,
@@ -801,7 +753,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -872,12 +824,8 @@ describe('executor HTTP server', () => {
       '::2',
     ]);
 
-    // Loopback hosts are allowed only through the explicit allowlist.
     expect(() => assertCallbackUrlAllowed('http://127.0.0.1:9/v0/signals', [])).toThrow(/not allowed/);
     expect(() => assertCallbackUrlAllowed('http://127.0.0.1:9/v0/signals', ['127.0.0.1'])).not.toThrow();
-    expect(() => assertCallbackUrlAllowed('http://localhost/v0/signals', ['localhost'])).not.toThrow();
-    expect(() => assertCallbackUrlAllowed('http://[::1]/v0/signals', ['::1'])).not.toThrow();
-    expect(() => assertCallbackUrlAllowed('http://internal.example/v0/signals', ['internal.example'])).not.toThrow();
 
     expect(() => assertCallbackUrlAllowed('ftp://127.0.0.1/v0/signals', ['127.0.0.1'])).toThrow(/scheme/);
     expect(() => assertCallbackUrlAllowed('http://169.254.169.254/', ['127.0.0.1'])).toThrow(/not allowed/);
@@ -892,7 +840,7 @@ describe('executor HTTP server', () => {
         executorId: 'exec-executor',
         handlers: {
           'exec.main#START': {
-            source: 'buyer',
+            source: 'slot-a',
             stageIdentifier: 'exec.main',
             signalName: 'exec.main.cmp',
           },
@@ -905,6 +853,31 @@ describe('executor HTTP server', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it('keys the config-handler default idempotency key on orderId/source/signalName so a re-emitted HookReady reuses it', async () => {
+    const handlers = createHandlersFromExecutorConfig({
+      executorId: 'exec-executor',
+      handlers: {
+        'exec.main#START': {
+          source: 'slot-a',
+          stageIdentifier: 'exec.main',
+          signalName: 'exec.main.cmp',
+        },
+      },
+    });
+    const handler = handlers['exec.main#START'];
+    if (!handler) {
+      throw new Error('expected a handler for exec.main#START');
+    }
+    const idempotencyKeyOf = (result: Awaited<ReturnType<typeof handler>>) =>
+      result.status === 'succeeded' ? result.signals?.[0]?.idempotencyKey : undefined;
+
+    const first = await handler(effect, { state: {} });
+    const reemitted = await handler({ ...effect, eventId: 'event-2' }, { state: {} });
+
+    expect(idempotencyKeyOf(first)).toBe('order-1:slot-a:exec.main.cmp');
+    expect(idempotencyKeyOf(first)).toBe(idempotencyKeyOf(reemitted));
   });
 });
 

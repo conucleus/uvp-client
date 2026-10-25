@@ -24,17 +24,6 @@ export type SubmitStateMachineSignalResult =
     readonly confirmed?: boolean;
   };
 
-/**
- * Thrown after a submitSignal transaction was already broadcast but its receipt
- * could not be confirmed: either the receipt came back with status 'reverted'
- * or waiting for the receipt itself failed (timeout, RPC fault). The broadcast
- * txHash rides on the error so callers can keep the already-broadcast
- * transaction in the job audit trail instead of losing it to a retry.
- * `reverted` separates the two cases: only a receipt actually observed as
- * 'reverted' is a known outcome; a receipt that could not be obtained (or
- * carries a status string the kit does not recognize) leaves the broadcast's
- * outcome unknown and must never terminalize the job.
- */
 export class SubmitSignalReceiptError extends Error {
   readonly txHash: Hex;
   readonly reverted: boolean;
@@ -97,8 +86,6 @@ export async function submitStateMachineSignal(
     try {
       receipt = await client.waitForTransactionReceipt({ hash: txHash });
     } catch (error) {
-      // The tx is already on chain; never let a receipt-wait fault drop the
-      // hash of what was broadcast.
       const detail = error instanceof Error ? error.message : String(error);
       throw new SubmitSignalReceiptError(txHash, `submitSignal transaction receipt wait failed for ${txHash}: ${detail}`, { cause: error });
     }

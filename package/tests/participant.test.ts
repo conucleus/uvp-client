@@ -45,11 +45,6 @@ describe('participant entrypoint', () => {
       deadline,
     });
 
-    // UVPStateMachineSignal is plan-scoped — planId is the first
-    // field of the signed message and callers must pass the real order planId.
-    // The domain version follows the protocol constant (re-exported from
-    // protocol-bindings; 0.15 since the state-machine 0.15 domain batch); the
-    // signed envelope itself is unchanged.
     expect(typedData).toEqual({
       domain: {
         name: 'UVPStateMachine',
@@ -84,10 +79,6 @@ describe('participant entrypoint', () => {
   });
 
   it('rejects typed data built without a planId for real signing', () => {
-    // The signed message is plan-scoped: a submission without a real planId
-    // could never pass the on-chain (planId, orderId) existence check, so the
-    // builder refuses to produce typed data for it instead of handing the
-    // signer a zero placeholder.
     expect(() => buildProductSubmitTypedData({
       chainId: 31337,
       verifyingContract,
@@ -123,9 +114,6 @@ describe('participant entrypoint', () => {
 
   it('builds submitSignalFor contract calls from the shared ABI', () => {
     const signature = `0x${'aa'.repeat(65)}` as const;
-    // Proof structs are required ABI inputs since the capabilities Merkle
-    // refactor: the all-zero pair is the "no claim / no binding proof"
-    // encoding (out-of-vocabulary caliber) and stays out of the signature.
     const attribution: SignalAttributionPayload = {
       sourceId,
       signalId,
@@ -154,8 +142,6 @@ describe('participant entrypoint', () => {
       functionName: 'submitSignalFor',
       chainId: 31337,
     });
-    // planId is the first ABI argument of submitSignalFor; the zero proof
-    // structs close the args tuple after the signature.
     expect(call.args).toEqual([
       planId,
       orderId,

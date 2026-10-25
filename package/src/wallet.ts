@@ -74,9 +74,6 @@ export async function writeWalletEnvFile(
   const wallet = createWalletEnv(options);
   await mkdir(dirname(envFile), { recursive: true });
   await writeFile(envFile, wallet.envText, { mode: 0o600 });
-  // writeFile's `mode` only applies to files it creates: with --overwrite the
-  // file already exists and keeps its (possibly looser) permissions, so the
-  // owner-only mode must be re-asserted explicitly.
   await chmod(envFile, 0o600);
   return {
     address: wallet.address,

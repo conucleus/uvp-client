@@ -43,7 +43,6 @@ describe('Product API doctor', () => {
     expect(report.checks[0]).toMatchObject({ ok: true, label: 'reachability' });
     expect(report.ok).toBe(true);
     expect(report.timestamp).toBeTypeOf('string');
-    // no secrets leaked
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('0x');
   });
@@ -58,13 +57,13 @@ describe('Product API doctor', () => {
           {
             taskId: 'task_1',
             orderId: 'order_1',
-            title: 'Confirm stage release',
+            title: 'Confirm stage-1',
             status: 'open',
           },
           {
             taskId: 'task_2',
             orderId: 'order_2',
-            title: 'Verify shipment docs',
+            title: 'Verify doc-1',
             status: 'open',
           },
         ],
@@ -83,9 +82,8 @@ describe('Product API doctor', () => {
     expect(taskCheck?.detail).toContain('2 task(s)');
     expect(report.walletAddress).toBe(submitter);
     expect(report.tasks).toHaveLength(2);
-    expect(report.tasks?.[0]).toMatchObject({ taskId: 'task_1', title: 'Confirm stage release' });
+    expect(report.tasks?.[0]).toMatchObject({ taskId: 'task_1', title: 'Confirm stage-1' });
     expect(report.ok).toBe(true);
-    // normal output strips raw fields
     expect(report.rawTasks).toBeUndefined();
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('sourceId');
@@ -143,7 +141,6 @@ describe('Product API doctor', () => {
     expect(proofCheck?.detail).toContain('confirmed');
     expect(report.proof).toMatchObject({ submissionId: 'sub_1', status: 'confirmed' });
     expect(report.ok).toBe(true);
-    // normal output strips raw fields
     expect(report.rawProof).toBeUndefined();
   });
 
@@ -160,7 +157,7 @@ describe('Product API doctor', () => {
             {
               taskId: 'task_1',
               orderId: 'order_1',
-              title: 'Confirm stage release',
+              title: 'Confirm stage-1',
               status: 'open',
               sourceId: sourceIdHex,
               signalId: signalIdHex,
@@ -228,10 +225,6 @@ describe('Product API doctor', () => {
   });
 
   it('never follows a Product API redirect and never replays the bearer to the redirect target', async () => {
-    // Audit S11 same-class fix: the reachability probe carries the
-    // Authorization bearer from --auth-token-env, and the default
-    // redirect:"follow" policy would replay it to whatever host a 3xx points
-    // at. Redirects are now manual and fail the reachability check.
     const seen: { path: string; authorization?: string }[] = [];
     const redirector = createServer((request, response) => {
       seen.push({
@@ -251,7 +244,6 @@ describe('Product API doctor', () => {
     }
 
     try {
-      // No injected fetch: the real global fetch must honor the manual policy.
       const report = await runProductDoctor({
         chainServicesUrl: `http://127.0.0.1:${redirectorAddress.port}`,
         headers: { Authorization: 'Bearer secret-doctor-token' },
@@ -263,8 +255,6 @@ describe('Product API doctor', () => {
       expect(reachability?.detail).toContain('redirects are refused');
       expect(report.ok).toBe(false);
 
-      // The redirect was never followed: the /leak target saw zero requests,
-      // and every observed request carried (only) the original bearer.
       expect(seen.filter((entry) => entry.path.startsWith('/leak'))).toEqual([]);
       expect(seen.length).toBeGreaterThan(0);
       expect(seen.every((entry) => entry.authorization === 'Bearer secret-doctor-token')).toBe(true);
@@ -310,7 +300,6 @@ describe('Product API doctor', () => {
 
     const taskCheck = report.checks.find((c) => c.label === 'task-visibility');
     expect(taskCheck?.ok).toBe(false);
-    // error message is classified and may be redacted, but should exist
     expect(taskCheck?.detail).toBeTypeOf('string');
   });
 
@@ -323,10 +312,10 @@ describe('Product API doctor', () => {
         task: {
           taskId: 'task_actionable',
           orderId: 'order_1',
-          title: 'Confirm stage release',
+          title: 'Confirm stage-1',
           status: 'open',
           assigneeWallet: submitter,
-          stageName: 'Stage A release',
+          stageName: 'Stage A advance',
           deadline: '2099-01-01T00:00:00.000Z',
           canSubmit: true,
           primaryActionLabel: 'Confirm stage',
@@ -354,7 +343,6 @@ describe('Product API doctor', () => {
     expect(report.taskReadiness?.nextActionLabel).toContain('Ready to prepare');
     expect(report.tasks).toBeUndefined();
     expect(report.ok).toBe(true);
-    // normal output strips raw fields
     expect(report.rawTaskReadiness).toBeUndefined();
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('sourceId');
@@ -370,7 +358,7 @@ describe('Product API doctor', () => {
         task: {
           taskId: 'task_blocked',
           orderId: 'order_2',
-          title: 'Verify shipping docs',
+          title: 'Verify doc-1',
           status: 'open',
           assigneeWallet: submitter,
           deadline: '2099-01-01T00:00:00.000Z',
@@ -396,17 +384,11 @@ describe('Product API doctor', () => {
     });
     expect(report.taskReadiness?.nextActionLabel).toContain('Required evidence not yet uploaded');
     expect(report.ok).toBe(false);
-    // The embedded readiness check mirrors the verdict: consumers reading
-    // only the nested check must see the blocked state.
     expect(report.taskReadiness?.ok).toBe(false);
     expect(report.taskReadiness?.check.ok).toBe(false);
   });
 
   it('reports next action as proof for a submitted task', async () => {
-    // `submitted` is the terminal state of the frozen TaskStatus vocabulary
-    // (open|submitted|blocked): on-chain confirmation flows back through the
-    // submission receipt, not as a new task status, so readiness.ok must count
-    // a submitted task as complete pending proof.
     const fetch: ProductApiFetch = async (url) => {
       if (!url.includes('/product/')) {
         return jsonResponse({ service: 'chain-services' });
@@ -415,7 +397,7 @@ describe('Product API doctor', () => {
         task: {
           taskId: 'task_submitted',
           orderId: 'order_3b',
-          title: 'Completed inspection',
+          title: 'Completed check-1',
           status: 'submitted',
           assigneeWallet: submitter,
           canSubmit: false,
@@ -442,9 +424,6 @@ describe('Product API doctor', () => {
   });
 
   it('treats a status outside the TaskStatus vocabulary as not complete', async () => {
-    // The server only emits open|submitted|blocked; any other status (e.g.
-    // "done") is a non-canonical payload that must surface as not-ready
-    // instead of being silently treated as a completed task.
     const fetch: ProductApiFetch = async (url) => {
       if (!url.includes('/product/')) {
         return jsonResponse({ service: 'chain-services' });
@@ -453,7 +432,7 @@ describe('Product API doctor', () => {
         task: {
           taskId: 'task_done',
           orderId: 'order_3',
-          title: 'Completed inspection',
+          title: 'Completed check-1',
           status: 'done',
           assigneeWallet: submitter,
           canSubmit: false,
@@ -478,11 +457,6 @@ describe('Product API doctor', () => {
   });
 
   it('reports per-task readiness without wallet address as explicitly unverified', async () => {
-    // Without a wallet the assignee check cannot run at all. The readiness
-    // must not claim a match it never made (a missing wallet must not yield
-    // an unconditionally true assigneeMatch printing "Ready to prepare");
-    // the SDK reports assigneeUnverified instead, and the CLI refuses
-    // --task-id without --wallet-address entirely.
     const fetch: ProductApiFetch = async (url) => {
       if (!url.includes('/product/')) {
         return jsonResponse({ service: 'chain-services' });
@@ -514,7 +488,6 @@ describe('Product API doctor', () => {
       configuredWallet: '',
     });
     expect(report.taskReadiness?.nextActionLabel).toContain('NOT verified');
-    // no tasks list when task-id is provided
     expect(report.tasks).toBeUndefined();
     expect(report.walletAddress).toBeUndefined();
   });
@@ -554,9 +527,6 @@ describe('Product API doctor', () => {
   });
 
   it('keeps the server canSubmit authoritative over the locally computed deadline', async () => {
-    // The deadline is display-only (parsed as UTC): the local clock never
-    // vetoes canSubmit from its own expiry computation, and the server's
-    // verdict wins even when the local computation says expired.
     const fetch: ProductApiFetch = async (url) => {
       if (!url.includes('/product/')) {
         return jsonResponse({ service: 'chain-services' });
@@ -568,8 +538,6 @@ describe('Product API doctor', () => {
           title: 'Skewed clock task',
           status: 'open',
           assigneeWallet: submitter,
-          // Naive (no offset) past timestamp: displayed as expired, but the
-          // server said canSubmit=true and that conclusion is authoritative.
           deadline: '2020-01-01T00:00:00.000',
           canSubmit: true,
         },
@@ -595,10 +563,6 @@ describe('Product API doctor', () => {
   });
 
   it('keeps the server blockedReason displayed even when the local clock computes the deadline as expired', async () => {
-    // The server's blockedReason always wins the nextAction label: the local
-    // deadline stays display-only (deadlineExpired) and never rewrites the
-    // action guidance with a clock-derived verdict when the server gave a
-    // reason.
     const fetch: ProductApiFetch = async (url) => {
       if (!url.includes('/product/')) {
         return jsonResponse({ service: 'chain-services' });
@@ -628,7 +592,6 @@ describe('Product API doctor', () => {
       taskId: 'task_blocked_skew',
       canSubmit: false,
       blockedReason: 'Required evidence not yet uploaded',
-      // Local computation is still reported, as display context only.
       deadlineExpired: true,
       nextAction: 'wait',
     });
@@ -662,9 +625,6 @@ describe('Product API doctor', () => {
 
 describe('doctor CLI', () => {
   it('refuses --task-id without --wallet-address instead of printing unverified readiness', async () => {
-    // without a wallet, assignee ownership cannot be checked at all —
-    // the readiness verdict must not print "Ready to prepare" anyway. The CLI
-    // enforces what its option help claims.
     await expect(main([
       'node',
       'uvp-executor',
@@ -760,7 +720,7 @@ describe('doctor CLI', () => {
           title: 'CLI task',
           status: 'open',
           assigneeWallet: submitter,
-          stageName: 'Stage A release',
+          stageName: 'Stage A advance',
           deadline: '2099-01-01T00:00:00.000Z',
           canSubmit: true,
           primaryActionLabel: 'Confirm stage',
@@ -881,7 +841,7 @@ describe('doctor CLI', () => {
           {
             taskId: 'task_1',
             orderId: 'order_1',
-            title: 'Confirm stage release',
+            title: 'Confirm stage-1',
             status: 'open',
             sourceId: bytes32('02'),
             signalId: bytes32('03'),
@@ -912,7 +872,6 @@ describe('doctor CLI', () => {
       expect(output.checks).toHaveLength(2);
       expect(output.tasks?.[0]?.taskId).toBe('task_1');
       expect(output.timestamp).toBeTypeOf('string');
-      // no secrets in output
       expect(logs[0]).not.toContain(privateKey);
       expect(logs[0]).not.toContain('sourceId');
       expect(logs[0]).not.toContain('signalId');
@@ -945,7 +904,7 @@ describe('doctor CLI', () => {
             {
               taskId: 'task_1',
               orderId: 'order_1',
-              title: 'Confirm stage release',
+              title: 'Confirm stage-1',
               status: 'open',
               sourceId: sourceIdHex,
               signalId: bytes32('03'),
@@ -985,7 +944,6 @@ describe('doctor CLI', () => {
       expect(output.rawTasks).toBeDefined();
       expect(output.rawTasks?.[0]?.sourceId).toBe(sourceIdHex);
       expect(output.rawProof).toBeDefined();
-      // non-verbose fields still present
       expect(output.tasks).toBeDefined();
       expect(output.proof).toBeDefined();
     } finally {
@@ -1060,7 +1018,6 @@ describe('doctor CLI', () => {
       };
       expect(output.ok).toBe(false);
       expect(output.checks?.[0]).toMatchObject({ ok: false, label: 'reachability', detail: expect.stringContaining('503') });
-      // The printed report is unchanged; only the exit signal is added.
       expect(logs[0]).toContain('"ok":false');
       expect(process.exitCode).toBe(1);
     } finally {

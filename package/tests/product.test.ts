@@ -45,7 +45,7 @@ describe('Product API mode', () => {
             {
               taskId: 'task_1',
               orderId: 'order_1',
-              title: 'Confirm stage release',
+              title: 'Confirm stage-1',
               status: 'open',
               sourceId: bytes32('02'),
               signalId: bytes32('03'),
@@ -65,7 +65,7 @@ describe('Product API mode', () => {
     expect(tasks[0]).toMatchObject({
       taskId: 'task_1',
       orderId: 'order_1',
-      title: 'Confirm stage release',
+      title: 'Confirm stage-1',
       status: 'open',
     });
     expect(calls[0]?.url).toBe(`http://chain.local/api/product/tasks?assignee=${submitter}`);
@@ -95,8 +95,6 @@ describe('Product API mode', () => {
   });
 
   it('aborts a hung Product API request at the bounded deadline', async () => {
-    // The transport must bound every call: a hung server otherwise stalls the
-    // CLI forever. The fetch only settles through the abort signal.
     const fetch: ProductApiFetch = (_url, init) => new Promise<never>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted due to timeout')));
     });
@@ -178,10 +176,6 @@ describe('Product API mode', () => {
   });
 
   it('never follows a Product API redirect and never replays the bearer to the redirect target', async () => {
-    // Audit S11 same-class fix: --auth-token-env injects an Authorization
-    // bearer into every product fetch (including this one's headers), and the
-    // default redirect:"follow" policy would replay it to whatever host a 3xx
-    // points at. Redirects are now manual and count as request failures.
     const seen: { path: string; authorization?: string }[] = [];
     const redirector = createServer((request, response) => {
       seen.push({
@@ -201,7 +195,6 @@ describe('Product API mode', () => {
     }
 
     try {
-      // No injected fetch: the real global fetch must honor the manual policy.
       const error = await listSignalContainers({
         chainServicesUrl: `http://127.0.0.1:${redirectorAddress.port}`,
         walletAddress: submitter,
@@ -213,8 +206,6 @@ describe('Product API mode', () => {
       expect((error as ProductApiError).code).toBe('redirect');
       expect((error as Error).message).toContain('redirects are refused');
 
-      // The redirect was never followed: the /leak target saw zero requests,
-      // and every observed request carried (only) the original bearer.
       expect(seen.filter((entry) => entry.path.startsWith('/leak'))).toEqual([]);
       expect(seen.length).toBeGreaterThan(0);
       expect(seen.every((entry) => entry.authorization === 'Bearer secret-product-token')).toBe(true);
@@ -293,7 +284,7 @@ describe('Product API mode', () => {
       status: 'open',
       sourceId: bytes32('02'),
       signalId: bytes32('03'),
-      fundingImpact: 'Adapter placeholder: records funding condition only; no custody or settlement by UVP.',
+      fundingImpact: 'Adapter placeholder: records funding condition only; no custody or transfer by UVP.',
       primaryActionLabel: 'Confirm funding condition',
       requiredInputs: [
         {
@@ -660,8 +651,6 @@ describe('request id passthrough', () => {
   });
 
   it('does not read the request id from unknown request-id headers (only x-request-id is canonical)', async () => {
-    // The server stamps responses exclusively with x-request-id (api/server.ts);
-    // other request-id-shaped headers must never populate requestId.
     const fetch: ProductApiFetch = async () => ({
       ok: true,
       status: 200,
@@ -791,9 +780,6 @@ describe('frozen typed-data validation', () => {
   });
 
   it('rejects a prepared submission whose signature message is missing or zeroing the plan id', () => {
-    // the signature commits to (planId, orderId). A prepared
-    // submission without the plan field, or with the builder's zero placeholder,
-    // could only produce a signature the chain rejects — fail at parse/sign time.
     const base = () => structuredClone(preparedSubmission()) as PreparedSignalContainer;
 
     const missingPlanId = base();
@@ -808,9 +794,6 @@ describe('frozen typed-data validation', () => {
   });
 
   it('keeps the parsed plan id in the signature message instead of dropping it', () => {
-    // Regression guard: a parser that validates the frozen table but rebuilds
-    // the message without planId would silently strip the plan binding between
-    // parse and sign, changing what the wallet signs.
     const parsed = parsePreparedSignalContainer(preparedSubmission());
     expect(parsed.typedData.message.planId).toBe(bytes32('06'));
   });
@@ -840,8 +823,6 @@ function preparedSubmission(options: { readonly submitter?: Address } = {}): Pre
   const signalId = bytes32('03');
   const payloadHash = bytes32('04');
   const idempotencyKey = bytes32('05');
-  // Deadlines are validated to be a decimal uint in the future, so the fixture
-  // computes one instead of pinning a date that ages into the past.
   const deadline = String(Math.floor(Date.now() / 1000) + 3600);
   return {
     prepareId: 'prep_1',
@@ -864,8 +845,8 @@ function preparedSubmission(options: { readonly submitter?: Address } = {}): Pre
     humanSummary: {
       purpose: 'Submit task evidence',
       orderId: 'order_1',
-      taskTitle: 'Confirm stage release',
-      stage: 'Stage A release',
+      taskTitle: 'Confirm stage-1',
+      stage: 'Stage A advance',
       action: 'Confirm stage',
       payloadHash,
       payloadRef: 'ipfs://payload',

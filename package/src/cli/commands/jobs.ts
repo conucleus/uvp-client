@@ -72,12 +72,6 @@ export function registerJobsCommands(program: Command): void {
     .option('--confirmations <n>', 'finality buffer in blocks: scan only up to head - n (0 restores tip scanning); defaults to 1 only for local/undeclared runtime envs and must be passed explicitly for non-local ones')
     .option('--runtime-env <env>', `declared runtime environment (local, testnet, staging, production); non-local values make an explicit --confirmations mandatory (default: $${EXECUTOR_RUNTIME_ENV} or local caliber)`)
     .action(async (jobId: string, options: JobsRetryOptions) => {
-      // README 承诺 file 模式下不停机手工重投：retry 不取 state-dir 启动锁
-      // （与运行中的 watcher 共存）。并发安全由任务级运行认领承担：正在被
-      // 其它执行器运行的任务会被拒绝，只有空闲或持有者已崩溃的任务可接管。
-      // retry 本身不驱动扫描，但它与 chain-* 共用同一 watcher 构造与
-      // 非 local finality 强检；透传同一对旗标让入口遵守同一条门禁规则，
-      // 而不是为单一入口放宽共享的规范化强检。
       const { watcher } = await buildStateMachineWatcherFromCli(options, { holdStateDirLock: false });
       const result = await retryStateMachineJob(watcher, jobId, {
         operator: options.operator,
@@ -85,11 +79,6 @@ export function registerJobsCommands(program: Command): void {
       });
       console.log(stringifyForTransport({ retry: result }));
       if (result.status === 'skipped') {
-        // 重开 CAS 与运行认领之间被并发执行器抢先（或任务已终态）：retry 请求
-        // 的重跑没有发生。结果 JSON 里的 skipped 只是事实陈述，退出码 0 会让
-        // 脚本与操作员把"未执行"读成"已成功"——与 executionOutcomeFailed 的
-        // 诚实退出码同一口径。扫描路径的 skipped（外来 hook、活认领让位）是
-        // 正常态，不适用此规则。
         console.error(
           `jobs retry ${jobId} did not run the job (result status: skipped):`
           + ' another executor claimed or concluded it between the retry write and the run;'

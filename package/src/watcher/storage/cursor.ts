@@ -3,25 +3,12 @@ import { ValidationError } from '../../validation.js';
 import { asString, isNodeError, isRecord } from '../internal.js';
 import { quarantineCorruptStateFile, writeStateFileAtomically } from './file.js';
 
-/**
- * Identity of the scan position a cursor belongs to. A persisted cursor is only
- * restored when the watcher's chain id, state-machine set, and chain genesis
- * hash match, so reconfiguring the watcher or resetting the chain (e.g. a fresh
- * Anvil) can never resume from a foreign scan position.
- */
 export interface StateMachineCursorContext {
   readonly chainId: number;
-  /** Lowercase state-machine addresses, sorted; the watcher derives this from its config. */
   readonly stateMachines: readonly string[];
-  /**
-   * Canonical genesis (block-0) hash. Known only when the RPC client can read
-   * blocks; a chain reset mints a different genesis even at the same chain id,
-   * which is exactly the silent-drop case the identity must catch.
-   */
   readonly genesisHash?: string;
 }
 
-/** A remembered (height, canonical hash) anchor inside the reorg window. */
 export interface StateMachineCursorCheckpoint {
   readonly blockNumber: bigint;
   readonly blockHash: string;
@@ -31,7 +18,6 @@ export type StateMachineCursorLoadResult =
   | {
     readonly status: 'restored';
     readonly nextBlock: bigint;
-    /** Canonical hash of block nextBlock - 1, when the saving round could read it. */
     readonly blockHash?: string;
     readonly checkpoints?: readonly StateMachineCursorCheckpoint[];
   }
@@ -44,23 +30,9 @@ export interface StateMachineCursorState {
   readonly checkpoints?: readonly StateMachineCursorCheckpoint[];
 }
 
-/**
- * Durable store for the watcher scan cursor (the next block to scan).
- * The job-store abstraction does not fit: jobs are keyed by bytes32 ids with
- * required event fields, while the cursor is a single block number bound to the
- * watcher identity above.
- */
 export interface StateMachineCursorStore {
-  /** Storage-mode label for diagnostics (`file`, ...); optional so custom stores stay compatible. */
   readonly kind?: string;
-  /**
-   * Resolve the persisted cursor for this context. `empty` when nothing usable
-   * is stored; `foreign` when a cursor exists but belongs to another watcher
-   * identity (the watcher alerts and starts fresh instead of silently adopting
-   * it). Structurally invalid state is quarantined and reported as `empty`.
-   */
   load(context: StateMachineCursorContext): Promise<StateMachineCursorLoadResult>;
-  /** Persist the cursor after a successful scan round advanced past its toBlock. */
   save(state: StateMachineCursorState, context: StateMachineCursorContext): Promise<void>;
 }
 
@@ -94,9 +66,6 @@ export class FileStateMachineCursorStore implements StateMachineCursorStore {
       if (!isRecord(decoded)) {
         throw new ValidationError('cursor file must contain a JSON object');
       }
-      // A cursor from a different chain id, state-machine set, or genesis
-      // belongs to another watcher identity: report it as foreign so the
-      // watcher can alert and start fresh; the next successful save overwrites.
       if (!cursorContextMatches(decoded, context)) {
         return { status: 'foreign', reason: 'context' };
       }
@@ -114,8 +83,6 @@ export class FileStateMachineCursorStore implements StateMachineCursorStore {
         ...(Array.isArray(decoded.checkpoints) ? { checkpoints: parseStoredCheckpoints(decoded.checkpoints) } : {}),
       };
     } catch (error) {
-      // A crash-truncated or structurally invalid file is recoverable, not
-      // poisoned: quarantine the bytes for inspection and start fresh.
       await quarantineCorruptStateFile(this.filePath, raw, error, 'cursor');
       return { status: 'empty' };
     }

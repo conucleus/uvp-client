@@ -26,7 +26,6 @@ const watcherEntryUrl = pathToFileURL(join(packageDir, 'src/watcher/storage/lock
 const stateMachine = '0x1111111111111111111111111111111111111111' as const;
 const wallet = '0x2222222222222222222222222222222222222222' as const;
 
-/** Minimal JSON-RPC chain stub: chainId + movable head + empty getLogs, enough for a dry-run scan. */
 async function startChainStub(): Promise<{ readonly url: string; close(): Promise<void> }> {
   const server = createServer((request, response) => {
     void (async () => {
@@ -76,7 +75,7 @@ async function writeHandlerConfig(dir: string): Promise<string> {
     chainId: 31_337,
     stateMachineAddress: stateMachine,
     handlers: {
-      '*': { signals: [{ source: 'buyer', stageIdentifier: 'exec.main', signalName: 'cmp' }] },
+      '*': { signals: [{ source: 'slot-a', stageIdentifier: 'exec.main', signalName: 'cmp' }] },
     },
   }));
   return configPath;
@@ -95,7 +94,6 @@ function chainOnceArgv(input: { readonly stubUrl: string; readonly configPath: s
   ];
 }
 
-/** A pid that is definitely not alive: take it from an already-exited child process. */
 async function deadPid(): Promise<number> {
   const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
   const pid = child.pid;
@@ -147,9 +145,6 @@ describe('watcher state-dir 进程锁', () => {
   });
 
   it('陈旧锁的并发接管竞态：同时判陈旧也只有唯一持有者，协议自身不留残留文件', async () => {
-    // rm+wx 式接管里，两个同时判陈旧的进程会互删对方刚建的新锁而双双持锁
-    // （TOCTOU）。原子接管下，无论事件循环如何交错，link 的 create-if-absent
-    // 语义保证 lockPath 上至多一个赢家，落败者重读后按活 pid 拒绝。
     const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-race-'));
     try {
       const lockPath = join(dir, 'watcher.lock');
@@ -188,9 +183,6 @@ describe('watcher state-dir 进程锁', () => {
   });
 
   it('跨进程并发接管陈旧锁：每轮风暴至多一个持有者，落败进程按活 pid 拒绝', async () => {
-    // 单次起跑的碰撞窗口只有毫秒级，一次风暴难以稳定复现 rm+wx 式接管的
-    // 互删双持；改为多轮重播陈旧锁 + 8 进程同时起跑的风暴。持有者挂到
-    // 本轮 stop 门才释放：轮内锁位不空闲，第二条 held 只能来自真双持。
     const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-race-proc-'));
     const racerCount = 8;
     const rounds = 12;
@@ -248,7 +240,6 @@ describe('watcher state-dir 进程锁', () => {
         child.once('exit', (code) => resolve(code));
       })));
       for (let round = 0; round < rounds; round += 1) {
-        // 每轮重新播种陈旧锁，再开门让全部进程同时冲同一把锁。
         await writeFile(lockPath, `${stalePid}\n`);
         await writeFile(join(dir, `gate-${round}-go`), '');
         const roundDeadline = Date.now() + 30_000;
@@ -277,7 +268,6 @@ describe('watcher state-dir 进程锁', () => {
           }
         };
         await settle();
-        // 持有者挂到 stop 门才放锁：7 个落败者已定性，此时开门收尾。
         await writeFile(join(dir, `gate-${round}-stop`), '');
         for (;;) {
           if (Date.now() > roundDeadline) {
@@ -372,19 +362,16 @@ describe('watcher state-dir 进程锁', () => {
         });
       });
 
-      // 持有进程存活期间：第二个 watcher（CLI chain-once）启动即拒绝。
       await assert.rejects(
         main(chainOnceArgv({ stubUrl: stub.url, configPath, stateDir: dir })),
         /locked by running process/u,
       );
 
-      // SIGTERM 让持有进程退出；其清理路径必须移除锁文件。
       child.kill('SIGTERM');
       const code = await new Promise<number | null>((resolvePromise) => child.once('exit', (exitCode) => resolvePromise(exitCode)));
       assert.equal(code, 0);
       assert.equal(await readFile(join(dir, 'watcher.lock'), 'utf8').then(() => 'still-there', () => 'removed'), 'removed');
 
-      // 持有进程退出后：同 state-dir 重启成功（锁被 CLI 取得并在运行后释放）。
       await main(chainOnceArgv({ stubUrl: stub.url, configPath, stateDir: dir }));
       assert.equal(process.exitCode, undefined);
       assert.equal(await readFile(join(dir, 'watcher.lock'), 'utf8').then(() => 'still-there', () => 'removed'), 'removed');
@@ -408,14 +395,12 @@ describe('watcher state-dir 进程锁', () => {
     const stub = await startChainStub();
     const configPath = await writeHandlerConfig(dir);
     try {
-      // --chain-id abc 在锁取得之后才解析失败（ValidationError）。
       await assert.rejects(
         main(chainOnceArgv({ stubUrl: stub.url, configPath, stateDir: dir }).map(
           (arg, index, all) => (all[index - 1] === '--chain-id' ? 'abc' : arg),
         )),
         /chainId/u,
       );
-      // 失败路径不得泄漏 watcher.lock：锁文件已移除，下一个进程可启动。
       assert.equal(await readFile(join(dir, 'watcher.lock'), 'utf8').then(() => 'still-there', () => 'removed'), 'removed');
       const lock = await acquireWatcherStateDirLock(dir);
       await lock.release();
@@ -438,8 +423,6 @@ describe('watcher state-dir 进程锁', () => {
     const holder = await acquireWatcherStateDirLock(dir);
     try {
       const jobId = '0x' + 'ab'.repeat(32);
-      // 持锁进程存活：jobs retry 不因 state-dir 锁被拒——按业务事实失败
-      // （job 不存在），而不是 "locked by running process"。
       await assert.rejects(
         main([
           'node', 'uvp-executor', 'jobs', 'retry', jobId,
@@ -469,9 +452,6 @@ describe('watcher state-dir 进程锁', () => {
 
 describe('锁占位放回协议', () => {
   it('放回让位或失败时不得销毁坟场条目：被挪活锁的最后存置必须保留', async () => {
-    // rename 挪走易主活锁后，坟场条目是该锁唯一剩的存置：放回失败（锁位
-    // 已被更新的锁占位而让位，或 link 瞬时失败）时销毁它，等于凭空注销
-    // 他人仍持着的锁——持有者还在临界区，锁位却已空置。
     const dir = await mkdtemp(join(tmpdir(), 'uvp-lock-putback-'));
     try {
       const lockPath = join(dir, 'watcher.lock');
@@ -479,14 +459,12 @@ describe('锁占位放回协议', () => {
       await writeFile(gravePath, '4242\n');
       const graveBefore = await stat(gravePath);
 
-      // 锁位已落位更新的锁：放回必须让位，坟场里的被挪活锁原样保留。
       await writeFile(lockPath, `${process.pid}\n`);
       await putBackDisplacedMarker(gravePath, lockPath);
       const graveSurvived = await stat(gravePath);
       assert.equal(graveSurvived.ino, graveBefore.ino, 'a failed put-back must not destroy the graveyard entry');
       assert.equal(await readFile(lockPath, 'utf8'), `${process.pid}\n`, 'the newer lock keeps its place');
 
-      // 锁位空置时放回归位：坟场名清掉，锁位接回被挪的活锁。
       await rm(lockPath);
       await putBackDisplacedMarker(gravePath, lockPath);
       assert.equal(await readFile(lockPath, 'utf8'), '4242\n', 'a free lock path takes the displaced lock back');
@@ -582,7 +560,6 @@ describe('watcher 任务级运行认领', () => {
       assert.equal(effects, 1);
 
       const jobId = stateMachineJobId(decodeHookReadyLog(log));
-      // 模拟 watcher 进程崩溃：任务停在 matched 且认领 pid 已死。
       const crashedPid = await deadPid();
       await watcher.config.jobStore.update(jobId, {
         status: 'matched',
@@ -663,8 +640,6 @@ describe('watcher 任务级运行认领', () => {
       const active = watcher.handleLog(log);
       await started;
 
-      // 模拟认领闸读取后、运行结束前落进来的操作员裁决（读-写竞态窗口）：
-      // 直接写 store，绕过已被活认领挡住的入口。
       const jobId = stateMachineJobId(decodeHookReadyLog(log));
       const operatorAt = new Date().toISOString();
       await watcher.config.jobStore.update(jobId, {
@@ -700,8 +675,6 @@ describe('watcher 任务级运行认领', () => {
       privateKeyEnv: 'UVP_RUN_CLAIM_UNUSED_KEY',
       dryRun: true,
       jobStore: new FileStateMachineJobStore(join(dir, 'jobs.json')),
-      // handler 先阻塞等操作员裁决落地，再抛错：失败路径会走运行中
-      // lastError 写入（updateJob），正是终态守卫要拦的写。
       handlers: { '*': async () => { entered(); await blocked; throw new Error('handler boom'); } },
     });
     try {
@@ -760,7 +733,7 @@ describe('watcher 任务级运行认领', () => {
       handlers: {
         '*': (event) => {
           effects += 1;
-          return [{ orderId: event.orderId, source: 'buyer', signalName: 'cmp' }];
+          return [{ orderId: event.orderId, source: 'slot-a', signalName: 'cmp' }];
         },
       },
     });
@@ -771,7 +744,6 @@ describe('watcher 任务级运行认领', () => {
         throw new Error('test fixture log must decode as HookReady');
       }
       const created = await store.upsertDetected(event, { now: new Date().toISOString(), maxAttempts: 3 });
-      // 模拟崩溃残留：matched + 认领写入后、结论性写入前进程死亡。
       await store.update(created.id, {
         status: 'matched',
         updatedAt: new Date().toISOString(),
@@ -787,7 +759,6 @@ describe('watcher 任务级运行认领', () => {
       assert.equal(revived?.submissions.length, 1, 'the takeover run records its dry-run submission');
       assert.ok(!revived?.claim, 'the concluded run releases the claim');
 
-      // dry-run 收敛：后续扫描不再重跑 handler。
       await watcher.pollOnce();
       assert.equal(effects, 1);
     } finally {
@@ -854,8 +825,6 @@ describe('watcher 任务级运行认领', () => {
     });
     try {
       const running = build({ '*': async () => { entered(); await blocked; } });
-      // 旁路执行器没有该事件的 handler：扫描同一日志会走 missing-handler
-      // 终态写入路径。
       const bystander = build({});
       const log = await hookReadyLog();
       const active = running.handleLog(log);
@@ -901,7 +870,6 @@ describe('watcher 任务级运行认领', () => {
       assert.ok(first.job?.id, 'precondition: the undecodable log is isolated as a job');
       const jobId = first.job.id;
 
-      // 模拟并发执行器接管同一任务：重开并认领（matched + 本进程活认领）。
       await store.update(jobId, {
         status: 'matched',
         updatedAt: new Date().toISOString(),
@@ -922,9 +890,6 @@ describe('watcher 任务级运行认领', () => {
   });
 
   it('missing-handler 裁决在 CAS 失败时让位：并发落下的操作员裁决不被覆盖', async () => {
-    // 读后写竞态窗口：裁决读取到的是 detected（无认领），写入前操作员
-    // dead-letter 先落地。裁决的 CAS 守卫必须拒写并报告存储中的任务，
-    // 而不是把 dead_letter 覆盖成 ignored。
     class RacingVerdictStore extends InMemoryStateMachineJobStore {
       private raced = false;
 

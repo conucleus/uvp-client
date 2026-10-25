@@ -25,48 +25,22 @@ export type { ProductSubmitIntent };
 
 const ZERO_BYTES32 = `0x${'0'.repeat(64)}` as const;
 
-/**
- * The chain-services API server stamps every response (success and
- * error) with this header so executor-side results, errors, and logs can be
- * correlated end to end with server-side request logs.
- */
 export const PRODUCT_API_REQUEST_ID_HEADER = 'x-request-id';
 
-/**
- * Default deadline for one Product API round trip. prepare/submit run long
- * server-side (evidence resolution, broadcast, receipt wait), so the budget
- * matches the order-app upload precedent (60s) rather than its 6s plain-fetch
- * default; without a bound, a hung API stalls the CLI indefinitely.
- */
 export const PRODUCT_API_REQUEST_TIMEOUT_MS = 60_000;
 
 export interface ProductApiFetchInit {
   readonly method?: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string;
-  /**
-   * The transport always sets 'manual': these requests carry the Authorization
-   * bearer injected by `--auth-token-env`, and following a 3xx would replay it
-   * to whatever host the Location header points at.
-   */
   readonly redirect?: 'manual';
-  /** Abort deadline for the request (bounded by the transport on every call). */
   readonly signal?: AbortSignal;
 }
 
-/**
- * Statuses a manual redirect policy refuses to follow: every 3xx plus the
- * status-0 `opaqueredirect` response a filtered manual redirect yields. Callers
- * treat any of these as a request failure so credentials are never replayed.
- */
 export function isProductApiRedirectStatus(status: number): boolean {
   return status === 0 || (status >= 300 && status < 400);
 }
 
-/**
- * Response headers as a plain record (lowercase or any casing) or a fetch-like
- * object exposing `get(name)`, so both test stubs and real `Response` objects fit.
- */
 export type ProductApiResponseHeaders =
   | Readonly<Record<string, string | readonly string[] | undefined>>
   | { readonly get: (name: string) => string | null | undefined };
@@ -90,11 +64,6 @@ export interface ProductApiClientOptions {
   readonly fetch?: ProductApiFetch;
   readonly headers?: Readonly<Record<string, string>>;
   readonly principalId?: string;
-  /**
-   * Per-request deadline override; defaults to
-   * PRODUCT_API_REQUEST_TIMEOUT_MS. Exists so the same bounded-transport
-   * contract is observable under test with a short budget.
-   */
   readonly requestTimeoutMs?: number | string;
 }
 
@@ -127,11 +96,6 @@ export interface PrepareSignalContainerInput extends ProductApiClientOptions {
   readonly intent: ProductSubmitIntent;
 }
 
-/**
- * 签名前对 prepared 载荷的预期锚（可选提供，逐项生效）：
- * 与浏览器面 signTypedData 的期望域同口径——被攻陷的 prepare 响应可以把
- * 签名引到另一条链或另一个状态机合约的域上，提供锚即在这些字段上 fail-closed。
- */
 export interface SignPreparedSignalContainerExpectedDomain {
   readonly chainId?: number;
   readonly verifyingContract?: Address | string;
@@ -173,7 +137,6 @@ export interface ProductSignalContainer extends Record<string, unknown> {
   readonly orderId: string;
   readonly title: string;
   readonly status: string;
-  /** x-request-id echoed by the server response that produced this object. */
   readonly requestId?: string;
 }
 
@@ -198,7 +161,6 @@ export interface PreparedSignalContainer extends Record<string, unknown> {
   readonly humanSummary: ProductSubmitHumanSummary;
   readonly typedData: ProductSubmitTypedData;
   readonly evidence: readonly Record<string, unknown>[];
-  /** x-request-id echoed by the server response that produced this object. */
   readonly requestId?: string;
 }
 
@@ -208,7 +170,6 @@ export interface SubmittedSignalContainer extends Record<string, unknown> {
   readonly taskId: string;
   readonly orderId: string;
   readonly status: string;
-  /** x-request-id echoed by the server response that produced this object. */
   readonly requestId?: string;
 }
 
@@ -286,11 +247,6 @@ export class ProductApiError extends ExecutorKitError {
   readonly status: number;
   readonly code?: string;
   readonly details?: unknown;
-  /**
-   * request id of the failed call, taken from the x-request-id response
-   * header (falling back to the id the server embeds in error bodies) so the
-   * failure can be matched against server-side logs.
-   */
   readonly requestId?: string;
 
   constructor(status: number, code: string | undefined, message: string, details?: unknown, requestId?: string) {
@@ -321,8 +277,6 @@ export async function listSignalContainers(input: ListSignalContainersInput): Pr
   if (!Array.isArray(tasks)) {
     throw new ValidationError('Product tasks response must contain a tasks array');
   }
-  // The transport returns a bare array, so every task carries the response's
-  // request id to keep "which request produced this row" answerable.
   return tasks.map((task, index) => attachResponseRequestId(parseSignalContainer(task, `tasks[${index}]`), requestId));
 }
 
@@ -367,13 +321,7 @@ export async function signPreparedSignalContainer(
   const configuredWallet = normalizeAddressChecksummed(input.walletAddress ?? signerAddress, 'walletAddress');
   const submitter = normalizeAddressChecksummed(prepared.typedData.message.submitter, 'typedData.message.submitter');
 
-  // 签名前闸门单源（protocol-bindings validateTypedDataForSigning）：
-  // 判定语义收敛到上游，本仓只把 reason 映射为既有文案。本仓独有
-  // 的“私钥签名者与配置钱包一致”检查经 connectedAddress 承载——上游为
-  // 浏览器钱包“当前连接地址”预留的同一语义位，私钥路径等价复用。
-  // expectedDomain 锚参数化传入：未提供 chainId/verifyingContract 时不比对。
   if (input.expectedDomain?.verifyingContract !== undefined) {
-    // 锚本身先过严格校验：垃圾锚报“非法地址”而非含混的“不匹配”。
     normalizeAddressChecksummed(input.expectedDomain.verifyingContract, 'expectedDomain.verifyingContract');
   }
   const gate = validateTypedDataForSigning(prepared.typedData, {
@@ -404,7 +352,6 @@ export async function signPreparedSignalContainer(
   };
 }
 
-/** 闸门 reason → 本仓既有错误文案：判定在单源，宿主只保留错误形态与措辞。 */
 function signingGateError(
   reason: TypedDataSigningMismatchReason,
   prepared: PreparedSignalContainer,
@@ -426,9 +373,6 @@ function signingGateError(
         `prepared typedData.domain.verifyingContract ${prepared.typedData.domain.verifyingContract} does not match expected verifyingContract ${input.expectedDomain?.verifyingContract}`,
       );
     default:
-      // 其余 reason（信封形状/primaryType/域常量类）在本路径不可达：上方
-      // parsePreparedSignalContainer 已用冻结字段表与域常量先行拒绝。
-      // 保底 fail-closed，不静默放行。
       return new ValidationError(`prepared typedData rejected by the signing gate: ${reason}`);
   }
 }
@@ -639,10 +583,6 @@ function parseProductSubmitTypedData(value: unknown, label: string): ProductSubm
   if (primaryType !== 'UVPStateMachineSignal') {
     throw new ValidationError(`${label}.primaryType must be UVPStateMachineSignal`);
   }
-  // The typed data is exactly what the participant wallet signs, so any drift
-  // from the frozen canonical shape (extra/missing/renamed fields, type drift)
-  // changes what is signed or how it verifies. Reject all of it instead of
-  // silently dropping unknown keys.
   requireExactKeys(domain, ['name', 'version', 'chainId', 'verifyingContract'], `${label}.domain`);
   requireExactKeys(types, ['UVPStateMachineSignal'], `${label}.types`);
   const domainName = requiredString(domain, 'name', `${label}.domain`);
@@ -661,8 +601,6 @@ function parseProductSubmitTypedData(value: unknown, label: string): ProductSubm
   requireExactKeys(message, PRODUCT_SUBMIT_TYPED_DATA_FIELDS.map((field) => field.name), `${label}.message`);
   const planId = normalizeBytes32(requiredString(message, 'planId', `${label}.message`), `${label}.message.planId`);
   if (planId === ZERO_BYTES32) {
-    // prepared 载荷来自网络对端：签名对 (planId, orderId) 承诺，合约侧还要
-    // 核验 plan 存在性，零 planId 的签名永远无法上链落地，必须在签名前拒绝。
     throw new ValidationError(`${label}.message.planId must be a non-zero bytes32 plan id: the zero placeholder cannot satisfy the on-chain (planId, orderId) existence check`);
   }
   return {
@@ -695,12 +633,6 @@ function parseProductSubmitTypedData(value: unknown, label: string): ProductSubm
   };
 }
 
-/**
- * Compare the parsed typed-data field table against the frozen canonical
- * `PRODUCT_SUBMIT_TYPED_DATA_FIELDS`: same length, same order, same names and
- * types, and no extra keys per field. Any drift between the prepare response and
- * the protocol the wallet would sign for is rejected loudly.
- */
 function parseTypedDataFields(value: unknown, label: string): readonly ProductSubmitTypedDataField[] {
   if (!Array.isArray(value)) {
     throw new ValidationError(`${label} must be an array`);
@@ -730,11 +662,6 @@ function parseTypedDataFields(value: unknown, label: string): readonly ProductSu
   return fields;
 }
 
-/**
- * `deadline` is a uint256 unix-seconds timestamp in the signature message.
- * Reject non-decimal formats and already-expired deadlines so an expired
- * prepared submission fails at parse/sign time instead of at the chain.
- */
 function validateFutureDeadline(value: string, label: string): string {
   if (!/^(0|[1-9][0-9]*)$/u.test(value)) {
     throw new ValidationError(`${label} must be a base-10 unix-seconds uint string`);
@@ -764,10 +691,6 @@ function requireExactKeys(
   }
 }
 
-/**
- * Internal transport result: the parsed JSON body plus the server's request id
-  * Read from the response headers when present.
- */
 interface ProductApiJsonResult {
   readonly body: unknown;
   readonly requestId?: string | undefined;
@@ -796,17 +719,11 @@ async function requestProductApiJson(
   const response = await fetchFn(url, {
     method,
     headers,
-    // Never let fetch follow a redirect: these headers carry the Authorization
-    // bearer from --auth-token-env, and a 3xx would replay it to whatever host
-    // the Location header points at. A redirect is a request failure, full stop.
     redirect: 'manual',
     signal: AbortSignal.timeout(normalizeRequestTimeoutMs(input.requestTimeoutMs)),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   if (isProductApiRedirectStatus(response.status)) {
-    // Covers every 3xx and the status-0 opaqueredirect response a manual
-    // redirect policy yields: the request must fail instead of leaking the
-    // bearer to the redirect target.
     throw new ProductApiError(
       response.status,
       'redirect',
@@ -891,18 +808,11 @@ function productApiErrorFromResponse(response: ProductApiFetchResponse, payload:
   const message = typeof record.message === 'string' && record.message.trim().length > 0
     ? record.message
     : `Product API request failed with HTTP ${response.status}`;
-  // The x-request-id response header is authoritative; the id the
-  // server embeds in error bodies is the fallback when headers are unavailable.
   const requestId = productApiResponseRequestId(response)
     ?? (typeof record.requestId === 'string' && record.requestId.trim().length > 0 ? record.requestId.trim() : undefined);
   return new ProductApiError(response.status, code, message, record.details, requestId);
 }
 
-/**
- * Read the server's request id from the response headers. Supports both
- * fetch-like header objects (`headers.get(name)`, as returned by real fetch
- * implementations) and plain records with any key casing.
- */
 export function productApiResponseRequestId(response: ProductApiFetchResponse): string | undefined {
   return readResponseHeader(response, PRODUCT_API_REQUEST_ID_HEADER);
 }
@@ -934,11 +844,6 @@ function readResponseHeader(response: ProductApiFetchResponse, name: string): st
   return undefined;
 }
 
-/**
- * Attach the response's request id to a parsed result object without
- * disturbing shapes when the header was absent (the requestId key is simply
- * not added).
- */
 function attachResponseRequestId<T extends Record<string, unknown>>(value: T, requestId: string | undefined): T {
   if (requestId === undefined) {
     return value;
@@ -977,9 +882,6 @@ function requiredText(value: string, fieldName: string): string {
 
 function requireStringList(value: readonly string[], label: string): readonly string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.trim().length > 0)) {
-    // An empty list is valid on purpose: prepare-submit with no evidenceIds is
-    // the pure-confirmation submission. Only non-string/blank entries are
-    // rejected — the old "non-empty array" wording contradicted the [] pass.
     throw new ValidationError(`${label} must be an array of non-empty strings (an empty array is valid and submits as a pure confirmation without evidence)`);
   }
   return value.map((item) => item.trim());

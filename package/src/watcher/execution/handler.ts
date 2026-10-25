@@ -20,14 +20,6 @@ import type { StateMachineDeploymentWatcherConfig } from '../watcher.js';
 
 export interface StateMachineHookReadyHandlerContext {
   readonly matchedKey: string;
-  /**
-   * Submit one signal through the handler-context channel. Resolves with the
-   * submission result, or with `{ deferredBroadcast: true }` when the signal's
-   * prior broadcast has an unknown outcome (or is inside the resend backoff
-   * window): the transaction is already on chain or throttled, and a later
-   * scan — not another in-run broadcast — settles it. Handlers must treat the
-   * deferred marker as "pending, do not retry now", not as success.
-   */
   readonly submitSignal: (
     signal: StateMachineSignal,
     overrides?: Partial<SubmitStateMachineSignalConfig>,
@@ -44,14 +36,6 @@ export type StateMachineHookReadyHandler = (
   context: StateMachineHookReadyHandlerContext,
 ) => StateMachineHookReadyHandlerResult | Promise<StateMachineHookReadyHandlerResult>;
 
-/**
- * A retryable failure already put a transaction on chain, but its receipt
- * could not be obtained (lookup fault, client without receipt support, or not
- * mined yet). That is "outcome unknown", not provable absence — the run must
- * not blind-rebroadcast. The signal stays open and later scans re-check the
- * receipt, rebroadcasting only under the resend backoff. The handler-context
- * `submitSignal` channel resolves with this marker for the same condition.
- */
 export type DeferredBroadcastOutcome = { readonly deferredBroadcast: true };
 
 export interface StateMachineStaticHandlerDefinition {
@@ -66,12 +50,6 @@ export interface StateMachineStaticSignalDefinition {
   readonly signalId?: Hex | string;
   readonly payloadHash?: Hex | string;
   readonly idempotencyKey?: string;
-  /**
-   * Optional explicit planId for the signal's order. When omitted (the normal
-   * case) the planId decoded from the HookReady event is used: the plan-scoped
-   * submitSignal ABI requires it, and config-driven handlers have no other
-   * source of truth for it.
-   */
   readonly planId?: Hex | string;
 }
 
@@ -139,17 +117,7 @@ export function createStateMachineHandlersFromConfig(
       (event: StateMachineHookReady) => handler.signals.map((signal) => ({
         orderId: event.orderId,
         ...signal,
-        // Protocol-defined sentinel, not a fallback: UVPStateMachine.submitSignal
-        // treats bytes32(0) as the legal "no payload" value. Omitting payloadHash
-        // here is the producer's explicit declaration of an empty payload.
         payloadHash: signal.payloadHash ?? ZERO_BYTES32,
-        // No key-level default here: the config-only shape
-        // orderId:hookId:signalName collapsed a re-emitted HookReady for the
-        // same (order, hook) and distinct sources behind the same signalName
-        // onto one chain idempotency key. Omitting the field lets the SDK
-        // default apply — the logical (planId, orderId, sourceId, signalId)
-        // tuple the contract itself dedupes on, the same caliber for config
-        // and SDK producers.
       })),
     ]),
   );
@@ -316,8 +284,6 @@ function normalizeSignalCapabilityEntry(
   if (!isRecord(capability)) {
     throw new ValidationError(`${path} must be an object`);
   }
-  // relation 是 0|1 字面量联合：JSON 层进来是 number，越界值在这里拒绝
-  // 而不是静默落成一个错误的叶子（叶子公式含 relation，错值=错误证明）。
   if (capability.relation !== 0 && capability.relation !== 1) {
     throw new ValidationError(`${path}.relation must be 0 or 1`);
   }
