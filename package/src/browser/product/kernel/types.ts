@@ -5,7 +5,7 @@ import type {
   ProductFetcher,
   ProductRequestOptions,
   ProductSessionTokenProvider
-} from "../../../core/transport.js";
+} from "../../../core/product-transport.js";
 import type {
   AcceptStageInviteInput,
   AcceptStageInviteResult,

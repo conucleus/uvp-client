@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * CLI entry point: command registration lives in ./commands, watch runtime in
+ * CLI entry point: command registration lives in ./commands (operation
+ * commands share ./operation.ts wiring), watch runtime in
  * ../headless/runtime.ts, and scan exit-code adaptation in ./output.ts.
  * Programmatic callers depend on this single module.
  */
@@ -9,7 +10,11 @@ import { Command } from 'commander';
 import { ExecutorKitError } from '../core/validation.js';
 import { registerChainCommands } from './commands/chain.js';
 import { registerDoctorCommand } from './commands/doctor.js';
+import { registerInviteCommands } from './commands/invite.js';
+import { registerOrderCommands } from './commands/order.js';
 import { registerPlanCommands } from './commands/plan.js';
+import { registerRegistryCommands } from './commands/registry.js';
+import { registerSignalCommands } from './commands/signal.js';
 import { registerWalletCommands } from './commands/wallet.js';
 
 export function buildProgram(): Command {
@@ -23,6 +28,10 @@ export function buildProgram(): Command {
   registerWalletCommands(program);
   registerDoctorCommand(program);
   registerPlanCommands(program);
+  registerOrderCommands(program);
+  registerInviteCommands(program);
+  registerSignalCommands(program);
+  registerRegistryCommands(program);
   registerChainCommands(program);
 
   return program;

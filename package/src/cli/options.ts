@@ -1,8 +1,10 @@
 /**
  * Commander option shapes for the uvp-client CLI commands; the watch/signal
- * option shapes mirror the headless runtime and core builders they feed.
+ * option shapes mirror the headless runtime and core builders they feed, and
+ * operation commands share the --mode/--relay-url/--dry-run vocabulary.
  */
 import type { StateMachineWatchOptions } from '../headless/runtime.js';
+import type { OperationCliOptions } from './operation.js';
 
 export type ChainWatchOptions = StateMachineWatchOptions;
 
@@ -46,7 +48,7 @@ export interface PlanCompileOptions {
   out?: string;
 }
 
-export interface PlanRegisterOptions {
+export interface PlanRegisterOptions extends OperationCliOptions {
   definition: string;
   rpcUrl: string;
   chainId: string;
@@ -54,7 +56,58 @@ export interface PlanRegisterOptions {
   privateKeyEnv: string;
   deadlineSeconds?: string;
   birthAuthorizer?: string;
-  dryRun?: boolean;
+  finalize?: boolean;
+}
+
+export interface OrderBirthIntentOptions extends OperationCliOptions {
+  rpcUrl: string;
+  chainId: string;
+  stateMachine: string;
+  privateKeyEnv: string;
+  planId: string;
+  orderId: string;
+  termsHash: string;
+  nonce: string;
+  deadline: string;
+}
+
+export interface OrderBirthAuthorizeOptions extends OperationCliOptions {
+  rpcUrl: string;
+  chainId: string;
+  stateMachine: string;
+  privateKeyEnv: string;
+  birth: string;
+}
+
+export interface OrderFinalizeOptions extends OperationCliOptions {
+  typedData: string;
+  privateKeyEnv: string;
+}
+
+export interface InviteAcceptOptions extends OperationCliOptions {
+  typedData: string;
+  privateKeyEnv: string;
+}
+
+export interface SignalSubmitOptions extends OperationCliOptions {
+  rpcUrl: string;
+  chainId: string;
+  stateMachine: string;
+  privateKeyEnv: string;
+  planId: string;
+  orderId: string;
+  source: string;
+  stage: string;
+  signalName: string;
+  payloadHash?: string;
+  idempotencyKey?: string;
+  deadline?: string;
+  deadlineSeconds?: string;
+}
+
+export interface RegistrySignOptions extends OperationCliOptions {
+  typedData: string;
+  privateKeyEnv: string;
 }
 
 export interface DoctorOptions {

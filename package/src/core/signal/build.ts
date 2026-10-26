@@ -81,7 +81,7 @@ export function withCapabilityProofs(
   if (tables === undefined || signal.attribution !== undefined) {
     return signal;
   }
-  const normalized = normalizeStateMachineSignal(signal);
+  const normalized = normalizeSignalSubmission(signal);
   const attribution = factAttributionShape(
     factAttribution(tables.selectorBindings, tables.signalCapabilities, normalized.sourceId, normalized.signalId),
     normalized.sourceId,
@@ -163,7 +163,7 @@ export function buildSubmitStateMachineSignalCall(
   from?: Address,
 ): SubmitStateMachineSignalCall {
   const normalizedConfig = normalizeSubmitConfig(config);
-  const args = normalizeStateMachineSignal(signal);
+  const args = normalizeSignalSubmission(signal);
   const callArgs = [
     args.planId,
     args.orderId,
@@ -214,7 +214,8 @@ export function normalizeSubmitConfig(config: SubmitStateMachineSignalConfig): N
   };
 }
 
-function normalizeStateMachineSignal(signal: StateMachineSignal): StateMachineSignalCallArgs {
+/** Normalized submitSignal keys shared by the direct call builders and the signed relay operation. */
+export function normalizeSignalSubmission(signal: StateMachineSignal): StateMachineSignalCallArgs {
   const rawPlanId = signal.planId ?? undefined;
   if (rawPlanId === undefined || (typeof rawPlanId === 'string' && rawPlanId.trim().length === 0)) {
     throw new ValidationError(

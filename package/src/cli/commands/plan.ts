@@ -1,20 +1,26 @@
 /**
- * plan compile/register commands: Node compiler wrapper plus the two-step
- * registration flow (commitPlan + finalizePlan). Signing uses an explicit
- * env-named private key; `--dry-run` signs locally but never broadcasts.
+ * plan compile/register commands: Node compiler wrapper plus the core
+ * plan.register operation (commitPlan + finalizePlan) delivered direct or via
+ * relay. Signing uses an explicit env-named private key; `--dry-run` signs
+ * locally but never broadcasts.
  */
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { Command } from 'commander';
-import { createPublicClient, createWalletClient, http, type Address, type Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { loadPrivateKeyFromEnv } from '../../core/signing.js';
-import { ValidationError } from '../../core/validation.js';
-import { compilePlan, planRegistrationArgs, registerPlan } from '../../headless/plan.js';
-import { signerFromPrivateKey } from '../../headless/signers.js';
+import { createPublicClient, http, type Address } from 'viem';
+import type { OperationInput } from '../../core/operations.js';
 import { parsePositiveInteger } from '../../core/validation.js';
+import { compilePlan, planRegistrationArgs } from '../../headless/plan.js';
 import type { PlanCompileOptions, PlanRegisterOptions } from '../options.js';
+import {
+  cliOperationContext,
+  executeCliOperation,
+  parseSubmitMode,
+  signWith,
+} from '../operation.js';
 import { stringifyForTransport } from '../output.js';
+
+const PLAN_PRIVATE_KEY_ENV = 'UVP_ETH_DEPLOYER_PRIVATE_KEY';
 
 export function registerPlanCommands(program: Command): void {
   const plan = program.command('plan').description('compile and register Zhixu plans');
@@ -48,70 +54,55 @@ export function registerPlanCommands(program: Command): void {
 
   plan
     .command('register')
-    .description('compile, sign, and submit plan registration (commitPlan + finalizePlan); --dry-run only signs')
+    .description('compile, sign, and submit plan.register (commitPlan + finalizePlan) direct or via relay')
     .requiredOption('--definition <path>', 'Zhixu YAML definition path')
-    .requiredOption('--rpc-url <url>', 'EVM RPC URL')
+    .requiredOption('--rpc-url <url>', 'EVM RPC URL (block clock for the commit deadline)')
     .requiredOption('--chain-id <id>', 'expected chain id')
     .requiredOption('--state-machine <address>', 'UVPStateMachine contract address')
-    .option('--private-key-env <name>', 'env var containing the publisher private key', 'UVP_ETH_DEPLOYER_PRIVATE_KEY')
+    .option('--private-key-env <name>', 'env var containing the publisher private key', PLAN_PRIVATE_KEY_ENV)
     .option('--deadline-seconds <n>', 'seconds from the current block timestamp for the commit deadline', '3600')
     .option('--birth-authorizer <address>', 'birth authorizer (defaults to the publisher)')
-    .option('--dry-run', 'sign the commit locally but do not broadcast')
+    .option('--mode <mode>', 'delivery mode: direct or relay', 'direct')
+    .option('--relay-url <url>', 'relay service base URL (required with --mode relay)')
+    .option('--relay-path <path>', 'relay endpoint path', '/relay')
+    .option('--no-finalize', 'stop after commitPlan and leave the plan unfinalized')
+    .option('--dry-run', 'sign the operation locally but do not deliver it')
     .action(async (options: PlanRegisterOptions) => {
-      const privateKey = loadPrivateKeyFromEnv(options.privateKeyEnv);
-      if (!privateKey) {
-        throw new ValidationError(`missing private key env var ${options.privateKeyEnv}`);
-      }
+      const context = cliOperationContext(options, PLAN_PRIVATE_KEY_ENV);
       const chainId = parsePositiveInteger(options.chainId, 'chainId');
-      const publicClient = createPublicClient({ transport: http(options.rpcUrl) });
       const deadlineSeconds = parsePositiveInteger(options.deadlineSeconds ?? '3600', 'deadlineSeconds');
+      const publicClient = createPublicClient({ transport: http(options.rpcUrl) });
       const block = await publicClient.getBlock({ blockTag: 'latest' });
       const deadline = block.timestamp + BigInt(deadlineSeconds);
-      const signer = signerFromPrivateKey(privateKey);
-      const compiled = await compilePlan({ definitionPath: options.definition, publisher: signer.address });
-      const registration = planRegistrationArgs(compiled.registerArgs, compiled.planId);
+      const compiled = await compilePlan({ definitionPath: options.definition, publisher: context.signer.address });
+      const input: OperationInput = {
+        operation: 'plan.register',
+        chainId,
+        stateMachineAddress: options.stateMachine,
+        signer: context.signer.address,
+        registration: planRegistrationArgs(compiled.registerArgs, compiled.planId),
+        deadline,
+        ...(options.birthAuthorizer !== undefined ? { birthAuthorizer: options.birthAuthorizer } : {}),
+        finalize: options.finalize !== false,
+      };
 
       if (options.dryRun) {
-        const signed = await registerPlan({
-          chainId,
-          stateMachineAddress: options.stateMachine,
-          registration,
-          signer,
-          deadline,
-          ...(options.birthAuthorizer ? { birthAuthorizer: options.birthAuthorizer } : {}),
-        });
+        const signed = await signWith(context, input);
         console.log(stringifyForTransport({
           plan: {
-            planId: signed.planId,
+            planId: compiled.planId,
+            operation: signed.operation,
+            mode: parseSubmitMode(options.mode),
+            signer: signed.signer,
             signature: signed.signature,
-            commitCall: signed.commitCall,
-            finalizeCall: signed.finalizeCall,
+            calls: signed.calls,
             dryRun: true,
           },
         }));
         return;
       }
 
-      const account = privateKeyToAccount(privateKey);
-      const wallet = createWalletClient({ account, transport: http(options.rpcUrl) });
-      const registered = await registerPlan({
-        chainId,
-        stateMachineAddress: options.stateMachine,
-        registration,
-        signer,
-        deadline,
-        ...(options.birthAuthorizer ? { birthAuthorizer: options.birthAuthorizer } : {}),
-        submit: {
-          sendTransaction: ({ to, data }: { readonly to: Address; readonly data: Hex }) =>
-            wallet.sendTransaction({ account, to, data, chain: null }),
-        },
-      });
-      console.log(stringifyForTransport({
-        plan: {
-          planId: registered.planId,
-          commitTxHash: registered.commitTxHash,
-          finalizeTxHash: registered.finalizeTxHash,
-        },
-      }));
+      const result = await executeCliOperation(input, options, PLAN_PRIVATE_KEY_ENV);
+      console.log(stringifyForTransport({ plan: { planId: compiled.planId, ...result } }));
     });
 }

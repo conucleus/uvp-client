@@ -1,7 +1,7 @@
 # @uvp-eth/uvp-client
 
 Public UVP client SDK and executor CLI. One package, four entries: browser
-hosts use `/browser`, scripts and bots use `/headless`, shared transport and
+hosts use `/browser`, scripts and bots use `/headless`, shared operation and
 protocol primitives live in `/core`, and the executor binary is `/cli`.
 Chain events and contract state are the only source of business truth; this
 package produces and reads signals, it never owns orders, sessions, or keys.
@@ -10,10 +10,10 @@ package produces and reads signals, it never owns orders, sessions, or keys.
 
 | Entry | Responsibility (one sentence) |
 |---|---|
-| `@uvp-eth/uvp-client/core` | Runtime-agnostic read+write primitives: transport/auth seam, chain target, signal build/decode/submit, plan-registration/order-birth calldata builders, validation, signing helpers, evidence hashing, and re-exported protocol typed data. |
-| `@uvp-eth/uvp-client/browser` | Browser-host client: injected EIP-1193 wallet signing/submission for plan registration, order birth, and signed registry records, plus the Product V3 client, session read model, deadline/format, and typed-data verification — no compiler/env/localStorage/private keys. |
-| `@uvp-eth/uvp-client/headless` | Script/bot client: Node plan compilation, signed plan registration (commitPlan + finalizePlan, optional relay), signed registry record publishing, private-key wallet handling, watcher/runtime, and the non-spending doctor. |
-| `@uvp-eth/uvp-client/cli` | Executor CLI: `wallet`, `doctor`, `plan compile/register`, `chain-once`/`chain-watch` (watch), and `chain-signal` (signal) over the headless/core entries. |
+| `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, buyer-intent vs birthAuthorizer split, plan-registration builders, signal build/decode/submit, product-service transport seam, validation, signing helpers, evidence hashing, and re-exported protocol typed data. |
+| `@uvp-eth/uvp-client/browser` | Browser-host client: `createBrowserClient` exposes the same operation set through the injected EIP-1193 wallet (direct or relay); Product V3 client, session read model, deadline/format, and typed-data verification — no compiler/env/localStorage/private keys. |
+| `@uvp-eth/uvp-client/headless` | Script/bot client: `createHeadlessClient` exposes the same operation set signed by a local private key (direct RPC or relay); Node plan compilation and the HookReady watcher remain extras, plus wallet handling and the non-spending doctor. |
+| `@uvp-eth/uvp-client/cli` | Executor CLI: `plan compile/register`, `order birth-intent|birth-authorize|finalize`, `invite accept`, `signal submit`, `registry sign`, `wallet`, `doctor`, and the watcher commands (`chain-once`/`chain-watch`/`chain-signal`). |
 
 There is no root entry and no wildcard export; consumers pick one of the four
 subpaths. ABI, EIP-712 typed data, and canonical hashing are single-sourced in
@@ -21,22 +21,63 @@ subpaths. ABI, EIP-712 typed data, and canonical hashing are single-sourced in
 `@uvp-eth/product-dto`; Zhixu compilation is single-sourced in
 `@uvp-eth/compiler` (headless only).
 
+## Operations
+
+`/core` owns the one operation vocabulary and execution path; shells only plug
+in a signer and a delivery mode.
+
+```ts
+import { OPERATION_NAMES, prepareOperation, signOperation, createDirectTransport } from '@uvp-eth/uvp-client/core';
+
+const prepared = prepareOperation({ operation: 'signal.submit', /* operation fields */ });
+const signed = await signOperation(prepared, signer);
+```
+
+- Operation names: `plan.register`, `order.birth`, `order.finalize`,
+  `invite.accept`, `signal.submit`, `stagePatch.submit`, `registry.write`.
+- `SubmitMode = "direct" | "relay"`, passed to `createBrowserClient` /
+  `createHeadlessClient`; the operation API is the same in both modes.
+- Direct transport broadcasts the signed calls through an injected
+  `sendCall` seam (wallet provider or RPC wallet); relay transport POSTs the
+  `SignedOperation` envelope as JSON to `${relayUrl}${relayPath}` (default
+  `/relay`) and expects `{status: "submitted"|"accepted", txHashes?, relayRef?,
+  operation?}`. Relay failures carry `operation`/`code`/`retryable`
+  (`OperationError`).
+- Message operations (`order.finalize`, `invite.accept`, `registry.write`) and
+  the buyer birth intent have no chain call: the shells sign them and the
+  caller delivers them (order service, registry, birth relayer).
+
+### Order birth: intent vs authorization
+
+`core/birth.ts` keeps the two roles disjoint:
+
+| Role | Builder | Signature | Delivery |
+|---|---|---|---|
+| buyer | `buildOrderBirthIntent` (`UVPOrderBirth/1` EIP-712: planId, orderId, buyer, termsHash, nonce, deadline) | buyer wallet | relay (`order.birth`, `role: "buyer-intent"`) |
+| plan birthAuthorizer | `buildOrderBirthAuthorization` + `orderBirthAuthorizationCall` (`triggerOrderFromOutsideFor`) | birthAuthorizer wallet | direct (`order.birth`, `role: "birth-authorizer"`) or relay |
+
+The authorization signer must equal `trigger.submitter` (the plan's
+birthAuthorizer); the browser relay path refuses to sign a birth authorization.
+The buyer intent commits terms/participants through `termsHash` and the exact
+birth fact through `orderId` — no duplicate participant fields.
+
 ## Signed writes
 
 All signed writes belong to the client, not to chain-services:
 
-| Write | Entry | Shape |
+| Operation | Entry | Shape |
 |---|---|---|
-| Plan registration | `headless` / `browser` / `cli` | compiler args → `commitPlan` typed data + calldata, then `finalizePlan` |
-| Order birth | `core` / `browser` | `triggerOrderFromOutsideFor` typed data + calldata |
-| Order/invite/finalize/signal typed data | `core` (re-export) | protocol-bindings builders/validators |
-| Zhixu/identity registry record | `headless` / `browser` | registry EIP-712 builder injected; client signs and forwards the signed record |
+| `plan.register` | `browser` / `headless` / `cli` | `commitPlan` typed data + calldata, then `finalizePlan` |
+| `order.birth` | `core` / `browser` / `headless` / `cli` | buyer intent (relay) or birthAuthorizer `triggerOrderFromOutsideFor` (direct) |
+| `order.finalize` / `invite.accept` | `browser` / `headless` / `cli` | protocol-bindings UVPOrderFinalize / UVPStageInviteAccept typed data, validated before signing |
+| `signal.submit` | `core` / `browser` / `headless` / `cli` | `UVPStateMachineSignal` typed data + `submitSignalFor` calldata |
+| `stagePatch.submit` | `core` / `browser` / `headless` | stage executor/resource patch typed data + `applyStage*PatchFor` calldata |
+| `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record (schema from `@uvp-eth/zhixu-registry/eip712`) |
 
 The browser path never imports the compiler or reads private keys. The headless
-path signs with an injected signer and can either submit transactions itself or
-return relay-ready calls. Registry storage is not a client responsibility: the
-caller injects the registry EIP-712 builder and the signed-record submitter
-(e.g. from `@uvp-eth/zhixu-registry`), so the client imports no `pg`.
+path signs with a local private key. Registry storage/HTTP is not a client
+transport: the caller signs through `registry.write` and submits the signed
+record with the registry package.
 
 ## Local Commands
 
@@ -58,25 +99,33 @@ carries both `src/` (for `exports`) and `dist/` (for the bin).
 ```text
 package/src/
 ├── core/                       # shared by browser and headless
-│   ├── transport.ts            # product HTTP transport + product API errors
+│   ├── operations.ts           # operation names/envelope/prepare/sign/client
+│   ├── transport.ts            # direct/relay operation delivery + receipt errors
+│   ├── birth.ts                # buyer intent vs birthAuthorizer authorization
+│   ├── registration.ts         # plan commit/finalize calldata builders
+│   ├── product-transport.ts    # product HTTP transport + product API errors
 │   ├── signing.ts              # private-key-from-env loading
 │   ├── chain-target.ts         # evm/solana target vocabulary
 │   ├── validation.ts           # address/bytes32/number validation
 │   ├── evidence.ts             # canonical JSON + evidence hashes
 │   ├── errors.ts               # executor error classification
-│   └── signal/                 # HookReady decode, submitSignal build/submit
+│   └── signal/                 # HookReady decode, signal build/submit
 ├── browser/
+│   ├── client.ts               # createBrowserClient (EIP-1193, direct/relay)
+│   ├── write.ts                # provider sign/send primitives
 │   ├── product/kernel/         # Product V3 client, config, draft, typed data
 │   ├── wallet/                 # EIP-1193 provider, connector types, signing
 │   ├── session/                # participant session read model
 │   ├── tasks/deadline.ts       # UTC deadline parsing/formatting
 │   └── format/                 # base-unit amount display
 ├── headless/
+│   ├── client.ts               # createHeadlessClient (private key, direct/relay)
+│   ├── plan.ts                 # Zhixu → registration args (compiler extra)
 │   ├── watcher/                # scan/reorg, job store, execution receipts
 │   ├── runtime.ts              # watch assembly, storage resolution, state-dir lock
 │   ├── doctor.ts               # config/RPC/contract/wallet diagnostic
 │   └── wallet.ts               # wallet env files, address derivation, faucet
-└── cli/                        # command entry, options, output, commands/
+└── cli/                        # command entry, operation wiring, commands/
 ```
 
 ## CLI
@@ -85,19 +134,26 @@ package/src/
 uvp-client --help
 ```
 
-- `wallet new|address`, `faucet info`: local wallet material from explicit env
-  vars; keys are never printed.
-- `doctor`: non-spending diagnostic over a handler config, RPC chain id/head,
-  state-machine contract code, and the signer wallet; exits non-zero on a
-  failed check.
-- `chain-once` / `chain-watch`: scan `HookReady` logs and submit configured
-  `submitSignal` callbacks. State (jobs + scan cursor) persists under
-  `--state-dir` unless `--job-store memory` is passed.
-- `chain-signal`: build or broadcast one `submitSignal` transaction;
-  `--dry-run` prints the deterministic call instead of broadcasting.
+Operation commands accept `--mode direct|relay`, `--relay-url <url>`,
+`--relay-path <path>` (default `/relay`) and `--dry-run`:
 
-`chain-once`/`chain-watch` exit `1` when a scan result carries a non-benign
-error or a job ends `failed`/`dead_letter`.
+- `plan register`: compile, sign `plan.register`, deliver commit+finalize.
+- `order birth-intent`: buyer signs `UVPOrderBirthIntent`; relay-delivered.
+- `order birth-authorize`: birthAuthorizer signs and delivers
+  `triggerOrderFromOutsideFor` from a `--birth <json>` file
+  (`trigger`, `authorizations`, `birthFactAttribution`).
+- `order finalize` / `invite accept`: sign the validated UVPOrderFinalize /
+  UVPStageInviteAccept typed data; delivery stays with the order service.
+- `signal submit`: sign `submitSignalFor` (relayable executor signal).
+- `registry sign`: sign a registry EIP-712 record; registry HTTP stays in the
+  registry package.
+
+Watcher/executor commands remain: `wallet new|address`, `faucet info`,
+`doctor`, `chain-once` / `chain-watch` (scan `HookReady` logs and submit
+configured `submitSignal` callbacks; state persists under `--state-dir` unless
+`--job-store memory`), and `chain-signal` (build or broadcast one `submitSignal`
+transaction). `chain-once`/`chain-watch` exit `1` when a scan result carries a
+non-benign error or a job ends `failed`/`dead_letter`.
 
 ## Executor Config
 
@@ -142,6 +198,24 @@ const client = createProductClient({
   getSessionToken: () => hostSessionToken(),
 });
 ```
+
+`createBrowserClient` exposes the operation set through the injected wallet:
+
+```ts
+import { createBrowserClient } from '@uvp-eth/uvp-client/browser';
+
+const operations = createBrowserClient({
+  provider,                       // EIP-1193
+  signer: walletAddress,
+  mode: 'relay',                  // or 'direct'
+  relayUrl: 'https://relay.example',
+});
+
+const signedIntent = await operations.sign({ operation: 'order.birth', role: 'buyer-intent', /* ... */ });
+```
+
+The browser relay path signs the buyer intent only; direct delivery requires the
+signer to be the plan birthAuthorizer for `order.birth`.
 
 The host injects `baseUrl`, `fetch`, and the session-token reader; the package
 never reads env/localStorage or private keys. Product API errors surface as

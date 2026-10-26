@@ -32,4 +32,4 @@ export {
   type ProductRequestOptions,
   type ProductSessionTokenProvider,
   type ProductTransportConfig,
-} from "../../../core/transport.js";
+} from "../../../core/product-transport.js";
