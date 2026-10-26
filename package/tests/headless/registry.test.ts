@@ -20,7 +20,7 @@ async function recoverSigner(signed: SignedOperation): Promise<string> {
 }
 
 describe('headless registry publish default builders', () => {
-  it('signs a zhixu record with the registry package typed data and hands the signed operation to the submitter', async () => {
+  it('signs a zhixu record with the protocol-bindings typed data and hands the signed operation to the submitter', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const submitted: SignedOperation[] = [];
 
@@ -62,7 +62,7 @@ describe('headless registry publish default builders', () => {
     expect(await recoverSigner(signed)).toBe(account.address);
   });
 
-  it('signs an identity claim with the registry package typed data', async () => {
+  it('signs an identity claim with the protocol-bindings typed data', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const submitted: SignedOperation[] = [];
 

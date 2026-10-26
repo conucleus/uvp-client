@@ -34,7 +34,8 @@ const signed = await signOperation(prepared, signer);
 ```
 
 - Operation names: `plan.register`, `order.birth`, `order.finalize`,
-  `invite.accept`, `signal.submit`, `stagePatch.submit`, `registry.write`.
+  `invite.accept`, `invite.create`, `signal.submit`, `stagePatch.submit`,
+  `registry.write`.
 - `SubmitMode = "direct" | "relay"`, passed to `createBrowserClient` /
   `createHeadlessClient`; the operation API is the same in both modes.
 - Direct transport broadcasts the signed calls through an injected
@@ -43,9 +44,12 @@ const signed = await signOperation(prepared, signer);
   `/relay`) and expects `{status: "submitted"|"accepted", txHashes?, relayRef?,
   operation?}`. Relay failures carry `operation`/`code`/`retryable`
   (`OperationError`).
-- Message operations (`order.finalize`, `invite.accept`, `registry.write`) and
-  the buyer birth intent have no chain call: the shells sign them and the
-  caller delivers them (order service, registry, birth relayer).
+- Message operations (`order.finalize`, `invite.accept`, `invite.create`,
+  `registry.write`) and the buyer birth intent have no chain call: the shells
+  sign them and the caller delivers them (order service/app backend, registry,
+  birth relayer). `invite.create` signs the buyer's `UVPStageInviteCreate`
+  terms (`UVPOrderBook/1`); the app backend verifies the buyer and then mints
+  inviteId/token itself.
 
 ### Order birth: intent vs authorization
 
@@ -70,15 +74,41 @@ All signed writes belong to the client, not to chain-services:
 | `plan.register` | `browser` / `headless` / `cli` | `commitPlan` typed data + calldata, then `finalizePlan` |
 | `order.birth` | `core` / `browser` / `headless` / `cli` | buyer intent (relay) or birthAuthorizer `triggerOrderFromOutsideFor` (direct) |
 | `order.finalize` / `invite.accept` | `browser` / `headless` / `cli` | protocol-bindings UVPOrderFinalize / UVPStageInviteAccept typed data, validated before signing |
+| `invite.create` | `core` / `browser` / `headless` / `cli` | buyer-signed UVPStageInviteCreate terms (`UVPOrderBook/1`, single-sourced in protocol-bindings) |
 | `signal.submit` | `core` / `browser` / `headless` / `cli` | `UVPStateMachineSignal` typed data + `submitSignalFor` calldata |
 | `stagePatch.submit` | `core` / `browser` / `headless` | stage executor/resource patch typed data + `applyStage*PatchFor` calldata |
-| `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/zhixu-registry/eip712`; headless exposes `publishZhixuRecord`/`publishIdentityClaim` default builders |
+| `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/protocol-bindings` (`UVPZhixuRegistry/1`); headless exposes `publishZhixuRecord`/`publishIdentityClaim` default builders |
 
 The browser path never imports the compiler or reads private keys. The headless
 path signs with a local private key. Registry storage/HTTP is not a client
 transport: headless `publishZhixuRecord`/`publishIdentityClaim` build the
 registry's own typed data (no local copy), sign it through `registry.write`, and
 hand the signed operation to the caller's submitter.
+
+## Wallet Sessions
+
+`/browser` exposes a wallet-session transport: challenge → `personal_sign` →
+verify → session token. The host injects wallet signing and the token store
+(e.g. its own localStorage adapter); the package never reads env/localStorage
+and never touches private keys.
+
+```ts
+import { createWalletSessionTransport } from '@uvp-eth/uvp-client/browser';
+
+const session = createWalletSessionTransport({
+  baseUrl: 'https://participants.example',
+  personalSign: (address, message) => wallet.personalSign(message, address),
+  tokenStore: { read: () => hostToken(), write: (token) => hostSaveToken(token) },
+});
+
+const { sessionToken, anchoredAddress } = await session.proveWalletControl(walletAddress);
+```
+
+Failures are `WalletSessionError` with an explicit `code`
+(`invalid_config`/`invalid_address`/`signature_failed`/`timeout`/`transport`/
+`redirect_refused`/`http`/`invalid_response`), `status`, server `errorCode` and
+`retryable`, so hosts can distinguish "user rejected", "service down" and
+"malformed response" instead of treating them all as logged out.
 
 ## Local Commands
 
@@ -116,7 +146,7 @@ package/src/
 │   ├── write.ts                # provider sign/send primitives
 │   ├── product/kernel/         # Product V3 client, config, draft, typed data
 │   ├── wallet/                 # EIP-1193 provider, connector types, signing
-│   ├── session/                # participant session read model
+│   ├── session/                # participant read model + wallet session transport
 │   ├── tasks/deadline.ts       # UTC deadline parsing/formatting
 │   └── format/                 # base-unit amount display
 ├── headless/
@@ -145,6 +175,8 @@ Operation commands accept `--mode direct|relay`, `--relay-url <url>`,
   (`trigger`, `authorizations`, `birthFactAttribution`).
 - `order finalize` / `invite accept`: sign the validated UVPOrderFinalize /
   UVPStageInviteAccept typed data; delivery stays with the order service.
+- `invite create --payload <json>`: buyer signs `UVPStageInviteCreate` terms;
+  delivery (minting the invite) stays with the app backend.
 - `signal submit`: sign `submitSignalFor` (relayable executor signal).
 - `registry sign`: sign a registry EIP-712 record; registry HTTP stays in the
   registry package.
@@ -254,7 +286,7 @@ never hand-copied here.
 ## Boundaries
 
 - No HTTP server, no callback/job runtime process, and no database.
-- No registry storage or compiler in the browser entry; registry typed-data/record shape stays single-sourced in `@uvp-eth/zhixu-registry/eip712` (headless imports only that pure subpath, never `pg`).
+- No registry storage or compiler in the browser entry; registry typed-data/record shape stays single-sourced in `@uvp-eth/protocol-bindings` (the client never depends on the registry storage package).
 - No order creation or order-level authorization; orders bind submitter
   wallets to source/signal permissions on `UVPStateMachine`.
 - No key custody: CLI/wallet helpers read only explicit env vars and never

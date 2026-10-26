@@ -12,6 +12,7 @@ import {
   PRODUCT_SUBMIT_PRIMARY_TYPE,
   STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
   STAGE_RESOURCE_PATCH_PRIMARY_TYPE,
+  UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
   TRIGGER_ORDER_FROM_OUTSIDE_PRIMARY_TYPE,
   buildUVPOrderFinalizeTypedData,
@@ -168,6 +169,26 @@ function inviteInput(signer: Address, invitee: Address): OperationInput {
   };
 }
 
+function inviteCreateInput(signer: Address): OperationInput {
+  return {
+    operation: 'invite.create',
+    signer,
+    chainId: 31337,
+    stateMachineAddress: STATE_MACHINE,
+    draftId: 'draft-1',
+    stageKey: 'main',
+    stageId: bytes32('0c'),
+    slotKey: 'performer',
+    invitee: '0x0000000000000000000000000000000000000022',
+    amount: 100n,
+    finalStandardHash: bytes32('0d'),
+    workDeadline: 1_700_000_500n,
+    termsHash: bytes32('0e'),
+    nonce: 1,
+    deadline: 1_700_000_000n,
+  };
+}
+
 function registryInput(signer: Address): OperationInput {
   return {
     operation: 'registry.write',
@@ -242,6 +263,12 @@ describe('operation matrix', () => {
         label: 'invite.accept',
         input: inviteInput(buyer.address, buyer.address),
         primaryType: INVITE_ACCEPT_PRIMARY_TYPE,
+        calls: [],
+      },
+      {
+        label: 'invite.create',
+        input: inviteCreateInput(buyer.address),
+        primaryType: UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
         calls: [],
       },
       {
@@ -389,6 +416,35 @@ describe('operation matrix', () => {
     });
   });
 
+  it('signs an invite.create payload that recovers to the buyer', async () => {
+    const buyer = privateKeyToAccount(generatePrivateKey());
+    const prepared = prepareOperation(inviteCreateInput(buyer.address));
+    expect(prepared.typedData.domain).toMatchObject({
+      name: 'UVPOrderBook',
+      version: '1',
+      chainId: 31337,
+      verifyingContract: STATE_MACHINE,
+    });
+    expect(prepared.typedData.message).toMatchObject({
+      draftId: 'draft-1',
+      stageKey: 'main',
+      slotKey: 'performer',
+      amount: '100',
+      workDeadline: '1700000500',
+      nonce: '1',
+      deadline: '1700000000',
+    });
+    const signed = await signOperation(prepared, buyer);
+    expect(signed.calls).toEqual([]);
+    expect(await recoverTypedDataAddress({
+      domain: signed.typedData.domain,
+      types: signed.typedData.types,
+      primaryType: signed.typedData.primaryType,
+      message: signed.typedData.message,
+      signature: signed.signature,
+    } as never)).toBe(buyer.address);
+  });
+
   it('refuses typed data that names another party as signer', () => {
     const buyer = privateKeyToAccount(generatePrivateKey());
     const other = privateKeyToAccount(generatePrivateKey());
@@ -415,6 +471,7 @@ function signerFor(
     case 'order.finalize':
       return buyer;
     case 'invite.accept':
+    case 'invite.create':
       return buyer;
     default:
       return signerAccount;

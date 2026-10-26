@@ -15,8 +15,10 @@ export {
   buildStageResourcePatchTypedData,
   buildUVPOrderFinalizeTypedData,
   buildUVPStageInviteAcceptTypedData,
+  buildUVPStageInviteCreateTypedData,
   validateUVPOrderFinalizeTypedData,
   validateUVPStageInviteAcceptTypedData,
+  validateUVPStageInviteCreateTypedData,
   validateTypedDataForSigning,
 } from '@uvp-eth/protocol-bindings';
 
@@ -31,4 +33,5 @@ export type {
   TypedDataSigningMismatchReason,
   UVPOrderFinalizeTypedData,
   UVPStageInviteAcceptTypedData,
+  UVPStageInviteCreateTypedData,
 } from '@uvp-eth/protocol-bindings';

@@ -19,7 +19,7 @@ export function registerRegistryCommands(program: Command): void {
     .description('registry operations')
     .command('sign')
     .description('sign a registry EIP-712 record (registry storage/HTTP is not a client transport)')
-    .requiredOption('--typed-data <path>', 'JSON file with registry typed data (e.g. from @uvp-eth/zhixu-registry/eip712)')
+    .requiredOption('--typed-data <path>', 'JSON file with registry typed data (e.g. from @uvp-eth/protocol-bindings buildZhixuRecordTypedData / buildIdentityClaimTypedData)')
     .option('--private-key-env <name>', 'env var containing the signer private key', REGISTRY_PRIVATE_KEY_ENV)
     .action(async (options: RegistrySignOptions) => {
       const context = cliOperationContext(options, REGISTRY_PRIVATE_KEY_ENV);

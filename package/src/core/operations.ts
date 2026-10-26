@@ -14,6 +14,7 @@ import {
   buildStageExecutorPatchTypedData,
   buildStageResourcePatchTypedData,
   buildSubmitSignalForCall,
+  buildUVPStageInviteCreateTypedData,
   validateUVPOrderFinalizeTypedData,
   validateUVPStageInviteAcceptTypedData,
   type SelectorBindingPayload,
@@ -52,6 +53,7 @@ export const OPERATION_NAMES = [
   'order.birth',
   'order.finalize',
   'invite.accept',
+  'invite.create',
   'signal.submit',
   'stagePatch.submit',
   'registry.write',
@@ -256,6 +258,25 @@ export interface InviteAcceptOperationInput {
   readonly typedData: UVPStageInviteAcceptTypedData;
 }
 
+export interface InviteCreateOperationInput {
+  readonly operation: 'invite.create';
+  /** Draft buyer; signs the invite terms that an app backend may turn into an invite. */
+  readonly signer: Address | string;
+  readonly chainId: number;
+  readonly stateMachineAddress: Address | string;
+  readonly draftId: string;
+  readonly stageKey: string;
+  readonly stageId: Hex | string;
+  readonly slotKey: string;
+  readonly invitee: Address | string;
+  readonly amount: bigint | number | string;
+  readonly finalStandardHash: Hex | string;
+  readonly workDeadline: bigint | number | string;
+  readonly termsHash: Hex | string;
+  readonly nonce: bigint | number | string;
+  readonly deadline: bigint | number | string;
+}
+
 export interface SignalSubmitOperationInput {
   readonly operation: 'signal.submit';
   readonly chainId: number;
@@ -298,7 +319,7 @@ export interface StageResourcePatchOperationInput {
 export interface RegistryWriteOperationInput {
   readonly operation: 'registry.write';
   readonly signer: Address | string;
-  /** Registry EIP-712 record; schema single-sourced in @uvp-eth/zhixu-registry (./eip712). */
+  /** Registry EIP-712 record; schema single-sourced in @uvp-eth/protocol-bindings. */
   readonly typedData: TypedDataDefinition;
 }
 
@@ -308,12 +329,24 @@ export type OperationInput =
   | OrderBirthAuthorizationOperationInput
   | OrderFinalizeOperationInput
   | InviteAcceptOperationInput
+  | InviteCreateOperationInput
   | SignalSubmitOperationInput
   | StageExecutorPatchOperationInput
   | StageResourcePatchOperationInput
   | RegistryWriteOperationInput;
 
 export function prepareOperation(input: OperationInput): PreparedOperation {
+  try {
+    return prepareOperationInput(input);
+  } catch (error) {
+    if (error instanceof ExecutorKitError) {
+      throw error;
+    }
+    throw new ValidationError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function prepareOperationInput(input: OperationInput): PreparedOperation {
   switch (input.operation) {
     case 'plan.register': {
       const signer = normalizeAddressChecksummed(input.signer, 'signer');
@@ -424,6 +457,32 @@ export function prepareOperation(input: OperationInput): PreparedOperation {
       const signer = assertMessageSigner(typedData.message.invitee, input.signer, 'invite.accept', 'invitee');
       return {
         operation: 'invite.accept',
+        chainId: typedData.domain.chainId,
+        signer,
+        typedData,
+        buildCalls: () => [],
+      };
+    }
+
+    case 'invite.create': {
+      const signer = normalizeAddressChecksummed(input.signer, 'signer');
+      const typedData = buildUVPStageInviteCreateTypedData({
+        chainId: input.chainId,
+        verifyingContract: input.stateMachineAddress,
+        draftId: input.draftId,
+        stageKey: input.stageKey,
+        stageId: input.stageId,
+        slotKey: input.slotKey,
+        invitee: input.invitee,
+        amount: input.amount,
+        finalStandardHash: input.finalStandardHash,
+        workDeadline: input.workDeadline,
+        termsHash: input.termsHash,
+        nonce: input.nonce,
+        deadline: input.deadline,
+      });
+      return {
+        operation: 'invite.create',
         chainId: typedData.domain.chainId,
         signer,
         typedData,

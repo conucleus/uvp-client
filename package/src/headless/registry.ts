@@ -1,19 +1,21 @@
 /**
  * Headless registry publish surface: registry EIP-712 records are single-sourced
- * in @uvp-eth/zhixu-registry/eip712 (default builder, no local typed data), and
+ * in @uvp-eth/protocol-bindings (default builder, no local typed data), and
  * signing goes through the core registry.write operation. Storage/HTTP is an
  * injected submitter; this module owns no registry persistence.
  */
 import {
-  identityClaimTypedData,
-  zhixuRecordTypedData,
-} from '@uvp-eth/zhixu-registry/eip712';
+  buildIdentityClaimTypedData,
+  buildZhixuRecordTypedData,
+  type IdentityClaimTypedDataInput,
+  type ZhixuRecordTypedDataInput,
+} from '@uvp-eth/protocol-bindings';
 import type { TypedDataDefinition } from 'viem';
 import { prepareOperation, signOperation, type SignedOperation } from '../core/operations.js';
 import type { TypedDataSigner } from './signers.js';
 
-type ZhixuRecordFields = Parameters<typeof zhixuRecordTypedData>[0];
-type IdentityClaimDraft = Parameters<typeof identityClaimTypedData>[0];
+type ZhixuRecordFields = ZhixuRecordTypedDataInput;
+type IdentityClaimDraft = IdentityClaimTypedDataInput;
 
 export type RegistryRecordSubmitter<TResult> = (signed: SignedOperation) => Promise<TResult>;
 
@@ -31,13 +33,13 @@ export interface PublishedRegistryRecord<TResult> {
 export function publishZhixuRecord<TResult>(
   input: RegistryRecordPublishInput<ZhixuRecordFields, TResult>,
 ): Promise<PublishedRegistryRecord<TResult>> {
-  return publish(input, zhixuRecordTypedData);
+  return publish(input, buildZhixuRecordTypedData);
 }
 
 export function publishIdentityClaim<TResult>(
   input: RegistryRecordPublishInput<IdentityClaimDraft, TResult>,
 ): Promise<PublishedRegistryRecord<TResult>> {
-  return publish(input, identityClaimTypedData);
+  return publish(input, buildIdentityClaimTypedData);
 }
 
 async function publish<TFields, TResult>(

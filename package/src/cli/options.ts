@@ -89,6 +89,11 @@ export interface InviteAcceptOptions extends OperationCliOptions {
   privateKeyEnv: string;
 }
 
+export interface InviteCreateOptions extends OperationCliOptions {
+  payload: string;
+  privateKeyEnv: string;
+}
+
 export interface SignalSubmitOptions extends OperationCliOptions {
   rpcUrl: string;
   chainId: string;
