@@ -9,8 +9,9 @@ import { resolve } from 'node:path';
 import type { Command } from 'commander';
 import { createPublicClient, http, type Address } from 'viem';
 import type { OperationInput } from '../../core/operations.js';
+import { planRegistrationArgs } from '../../core/registration.js';
 import { parsePositiveInteger } from '../../core/validation.js';
-import { compilePlan, planRegistrationArgs } from '../../headless/plan.js';
+import { compilePlan } from '../../headless/plan.js';
 import type { PlanCompileOptions, PlanRegisterOptions } from '../options.js';
 import {
   cliOperationContext,

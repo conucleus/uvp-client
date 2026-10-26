@@ -14,7 +14,6 @@ import {
   type ZhixuDefinition,
 } from '@uvp-eth/compiler';
 import type { Address, Hex } from 'viem';
-import type { PlanRegistrationArgs } from '../core/registration.js';
 import { ValidationError } from '../core/validation.js';
 
 export interface CompilePlanInput {
@@ -38,23 +37,6 @@ export async function compilePlan(input: CompilePlanInput): Promise<CompiledPlan
     artifact,
     registerArgs,
     planId: planIdForPublisher(input.publisher, registerArgs.planHash) as Hex,
-  };
-}
-
-export function planRegistrationArgs(
-  registerArgs: SolidityRegisterPlanArgs,
-  planId: Hex | string,
-): PlanRegistrationArgs {
-  return {
-    planId,
-    planHash: registerArgs.planHash,
-    hooksHash: registerArgs.hooksHash,
-    capabilitiesRoot: registerArgs.capabilitiesRoot,
-    dockRoutesRoot: registerArgs.dockRoutesRoot,
-    dockInterfaceRoot: registerArgs.dockInterfaceRoot,
-    executorCandidatesRoot: registerArgs.executorCandidatesRoot,
-    hooks: registerArgs.hooks,
-    executorCandidates: registerArgs.executorCandidates,
   };
 }
 

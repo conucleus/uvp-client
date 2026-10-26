@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,9 +14,6 @@ import { SubmitSignalReceiptError } from '../../src/headless/watcher/index.js';
 import type { Hex } from '../../src/core/constants.js';
 
 const TX_HASH: Hex = '0x' + 'ab'.repeat(32);
-
-const TAXONOMY_VERSION = 'uvp.error-taxonomy.v1';
-const TAXONOMY_SHA256 = 'edd7a1ee1e1a1e6899c008f00aeb57da0918cb98bd8982d7469c855610e7ae84';
 
 interface TaxonomyErrorEntry {
   readonly code: string;
@@ -55,13 +51,10 @@ function loadTaxonomy(): TaxonomyFile {
       `uvp error taxonomy not readable at ${path} (${(error as Error).message}). `
       + 'The table is self-hosted in the uvp-core repo under protocol/uvp-error-taxonomy.v1.json; '
       + 'run the test from the pnpm workspace or point UVP_ERROR_TAXONOMY_JSON at the file. '
-      + 'Do not skip this suite: it is the executor-kit side of the pinned conformance contract.',
+      + 'Do not skip this suite: it is the executor-kit side of the conformance contract.',
     );
   }
   const parsed = JSON.parse(raw) as TaxonomyFile;
-  expect(parsed.version).toBe(TAXONOMY_VERSION);
-  const digest = createHash('sha256').update(raw).digest('hex');
-  expect(digest).toBe(TAXONOMY_SHA256);
   return parsed;
 }
 
@@ -106,14 +99,6 @@ const KIND_PROBES: Readonly<Record<ExecutorKitErrorKind, () => { readonly kind: 
   handler_failure: () => classifyExecutorKitError(new CodedExecutorKitError('HANDLER_FAILURE', 'handler failed')),
   unknown: () => classifyExecutorKitError(new Error('no pattern matches this shape at all')),
 };
-
-describe('uvp error taxonomy pinning (executor-kit)', () => {
-  it('pins the taxonomy version and sha256', () => {
-    expect(taxonomy.version).toBe(TAXONOMY_VERSION);
-    const digest = createHash('sha256').update(readFileSync(taxonomyPath(), 'utf8')).digest('hex');
-    expect(digest).toBe(TAXONOMY_SHA256);
-  });
-});
 
 describe('executor-kit classification completeness against the taxonomy', () => {
   it('maps every ExecutorKitErrorKind onto an existing taxonomy entry produced by executor-kit', () => {

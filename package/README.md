@@ -72,12 +72,13 @@ All signed writes belong to the client, not to chain-services:
 | `order.finalize` / `invite.accept` | `browser` / `headless` / `cli` | protocol-bindings UVPOrderFinalize / UVPStageInviteAccept typed data, validated before signing |
 | `signal.submit` | `core` / `browser` / `headless` / `cli` | `UVPStateMachineSignal` typed data + `submitSignalFor` calldata |
 | `stagePatch.submit` | `core` / `browser` / `headless` | stage executor/resource patch typed data + `applyStage*PatchFor` calldata |
-| `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record (schema from `@uvp-eth/zhixu-registry/eip712`) |
+| `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/zhixu-registry/eip712`; headless exposes `publishZhixuRecord`/`publishIdentityClaim` default builders |
 
 The browser path never imports the compiler or reads private keys. The headless
 path signs with a local private key. Registry storage/HTTP is not a client
-transport: the caller signs through `registry.write` and submits the signed
-record with the registry package.
+transport: headless `publishZhixuRecord`/`publishIdentityClaim` build the
+registry's own typed data (no local copy), sign it through `registry.write`, and
+hand the signed operation to the caller's submitter.
 
 ## Local Commands
 
@@ -253,7 +254,7 @@ never hand-copied here.
 ## Boundaries
 
 - No HTTP server, no callback/job runtime process, and no database.
-- No registry storage or compiler in the browser entry; registry typed-data/record shape stays single-sourced in `@uvp-eth/zhixu-registry` via caller injection.
+- No registry storage or compiler in the browser entry; registry typed-data/record shape stays single-sourced in `@uvp-eth/zhixu-registry/eip712` (headless imports only that pure subpath, never `pg`).
 - No order creation or order-level authorization; orders bind submitter
   wallets to source/signal permissions on `UVPStateMachine`.
 - No key custody: CLI/wallet helpers read only explicit env vars and never

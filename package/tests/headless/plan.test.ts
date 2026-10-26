@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Address } from 'viem';
 import type { ZhixuDefinition } from '@uvp-eth/compiler';
-import { compilePlan, planRegistrationArgs } from '../../src/headless/plan.js';
+import { planRegistrationArgs } from '../../src/core/registration.js';
+import { compilePlan } from '../../src/headless/plan.js';
 
 const PUBLISHER = '0x0000000000000000000000000000000000000002' as Address;
 

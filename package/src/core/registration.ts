@@ -67,6 +67,17 @@ export interface PlanRegistrationArgs {
   readonly executorCandidates: readonly PlanRegistrationExecutorCandidate[];
 }
 
+export interface PlanRegistrationSource {
+  readonly planHash: Hex | string;
+  readonly hooksHash: Hex | string;
+  readonly capabilitiesRoot: Hex | string;
+  readonly dockRoutesRoot: Hex | string;
+  readonly dockInterfaceRoot: Hex | string;
+  readonly executorCandidatesRoot: Hex | string;
+  readonly hooks: readonly PlanRegistrationHook[];
+  readonly executorCandidates: readonly PlanRegistrationExecutorCandidate[];
+}
+
 export interface StateMachineCallConfig {
   readonly stateMachineAddress: Address | string;
   readonly chainId?: number;
@@ -77,6 +88,24 @@ export interface PlanTransactionCall {
   readonly functionName: 'commitPlan' | 'finalizePlan';
   readonly data: Hex;
   readonly chainId?: number;
+}
+
+/** Cut a PlanRegistrationArgs out of compiler register args plus the derived planId. */
+export function planRegistrationArgs(
+  source: PlanRegistrationSource,
+  planId: Hex | string,
+): PlanRegistrationArgs {
+  return {
+    planId,
+    planHash: source.planHash,
+    hooksHash: source.hooksHash,
+    capabilitiesRoot: source.capabilitiesRoot,
+    dockRoutesRoot: source.dockRoutesRoot,
+    dockInterfaceRoot: source.dockInterfaceRoot,
+    executorCandidatesRoot: source.executorCandidatesRoot,
+    hooks: source.hooks,
+    executorCandidates: source.executorCandidates,
+  };
 }
 
 export interface PlanCommitCallArgs {

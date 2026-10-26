@@ -8,6 +8,7 @@
 export * from './client.js';
 export * from './doctor.js';
 export * from './plan.js';
+export * from './registry.js';
 export * from './runtime.js';
 export * from './signers.js';
 export * from './wallet.js';

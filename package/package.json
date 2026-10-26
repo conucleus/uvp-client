@@ -31,9 +31,11 @@
     "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {
+    "@uvp-eth/canonical-json": "workspace:*",
     "@uvp-eth/compiler": "workspace:*",
     "@uvp-eth/product-dto": "workspace:*",
     "@uvp-eth/protocol-bindings": "workspace:*",
+    "@uvp-eth/zhixu-registry": "workspace:*",
     "commander": "^12.1.0",
     "viem": "^2.21.58"
   },

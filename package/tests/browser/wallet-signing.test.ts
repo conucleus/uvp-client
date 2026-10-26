@@ -5,8 +5,6 @@ import {
   STATE_MACHINE_ABI,
   buildProductSubmitTypedData,
   buildSubmitSignalForCall,
-  canonicalJson,
-  hashEvidenceJson,
   recoverProductSubmitSigner,
   type SignalAttributionPayload,
 } from '@uvp-eth/protocol-bindings';
@@ -219,11 +217,6 @@ describe('participant entrypoint', () => {
       submitter,
     })).rejects.toBeInstanceOf(UnsupportedChainTargetError);
     expect(() => requestSolanaProductSubmitSignature()).toThrow(UnsupportedChainTargetError);
-  });
-
-  it('hashes canonical JSON through the browser-safe helper', () => {
-    expect(canonicalJson({ b: 2, a: { d: 4, c: 3 } })).toBe('{"a":{"c":3,"d":4},"b":2}');
-    expect(hashEvidenceJson({ b: 2, a: 1 }).evidenceHash).toBe(hashEvidenceJson({ a: 1, b: 2 }).evidenceHash);
   });
 });
 

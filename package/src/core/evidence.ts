@@ -7,7 +7,7 @@ export {
   hashEvidenceBytes,
   hashEvidenceJson,
   hashEvidenceText,
-} from '@uvp-eth/protocol-bindings';
+} from '@uvp-eth/canonical-json';
 
 export interface EvidenceHashResult {
   algorithm: 'keccak256';

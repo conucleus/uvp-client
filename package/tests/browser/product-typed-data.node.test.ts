@@ -1,14 +1,12 @@
-// 邀请接受 EIP-712：type hash/域四要素来自 protocol-bindings 单源；本测试
-// 固定 type hash 与域常量，验证宿主侧核对（链/合约锚/条款事实）与可读摘要。
+// 邀请接受/订单 finalize EIP-712：域四要素与 typehash 归 protocol-bindings 单源；
+// 本测试只验证宿主侧核对（链/合约锚/条款事实）、重建与可读摘要，不重复 pin 协议常量。
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { keccak256, toHex } from "viem";
 import {
   INVITE_ACCEPT_SIGNER_FIELD,
   OrderFinalizeTypedDataError,
   UVP_ORDER_FINALIZE_PRIMARY_TYPE,
-  UVP_ORDER_FINALIZE_TYPE_HASH,
   buildUVPOrderFinalizeTypedData,
   summarizeOrderFinalizeTypedData,
   verifyOrderFinalizeTypedData,
@@ -16,8 +14,6 @@ import {
   UVP_ORDER_BOOK_DOMAIN_NAME,
   UVP_ORDER_BOOK_DOMAIN_VERSION,
   UVP_STAGE_INVITE_ACCEPT_PRIMARY_TYPE,
-  UVP_STAGE_INVITE_ACCEPT_TYPED_DATA_FIELDS,
-  UVP_STAGE_INVITE_ACCEPT_TYPE_HASH,
   buildInviteAcceptTypedDataFromPreview,
   summarizeInviteAcceptTypedData,
   verifyInviteAcceptTypedData
@@ -31,25 +27,6 @@ import {
   invitePreviewFixture,
   inviteTypedDataFixture
 } from "./fixtures.js";
-
-const EXPECTED_TYPE_HASH = "0xbe4ab67c8ccc92929271cc75bbc187c1d2776ec477d6fedd2189512662b0235e";
-const ENCODE_TYPE =
-  "UVPStageInviteAccept(string draftId,string inviteId,string stageKey,bytes32 stageId,string slotKey,address invitee,uint256 amount,bytes32 finalStandardHash,uint256 workDeadline,bytes32 termsHash,uint256 nonce,uint256 deadline)";
-
-describe("UVPStageInviteAccept type hash", () => {
-  it("matches the canonical encodeType and the pinned hash", () => {
-    const recomputed = keccak256(toHex(ENCODE_TYPE));
-    assert.equal(UVP_STAGE_INVITE_ACCEPT_TYPE_HASH, EXPECTED_TYPE_HASH);
-    assert.equal(recomputed, EXPECTED_TYPE_HASH);
-  });
-
-  it("keeps the declaration order of the protocol field list", () => {
-    assert.deepEqual(
-      UVP_STAGE_INVITE_ACCEPT_TYPED_DATA_FIELDS.map((field) => `${field.type} ${field.name}`),
-      ENCODE_TYPE.slice("UVPStageInviteAccept(".length, -1).split(",")
-    );
-  });
-});
 
 describe("invite accept typed data domain", () => {
   it("uses UVPOrderBook/1 with the draft state machine as verifying contract", () => {
@@ -154,12 +131,11 @@ describe("UVPOrderFinalize typed data", () => {
     deadline: Math.floor(Date.parse("2026-11-01T00:00:00.000Z") / 1000)
   });
 
-  it("uses the UVPOrderBook/1 domain and the shared type hash", () => {
+  it("uses the UVPOrderBook/1 domain and the shared typed data", () => {
     const value = typedData();
     assert.equal(value.primaryType, UVP_ORDER_FINALIZE_PRIMARY_TYPE);
     assert.equal(value.domain.name, "UVPOrderBook");
     assert.equal(value.domain.version, "1");
-    assert.equal(UVP_ORDER_FINALIZE_TYPE_HASH, "0x87839ea85d602eb765b6212de2265acae60f4652e9ca17df45111c78c1dc1cb1");
     assert.equal(value.message.buyer.toLowerCase(), PERFORMER);
   });
 
