@@ -6,6 +6,7 @@
  */
 export * from './product/kernel/index.js';
 export * from './wallet/index.js';
+export * from './write.js';
 export * from './session/index.js';
 export * from './tasks/deadline.js';
 export * from './format/index.js';

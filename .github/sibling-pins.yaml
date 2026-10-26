@@ -1,6 +1,6 @@
 # 本仓 PR/push CI 的源依赖钉（自治组合声明）；按需自行 bump。
-# uvp-protocol：package 的 @uvp-eth/protocol-bindings 与 @uvp-eth/product-dto
-# 两个 workspace 依赖的姊妹检出锚点。
+# uvp-protocol：package 的 @uvp-eth/protocol-bindings、@uvp-eth/product-dto
+# 与 @uvp-eth/compiler 三个 workspace 依赖的姊妹检出锚点。
 # uvp-core：error-taxonomy conformance 契约表（protocol/uvp-error-taxonomy
 # .v1.json）的检出锚点。
 # 两个检出都必须带 pin，防同一 uvp-client SHA 的结论随姊妹仓默认分支漂移

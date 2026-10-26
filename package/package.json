@@ -31,6 +31,7 @@
     "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {
+    "@uvp-eth/compiler": "workspace:*",
     "@uvp-eth/product-dto": "workspace:*",
     "@uvp-eth/protocol-bindings": "workspace:*",
     "commander": "^12.1.0",

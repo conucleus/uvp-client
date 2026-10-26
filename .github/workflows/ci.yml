@@ -44,11 +44,11 @@ jobs:
           echo "uvp_protocol=${protocol_pin}" >> "$GITHUB_OUTPUT"
           echo "uvp_core=${core_pin}" >> "$GITHUB_OUTPUT"
 
-      # package/package.json 依赖 @uvp-eth/protocol-bindings 与
-      # @uvp-eth/product-dto 两个 workspace 包，本仓 pnpm-workspace.yaml 不含
-      # 它们——独立安装必须以姊妹仓形态供包。跨仓私有 checkout 沿用伞仓
-      # CI_SUBMODULE_TOKEN 模式；ref 用上方 sibling pin。
-      - name: Checkout uvp-protocol (protocol-bindings, product-dto)
+      # package/package.json 依赖 @uvp-eth/protocol-bindings、@uvp-eth/product-dto
+      # 与 @uvp-eth/compiler（headless plan compile）三个 workspace 包，本仓
+      # pnpm-workspace.yaml 不含它们——独立安装必须以姊妹仓形态供包。跨仓私有
+      # checkout 沿用伞仓 CI_SUBMODULE_TOKEN 模式；ref 用上方 sibling pin。
+      - name: Checkout uvp-protocol (bindings, product-dto, compiler)
         uses: actions/checkout@v4
         with:
           repository: conucleus/uvp-protocol
@@ -78,6 +78,8 @@ jobs:
             - "uvp-client/package"
             - "uvp-protocol/packages/protocol-bindings"
             - "uvp-protocol/packages/product-dto"
+            - "uvp-protocol/packages/hook-core"
+            - "uvp-protocol/packages/compiler"
           EOF
           printf '{"name":"ci-workspace","private":true,"packageManager":"pnpm@9.15.0"}' > package.json
 

@@ -40,6 +40,23 @@ export interface FaucetInfoOptions {
   address?: string;
 }
 
+export interface PlanCompileOptions {
+  definition: string;
+  publisher: string;
+  out?: string;
+}
+
+export interface PlanRegisterOptions {
+  definition: string;
+  rpcUrl: string;
+  chainId: string;
+  stateMachine: string;
+  privateKeyEnv: string;
+  deadlineSeconds?: string;
+  birthAuthorizer?: string;
+  dryRun?: boolean;
+}
+
 export interface DoctorOptions {
   config?: string;
   rpcUrl?: string;

@@ -10,15 +10,33 @@ package produces and reads signals, it never owns orders, sessions, or keys.
 
 | Entry | Responsibility (one sentence) |
 |---|---|
-| `@uvp-eth/uvp-client/core` | Runtime-agnostic transport/auth-session seam, chain target, ABI-driven signal build/decode/submit, validation, signing helpers, and evidence hashing. |
-| `@uvp-eth/uvp-client/browser` | Browser-host client: injected EIP-1193 wallet signing, Product V3 transport client, participant session read model, deadline/format derivations, and product typed-data verification — no env/localStorage/private-key access. |
-| `@uvp-eth/uvp-client/headless` | Script/bot client: private-key wallet handling, `HookReady` watcher and watch runtime, watch-job store/retry, and the non-spending executor doctor. |
-| `@uvp-eth/uvp-client/cli` | Executor CLI: `wallet`, `doctor`, `chain-once`/`chain-watch` (watch), and `chain-signal` (signal) over the headless/core entries. |
+| `@uvp-eth/uvp-client/core` | Runtime-agnostic read+write primitives: transport/auth seam, chain target, signal build/decode/submit, plan-registration/order-birth calldata builders, validation, signing helpers, evidence hashing, and re-exported protocol typed data. |
+| `@uvp-eth/uvp-client/browser` | Browser-host client: injected EIP-1193 wallet signing/submission for plan registration, order birth, and signed registry records, plus the Product V3 client, session read model, deadline/format, and typed-data verification — no compiler/env/localStorage/private keys. |
+| `@uvp-eth/uvp-client/headless` | Script/bot client: Node plan compilation, signed plan registration (commitPlan + finalizePlan, optional relay), signed registry record publishing, private-key wallet handling, watcher/runtime, and the non-spending doctor. |
+| `@uvp-eth/uvp-client/cli` | Executor CLI: `wallet`, `doctor`, `plan compile/register`, `chain-once`/`chain-watch` (watch), and `chain-signal` (signal) over the headless/core entries. |
 
 There is no root entry and no wildcard export; consumers pick one of the four
 subpaths. ABI, EIP-712 typed data, and canonical hashing are single-sourced in
 `@uvp-eth/protocol-bindings`; API DTOs are single-sourced in
-`@uvp-eth/product-dto`.
+`@uvp-eth/product-dto`; Zhixu compilation is single-sourced in
+`@uvp-eth/compiler` (headless only).
+
+## Signed writes
+
+All signed writes belong to the client, not to chain-services:
+
+| Write | Entry | Shape |
+|---|---|---|
+| Plan registration | `headless` / `browser` / `cli` | compiler args → `commitPlan` typed data + calldata, then `finalizePlan` |
+| Order birth | `core` / `browser` | `triggerOrderFromOutsideFor` typed data + calldata |
+| Order/invite/finalize/signal typed data | `core` (re-export) | protocol-bindings builders/validators |
+| Zhixu/identity registry record | `headless` / `browser` | registry EIP-712 builder injected; client signs and forwards the signed record |
+
+The browser path never imports the compiler or reads private keys. The headless
+path signs with an injected signer and can either submit transactions itself or
+return relay-ready calls. Registry storage is not a client responsibility: the
+caller injects the registry EIP-712 builder and the signed-record submitter
+(e.g. from `@uvp-eth/zhixu-registry`), so the client imports no `pg`.
 
 ## Local Commands
 
@@ -161,6 +179,7 @@ never hand-copied here.
 ## Boundaries
 
 - No HTTP server, no callback/job runtime process, and no database.
+- No registry storage or compiler in the browser entry; registry typed-data/record shape stays single-sourced in `@uvp-eth/zhixu-registry` via caller injection.
 - No order creation or order-level authorization; orders bind submitter
   wallets to source/signal permissions on `UVPStateMachine`.
 - No key custody: CLI/wallet helpers read only explicit env vars and never

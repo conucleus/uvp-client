@@ -9,6 +9,7 @@ import { Command } from 'commander';
 import { ExecutorKitError } from '../core/validation.js';
 import { registerChainCommands } from './commands/chain.js';
 import { registerDoctorCommand } from './commands/doctor.js';
+import { registerPlanCommands } from './commands/plan.js';
 import { registerWalletCommands } from './commands/wallet.js';
 
 export function buildProgram(): Command {
@@ -21,6 +22,7 @@ export function buildProgram(): Command {
 
   registerWalletCommands(program);
   registerDoctorCommand(program);
+  registerPlanCommands(program);
   registerChainCommands(program);
 
   return program;
