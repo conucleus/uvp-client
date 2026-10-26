@@ -15,7 +15,7 @@ CLI; it never owns orders, sessions, keys, or a server process.
 | `@uvp-eth/uvp-client/cli` | Executor commands: wallet, doctor, watch, signal. |
 
 Dependencies are only `@uvp-eth/product-dto`, `@uvp-eth/protocol-bindings`,
-`viem`, and `commander`; order-kernel is merged here, not re-exported.
+`viem`, and `commander`; the browser entry carries the Product V3 client directly, with no separate kernel package.
 
 ## Development Topology
 
