@@ -36,7 +36,7 @@ export function registerChainCommands(program: Command): void {
     .option('--max-get-logs-block-span <blocks>', 'max blocks per eth_getLogs request; deeper ranges are chunked', '9999')
     .option('--jobs-file <path>', 'watcher jobs JSON file (default: <state-dir>/jobs.json)')
     .option('--state-dir <path>', `watcher state directory holding jobs.json and cursor.json (default: $${WATCHER_STATE_DIR_ENV} or ${DEFAULT_WATCHER_STATE_DIR})`)
-    .option('--job-store <file|memory>', 'watcher job store: file persists jobs and scan cursor across restarts, memory keeps them in-process', 'file')
+    .option('--job-store <file|memory>', 'watcher state store: file persists jobs and scan cursor across restarts, memory keeps them in-process', 'file')
     .option('--dry-run', 'build submitSignal tx requests without broadcasting')
     .option('--wait-for-receipt', 'wait for tx receipt after broadcasting')
     .action(async (options: ChainWatchOptions) => {
@@ -69,7 +69,7 @@ export function registerChainCommands(program: Command): void {
     .option('--max-get-logs-block-span <blocks>', 'max blocks per eth_getLogs request; deeper ranges are chunked', '9999')
     .option('--jobs-file <path>', 'watcher jobs JSON file (default: <state-dir>/jobs.json)')
     .option('--state-dir <path>', `watcher state directory holding jobs.json and cursor.json (default: $${WATCHER_STATE_DIR_ENV} or ${DEFAULT_WATCHER_STATE_DIR})`)
-    .option('--job-store <file|memory>', 'watcher job store: file persists jobs and scan cursor across restarts, memory keeps them in-process', 'file')
+    .option('--job-store <file|memory>', 'watcher state store: file persists jobs and scan cursor across restarts, memory keeps them in-process', 'file')
     .option('--dry-run', 'build submitSignal tx requests without broadcasting')
     .option('--wait-for-receipt', 'wait for tx receipt after broadcasting')
     .action(async (options: ChainWatchOptions) => {

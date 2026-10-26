@@ -1,379 +1,264 @@
-import {
-  getSignalContainer,
-  getSignalContainerProof,
-  isProductApiRedirectStatus,
-  listSignalContainers,
-  resolveProductApiFetch,
-  summarizeSignalContainer,
-  summarizeSubmittedSignalContainer,
-  type ProductApiClientOptions,
-  type ProductApiAuthStatus,
-  type ProductSignalContainer,
-  type ProductTaskSummary,
-  type SubmittedSignalContainer,
-  type SubmittedSignalContainerSummary,
-} from './product.js';
+/**
+ * Non-spending executor diagnostic: validates the state-machine handler
+ * config, probes the RPC chain and state-machine code, and derives the
+ * configured signer address without echoing key material. Config shape is
+ * owned by watcher/execution/handler.ts; the signer key comes only from an
+ * explicit env name (signing.ts).
+ */
+import { createPublicClient, http, type Address } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { classifyExecutorKitError } from './errors.js';
-import { ValidationError, normalizeAddress, normalizeAddressChecksummed } from './validation.js';
+import { loadPrivateKeyFromEnv } from './signing.js';
+import { normalizeAddressChecksummed, ValidationError } from './validation.js';
+import {
+  loadStateMachineHandlerConfig,
+  type StateMachineHandlerConfig,
+} from './watcher/execution/handler.js';
 
-const PRODUCT_DOCTOR_REACHABILITY_TIMEOUT_MS = 10_000;
+const DEFAULT_DOCTOR_TIMEOUT_MS = 10_000;
 
-export interface ProductDoctorInput extends ProductApiClientOptions {
-  readonly walletAddress?: string;
-  readonly taskId?: string;
-  readonly submissionId?: string;
-  readonly verbose?: boolean;
-  readonly auth?: ProductApiAuthStatus;
-}
-
-export interface ProductDoctorCheck {
+export interface DoctorCheck {
   readonly ok: boolean;
   readonly label: string;
   readonly detail?: string;
   readonly latencyMs?: number;
 }
 
-export interface TaskReadinessResult {
-  readonly ok: boolean;
-  readonly check: ProductDoctorCheck;
-  readonly taskId: string;
-  readonly orderId: string;
-  readonly title: string;
-  readonly status: string;
-  readonly canSubmit: boolean;
-  readonly blockedReason?: string;
-  readonly assigneeMatch: boolean;
-  readonly assigneeUnverified?: boolean;
-  readonly configuredWallet: string;
-  readonly taskAssignee?: string;
-  readonly stageName?: string;
-  readonly deadline?: string;
-  readonly deadlineExpired?: boolean;
-  readonly primaryActionLabel?: string;
-  readonly nextAction: 'prepare' | 'wait' | 'proof' | 'blocked';
-  readonly nextActionLabel: string;
+export interface ExecutorDoctorConfigSummary {
+  readonly path: string;
+  readonly handlerCount: number;
+  readonly signalCount: number;
+  readonly stateMachineAddresses: readonly Address[];
+  readonly supplierId?: string;
+  readonly walletAddress?: Address;
+  readonly chainId?: number;
+  readonly dryRun: boolean;
 }
 
-export interface ProductDoctorOutput {
+export interface ExecutorDoctorRpcSummary {
+  readonly chainId: number;
+  readonly blockNumber: string;
+}
+
+export interface ExecutorDoctorReport {
   readonly ok: boolean;
-  readonly checks: readonly ProductDoctorCheck[];
-  readonly chainServicesUrl: string;
   readonly timestamp: string;
-  readonly principalId?: string;
-  readonly auth?: ProductApiAuthStatus;
-  readonly walletAddress?: string;
-  readonly tasks?: readonly ProductTaskSummary[];
-  readonly proof?: SubmittedSignalContainerSummary;
-  readonly taskReadiness?: TaskReadinessResult;
-  readonly rawTasks?: readonly ProductSignalContainer[];
-  readonly rawProof?: SubmittedSignalContainer;
-  readonly rawTaskReadiness?: ProductSignalContainer;
+  readonly checks: readonly DoctorCheck[];
+  readonly warnings: readonly string[];
+  readonly config?: ExecutorDoctorConfigSummary;
+  readonly rpc?: ExecutorDoctorRpcSummary;
+  readonly stateMachineAddress?: Address;
+  readonly walletAddress?: Address;
 }
 
-interface TaskVisibilityResult {
-  readonly check: ProductDoctorCheck;
-  readonly tasks?: readonly ProductTaskSummary[];
-  readonly rawTasks?: readonly ProductSignalContainer[];
+export interface ExecutorDoctorInput {
+  readonly configPath?: string;
+  readonly rpcUrl?: string;
+  readonly chainId?: number;
+  readonly stateMachineAddress?: Address | string;
+  readonly walletAddress?: Address | string;
+  readonly privateKeyEnv?: string;
+  readonly timeoutMs?: number;
 }
 
-interface ProofEndpointResult {
-  readonly check: ProductDoctorCheck;
-  readonly proof?: SubmittedSignalContainerSummary;
-  readonly rawProof?: SubmittedSignalContainer;
-}
-
-export async function runProductDoctor(input: ProductDoctorInput): Promise<ProductDoctorOutput> {
-  const timestamp = new Date().toISOString();
-  const checks: ProductDoctorCheck[] = [];
-  let tasks: readonly ProductTaskSummary[] | undefined;
-  let rawTasks: readonly ProductSignalContainer[] | undefined;
-  let proof: SubmittedSignalContainerSummary | undefined;
-  let rawProof: SubmittedSignalContainer | undefined;
-  let walletAddress: string | undefined;
-  let taskReadiness: TaskReadinessResult | undefined;
-  let rawTaskReadiness: ProductSignalContainer | undefined;
-
-  const reachability = await checkReachability(input);
-  checks.push(reachability);
-
-  const effectiveWallet = input.walletAddress
-    ? normalizeAddressChecksummed(input.walletAddress, 'walletAddress')
-    : undefined;
-  if (effectiveWallet) {
-    walletAddress = effectiveWallet;
+export async function runExecutorDoctor(input: ExecutorDoctorInput): Promise<ExecutorDoctorReport> {
+  if (!input.configPath && !input.rpcUrl) {
+    throw new ValidationError('doctor requires --config and/or --rpc-url');
   }
 
-  if (effectiveWallet && !input.taskId) {
-    const result = await checkTaskVisibility(input, effectiveWallet);
-    checks.push(result.check);
-    tasks = result.tasks;
-    rawTasks = result.rawTasks;
+  const checks: DoctorCheck[] = [];
+  const warnings: string[] = [];
+  let config: ExecutorDoctorConfigSummary | undefined;
+  let rpc: ExecutorDoctorRpcSummary | undefined;
+  let walletAddress: Address | undefined;
+  let stateMachineAddress: Address | undefined;
+
+  if (input.configPath) {
+    const configPath = input.configPath;
+    const started = Date.now();
+    try {
+      const loaded = await loadStateMachineHandlerConfig(configPath);
+      config = summarizeConfig(configPath, loaded);
+      checks.push({
+        ok: true,
+        label: 'config',
+        detail: `${config.handlerCount} handler(s), ${config.signalCount} signal(s)`,
+        latencyMs: Date.now() - started,
+      });
+      if (!config.walletAddress && !input.walletAddress && !input.privateKeyEnv) {
+        warnings.push('config has no walletAddress and no --wallet-address/--private-key-env was given');
+      }
+      if (config.chainId === undefined && input.chainId === undefined) {
+        warnings.push('config has no chainId; pass --chain-id so the scan checks the expected chain');
+      }
+      if (config.chainId !== undefined && input.chainId !== undefined && config.chainId !== input.chainId) {
+        warnings.push(`config chainId ${config.chainId} differs from --chain-id ${input.chainId}; the scan uses --chain-id`);
+      }
+      if (config.stateMachineAddresses.length === 0 && !input.stateMachineAddress) {
+        warnings.push('config declares no state machine; pass --state-machine or set stateMachines[]');
+      }
+    } catch (error) {
+      checks.push({
+        ok: false,
+        label: 'config',
+        detail: classifyExecutorKitError(error).message,
+        latencyMs: Date.now() - started,
+      });
+    }
   }
 
-  if (input.taskId) {
-    const result = await checkTaskReadiness(input, input.taskId, effectiveWallet);
-    checks.push(result.check);
-    taskReadiness = result.readiness;
-    rawTaskReadiness = result.rawTask;
+  if (input.privateKeyEnv) {
+    const privateKeyEnv = input.privateKeyEnv;
+    const started = Date.now();
+    try {
+      const privateKey = loadPrivateKeyFromEnv(privateKeyEnv);
+      if (!privateKey) {
+        throw new ValidationError(`missing private key env var ${privateKeyEnv}`);
+      }
+      const signer = privateKeyToAccount(privateKey).address;
+      if (input.walletAddress) {
+        const expected = normalizeAddressChecksummed(input.walletAddress, 'walletAddress');
+        const matches = expected === signer;
+        walletAddress = matches ? signer : undefined;
+        checks.push({
+          ok: matches,
+          label: 'wallet',
+          detail: matches
+            ? `signer ${signer} matches --wallet-address`
+            : `signer ${signer} does not match --wallet-address ${expected}`,
+          latencyMs: Date.now() - started,
+        });
+      } else {
+        walletAddress = signer;
+        checks.push({
+          ok: true,
+          label: 'wallet',
+          detail: `signer ${signer} (${privateKeyEnv})`,
+          latencyMs: Date.now() - started,
+        });
+      }
+    } catch (error) {
+      checks.push({
+        ok: false,
+        label: 'wallet',
+        detail: classifyExecutorKitError(error).message,
+        latencyMs: Date.now() - started,
+      });
+    }
+  } else if (input.walletAddress) {
+    const started = Date.now();
+    try {
+      walletAddress = normalizeAddressChecksummed(input.walletAddress, 'walletAddress');
+      checks.push({
+        ok: true,
+        label: 'wallet',
+        detail: `wallet address ${walletAddress} configured (no private key loaded)`,
+        latencyMs: Date.now() - started,
+      });
+    } catch (error) {
+      checks.push({
+        ok: false,
+        label: 'wallet',
+        detail: classifyExecutorKitError(error).message,
+        latencyMs: Date.now() - started,
+      });
+    }
   }
 
-  if (input.submissionId) {
-    const result = await checkProofEndpoint(input, input.submissionId);
-    checks.push(result.check);
-    proof = result.proof;
-    rawProof = result.rawProof;
+  if (!input.rpcUrl) {
+    warnings.push('no --rpc-url; RPC chain and state-machine checks skipped');
+  } else {
+    const client = createPublicClient({
+      transport: http(input.rpcUrl, {
+        timeout: input.timeoutMs ?? DEFAULT_DOCTOR_TIMEOUT_MS,
+        retryCount: 0,
+      }),
+    });
+    const started = Date.now();
+    try {
+      const chainId = await client.getChainId();
+      const blockNumber = await client.getBlockNumber();
+      rpc = { chainId, blockNumber: blockNumber.toString() };
+      checks.push({
+        ok: true,
+        label: 'rpc',
+        detail: `chain id ${chainId}, head ${blockNumber}`,
+        latencyMs: Date.now() - started,
+      });
+
+      if (input.chainId !== undefined) {
+        const matches = chainId === input.chainId;
+        checks.push({
+          ok: matches,
+          label: 'chain-id',
+          detail: matches
+            ? `RPC chain id ${chainId} matches --chain-id ${input.chainId}`
+            : `RPC chain id ${chainId} does not match --chain-id ${input.chainId}`,
+        });
+      }
+
+      if (input.stateMachineAddress) {
+        const address = normalizeAddressChecksummed(input.stateMachineAddress, 'stateMachineAddress');
+        stateMachineAddress = address;
+        const codeStarted = Date.now();
+        try {
+          const code = await client.getCode({ address });
+          const deployed = code !== undefined && code !== '0x';
+          checks.push({
+            ok: deployed,
+            label: 'state-machine',
+            detail: deployed
+              ? `contract code present at ${address}`
+              : `no contract code at ${address}`,
+            latencyMs: Date.now() - codeStarted,
+          });
+        } catch (error) {
+          checks.push({
+            ok: false,
+            label: 'state-machine',
+            detail: classifyExecutorKitError(error).message,
+            latencyMs: Date.now() - codeStarted,
+          });
+        }
+      }
+    } catch (error) {
+      checks.push({
+        ok: false,
+        label: 'rpc',
+        detail: classifyExecutorKitError(error).message,
+        latencyMs: Date.now() - started,
+      });
+    }
   }
 
   return {
-    ok: checks.every((c) => c.ok),
+    ok: checks.every((check) => check.ok),
+    timestamp: new Date().toISOString(),
     checks,
-    chainServicesUrl: input.chainServicesUrl,
-    timestamp,
-    ...(input.principalId ? { principalId: input.principalId } : {}),
-    ...(input.auth ? { auth: input.auth } : {}),
+    warnings,
+    ...(config ? { config } : {}),
+    ...(rpc ? { rpc } : {}),
+    ...(stateMachineAddress ? { stateMachineAddress } : {}),
     ...(walletAddress ? { walletAddress } : {}),
-    ...(tasks ? { tasks } : {}),
-    ...(proof ? { proof } : {}),
-    ...(taskReadiness ? { taskReadiness } : {}),
-    ...(input.verbose && rawTasks ? { rawTasks } : {}),
-    ...(input.verbose && rawProof ? { rawProof } : {}),
-    ...(input.verbose && rawTaskReadiness ? { rawTaskReadiness } : {}),
   };
 }
 
-async function checkReachability(
-  input: ProductApiClientOptions,
-): Promise<ProductDoctorCheck> {
-  const started = Date.now();
-  try {
-    const fetchFn = resolveProductApiFetch(input.fetch);
-    const url = stripTrailingSlash(input.chainServicesUrl);
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      ...input.headers,
-    };
-    if (input.principalId && input.principalId.trim().length > 0) {
-      headers['x-uvp-principal-id'] = input.principalId.trim();
-    }
-    const response = await fetchFn(url, {
-      method: 'GET',
-      headers,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(
-        input.requestTimeoutMs === undefined
-          ? PRODUCT_DOCTOR_REACHABILITY_TIMEOUT_MS
-          : normalizeProbeTimeoutMs(input.requestTimeoutMs),
-      ),
-    });
-    const latencyMs = Date.now() - started;
-    if (isProductApiRedirectStatus(response.status)) {
-      return {
-        ok: false,
-        label: 'reachability',
-        detail: `Product API responded HTTP ${response.status} redirect; redirects are refused so the Authorization bearer is never replayed to the redirect target`,
-        latencyMs,
-      };
-    }
-    if (response.ok) {
-      return { ok: true, label: 'reachability', detail: `Product API responded HTTP ${response.status}`, latencyMs };
-    }
-    return { ok: false, label: 'reachability', detail: `Product API HTTP ${response.status}`, latencyMs };
-  } catch (error) {
-    const classified = classifyExecutorKitError(error, 'unknown');
-    return { ok: false, label: 'reachability', detail: classified.message, latencyMs: Date.now() - started };
+function summarizeConfig(path: string, config: StateMachineHandlerConfig): ExecutorDoctorConfigSummary {
+  const signalCount = Object.values(config.handlers)
+    .reduce((count, handler) => count + handler.signals.length, 0);
+  const stateMachineAddresses = (config.stateMachines ?? [])
+    .map((deployment) => normalizeAddressChecksummed(deployment.stateMachineAddress, 'stateMachines[].stateMachineAddress'));
+  if (stateMachineAddresses.length === 0 && config.stateMachineAddress) {
+    stateMachineAddresses.push(config.stateMachineAddress);
   }
-}
-
-async function checkTaskVisibility(
-  input: ProductApiClientOptions,
-  walletAddress: string,
-): Promise<TaskVisibilityResult> {
-  const started = Date.now();
-  try {
-    const rawTasks = await listSignalContainers({
-      ...input,
-      walletAddress,
-    });
-    const latencyMs = Date.now() - started;
-    return {
-      check: {
-        ok: true,
-        label: 'task-visibility',
-        detail: rawTasks.length === 0
-          ? 'No tasks visible for this wallet'
-          : `${rawTasks.length} task(s) visible for this wallet`,
-        latencyMs,
-      },
-      tasks: rawTasks.map((t) => summarizeSignalContainer(t)),
-      rawTasks,
-    };
-  } catch (error) {
-    const classified = classifyExecutorKitError(error, 'unknown');
-    return {
-      check: {
-        ok: false,
-        label: 'task-visibility',
-        detail: classified.message,
-        latencyMs: Date.now() - started,
-      },
-    };
-  }
-}
-
-async function checkProofEndpoint(
-  input: ProductApiClientOptions,
-  submissionId: string,
-): Promise<ProofEndpointResult> {
-  const started = Date.now();
-  try {
-    const submission = await getSignalContainerProof({
-      ...input,
-      submissionId,
-    });
-    const latencyMs = Date.now() - started;
-    return {
-      check: {
-        ok: true,
-        label: 'proof-endpoint',
-        detail: `Submission ${submissionId} status: ${submission.status}`,
-        latencyMs,
-      },
-      proof: summarizeSubmittedSignalContainer(submission),
-      rawProof: submission,
-    };
-  } catch (error) {
-    const classified = classifyExecutorKitError(error, 'unknown');
-    return {
-      check: {
-        ok: false,
-        label: 'proof-endpoint',
-        detail: classified.message,
-        latencyMs: Date.now() - started,
-      },
-    };
-  }
-}
-
-interface TaskReadinessCheckResult {
-  readonly check: ProductDoctorCheck;
-  readonly readiness?: TaskReadinessResult;
-  readonly rawTask?: ProductSignalContainer;
-}
-
-async function checkTaskReadiness(
-  input: ProductApiClientOptions,
-  taskId: string,
-  walletAddress: string | undefined,
-): Promise<TaskReadinessCheckResult> {
-  const started = Date.now();
-  try {
-    const rawTask = await getSignalContainer({
-      ...input,
-      taskId,
-      ...(walletAddress ? { walletAddress } : {}),
-    });
-    const summary = summarizeSignalContainer(rawTask);
-    const latencyMs = Date.now() - started;
-
-    const assigneeUnverified = walletAddress === undefined;
-    const assigneeMatch = walletAddress !== undefined && summary.assigneeWallet !== undefined
-      ? normalizeAddress(summary.assigneeWallet, 'task.assigneeWallet') === normalizeAddress(walletAddress, 'walletAddress')
-      : false;
-    const now = new Date();
-    const deadlineMs = parseTaskDeadlineMs(summary.deadline);
-    const deadlineExpired = deadlineMs !== undefined ? deadlineMs <= now.getTime() : undefined;
-    const canSubmit = summary.canSubmit === true && (assigneeMatch || assigneeUnverified);
-    const blockedReason = summary.canSubmit === false ? (summary.blockedReason ?? 'Submission not available') : undefined;
-
-    let nextAction: TaskReadinessResult['nextAction'] = 'blocked';
-    let nextActionLabel = 'This task is not ready for action.';
-
-    const taskComplete = summary.status === 'submitted';
-    if (taskComplete) {
-      nextAction = 'proof';
-      nextActionLabel = 'Task is complete. Run product proof to verify on-chain confirmation.';
-    } else if (canSubmit) {
-      nextAction = 'prepare';
-      nextActionLabel = assigneeUnverified
-        ? 'Ready to prepare, but assignee ownership was NOT verified (no wallet address configured). Run product prepare to build the signal container.'
-        : 'Ready to prepare. Run product prepare to build the signal container.';
-    } else if (blockedReason) {
-      nextAction = 'wait';
-      nextActionLabel = blockedReason;
-    } else if (deadlineExpired) {
-      nextAction = 'blocked';
-      nextActionLabel = 'Local clock shows the deadline has passed (display-only; no server verdict was provided).';
-    } else if (walletAddress && !assigneeMatch) {
-      nextAction = 'blocked';
-      nextActionLabel = `Configured wallet ${walletAddress} is not the task assignee.`;
-    } else {
-      nextAction = 'wait';
-      nextActionLabel = 'Task is not yet ready for submission. Check the blocked reason.';
-    }
-
-    const readinessOk = canSubmit || taskComplete;
-    const readinessCheck = {
-      ok: readinessOk,
-      label: 'task-readiness',
-      detail: nextActionLabel,
-      latencyMs,
-    };
-
-    return {
-      check: readinessCheck,
-      readiness: {
-        ok: readinessOk,
-        check: readinessCheck,
-        taskId: summary.taskId,
-        orderId: summary.orderId,
-        title: summary.title,
-        status: summary.status,
-        canSubmit,
-        ...(blockedReason ? { blockedReason } : {}),
-        assigneeMatch,
-        ...(assigneeUnverified ? { assigneeUnverified: true } : {}),
-        configuredWallet: walletAddress ?? '',
-        ...(summary.assigneeWallet ? { taskAssignee: summary.assigneeWallet } : {}),
-        ...(summary.stageName ? { stageName: summary.stageName } : {}),
-        ...(summary.deadline ? { deadline: summary.deadline } : {}),
-        ...(deadlineExpired !== undefined ? { deadlineExpired } : {}),
-        ...(summary.primaryActionLabel ? { primaryActionLabel: summary.primaryActionLabel } : {}),
-        nextAction,
-        nextActionLabel,
-      },
-      rawTask,
-    };
-  } catch (error) {
-    const classified = classifyExecutorKitError(error, 'unknown');
-    return {
-      check: {
-        ok: false,
-        label: 'task-readiness',
-        detail: classified.message,
-        latencyMs: Date.now() - started,
-      },
-    };
-  }
-}
-
-function stripTrailingSlash(url: string): string {
-  return url.endsWith('/') ? url.slice(0, -1) : url;
-}
-
-function normalizeProbeTimeoutMs(value: number | string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new ValidationError('requestTimeoutMs must be a positive integer');
-  }
-  return parsed;
-}
-
-function parseTaskDeadlineMs(value: string | undefined): number | undefined {
-  if (!value || value.trim().length === 0) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  const withZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(trimmed) ? trimmed : `${trimmed}Z`;
-  const parsed = Date.parse(withZone);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return {
+    path,
+    handlerCount: Object.keys(config.handlers).length,
+    signalCount,
+    stateMachineAddresses,
+    ...(config.supplierId ?? config.executorId ? { supplierId: config.supplierId ?? config.executorId } : {}),
+    ...(config.walletAddress ? { walletAddress: config.walletAddress } : {}),
+    ...(config.chainId !== undefined ? { chainId: config.chainId } : {}),
+    dryRun: config.dryRun ?? false,
+  };
 }

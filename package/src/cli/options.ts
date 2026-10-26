@@ -1,9 +1,7 @@
-import {
-  productApiAuthHeadersFromEnv,
-  type ProductApiAuthStatus,
-  type ProductApiClientOptions,
-  type ProductSubmitIntent,
-} from '../product.js';
+/**
+ * Commander option shapes shared by the executor CLI commands; the parsing
+ * helpers mirror the validation rules owned by validation.ts.
+ */
 import { ValidationError } from '../validation.js';
 
 export interface ChainWatchOptions {
@@ -60,127 +58,14 @@ export interface FaucetInfoOptions {
   address?: string;
 }
 
-export interface ProductClientCliOptions {
-  chainServicesUrl: string;
-  principalId?: string;
-  authTokenEnv?: string;
-  verbose?: boolean;
-}
-
-export interface ProductClientRuntimeOptions extends ProductApiClientOptions {
-  readonly auth?: ProductApiAuthStatus;
-}
-
-export interface ProductTasksOptions extends ProductClientCliOptions {
-  walletAddress: string;
-  orderId?: string;
-  status?: string;
-}
-
-export interface ProductTaskGetOptions extends ProductClientCliOptions {
-  walletAddress?: string;
-}
-
-export interface ProductPrepareOptions extends ProductClientCliOptions {
-  walletAddress: string;
-  evidenceId: string[];
-  intent: ProductSubmitIntent;
-  preparedFile?: string;
-}
-
-export interface ProductSubmitOptions extends ProductClientCliOptions {
-  prepareId?: string;
-  preparedFile: string;
-  privateKeyEnv: string;
-  walletAddress?: string;
-  expectedChainId?: string;
-  expectedVerifyingContract?: string;
-}
-
-export type ProductProofOptions = ProductClientCliOptions;
-
-export interface ServeOptions {
-  config: string;
-  host: string;
-  port: string;
-  executorTokenEnv: string;
-  callbackTokenEnv: string;
-  callbackHmacSecretEnv: string;
-  readyJson?: boolean;
-}
-
-export interface ConfigValidateOptions {
-  config: string;
-  kind: string;
-}
-
 export interface DoctorOptions {
-  chainServicesUrl: string;
+  config?: string;
+  rpcUrl?: string;
+  chainId?: string;
+  stateMachine?: string;
   walletAddress?: string;
-  taskId?: string;
-  submissionId?: string;
-  principalId?: string;
-  authTokenEnv?: string;
-  verbose?: boolean;
-}
-
-export interface JobsFileOptions {
-  jobsFile: string;
-}
-
-export interface JobsListOptions extends JobsFileOptions {
-  status?: string;
-  supplierId?: string;
-}
-
-export interface JobsRetryOptions extends ChainWatchOptions {
-  operator: string;
-  reason?: string;
-}
-
-export interface JobsDeadLetterOptions extends JobsFileOptions {
-  operator: string;
-  reason: string;
-  force?: boolean;
-}
-
-export interface JobsReviveOptions extends JobsFileOptions {
-  operator: string;
-  reason: string;
-}
-
-export function productClientOptions(options: ProductClientCliOptions): ProductClientRuntimeOptions {
-  const auth = options.authTokenEnv
-    ? productApiAuthHeadersFromEnv(options.authTokenEnv)
-    : undefined;
-  return {
-    chainServicesUrl: options.chainServicesUrl,
-    ...(options.principalId ? { principalId: options.principalId } : {}),
-    ...(auth ? { headers: auth.headers, auth: auth.status } : {}),
-  };
-}
-
-export function collectRepeatedOption(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
-}
-
-export function readSecretFromEnv(envName: string, label: string): string {
-  const secret = process.env[envName];
-  if (!secret || secret.trim().length === 0) {
-    throw new ValidationError(`missing ${label}: set ${envName}`);
-  }
-  return secret;
-}
-
-export function parsePort(value: string): number {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
-    throw new ValidationError('port must be a non-negative integer');
-  }
-  const port = Number(value);
-  if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
-    throw new ValidationError('port must be between 0 and 65535');
-  }
-  return port;
+  privateKeyEnv?: string;
+  timeoutMs?: string;
 }
 
 export function parseNonNegativeIntegerOption(value: string, fieldName: string): number {

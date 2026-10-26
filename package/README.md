@@ -1,98 +1,110 @@
 # executor-kit
 
-CLI and SDK for executors that produce standard signal containers for
-`UVPStateMachine` coordination.
+Executor **SDK + CLI** for the non-browser signal-producer surface of a UVP
+deployment. The package watches `UVPStateMachine.HookReady` events, builds and
+optionally submits authorized `submitSignal` callback transactions, hashes
+off-chain evidence, and provides participant-wallet signing helpers.
 
-Public status: alpha SDK/CLI. It is the non-browser signal-producer surface for
-local and testnet workflows; package metadata and dist-based publishing still
-need cleanup before an npm release.
-
-Two co-equal signal-producer surfaces:
-
-- **Chain-native**: watch `UVPStateMachine.HookReady` events, route ready hooks to
-  configured handlers, and submit authorized `submitSignal` callback transactions
-  from a participant wallet.
-- **Product API**: the non-browser signal-producer gate for enterprise
-  scripts, supervised AI agents, and future MCP clients. All producers dock at the
-  same Product API prepare/sign/submit/proof boundary.
-
-Executor-kit keeps using the same signal-container producer vocabulary as Order
-App: list tasks, prepare typed data, sign with an explicit participant key,
-submit, and fetch proof. It consumes executor, docked Zhixu, and resource-access
-surfaces from Product DTO/Product API.
+The kit does **not** include an HTTP server, a callback/job runtime, or a
+Product API client. Product/order transport belongs to
+`@uvp-eth/order-kernel` (`/product/kernel`); ABI, EIP-712 typed data, and
+canonical hashing belong to `@uvp-eth/protocol-bindings`. The kit imports both
+directions one-way: kit → bindings; `order-kernel` never imports the kit.
 
 ## Local Commands
 
 ```bash
 pnpm install
-pnpm --filter @uvp-eth/executor-kit test
 pnpm --filter @uvp-eth/executor-kit typecheck
+pnpm --filter @uvp-eth/executor-kit test
 pnpm --filter @uvp-eth/executor-kit build
 ```
 
-`dist/` is a local, gitignored build output — the `bin` entry
-(`dist/cli.js`) only exists after `pnpm --filter @uvp-eth/executor-kit build`,
-and nothing republishes it automatically when `src/` changes: run the build
-before invoking the installed `uvp-executor` bin. Workspace consumers import
-the TypeScript sources through the package `exports` and never need `dist`.
-Packing (`pnpm pack` / `npm publish`) runs the build first via the `prepack`
-script, so a tarball never ships a `dist/` older than the `src/` beside it.
+`dist/` is a local, gitignored build output; `build` cleans it before compiling
+so a tarball never carries modules that were removed from `src/`. Workspace
+consumers import the TypeScript sources through the package `exports` and never
+need `dist`; the `bin` entry (`dist/cli.js`) only exists after a build, and a
+packed tarball carries both `src/` (for the `exports` map) and `dist/` (for the
+bin).
 
 ## Source Layout
 
-The watcher code is organized by scan-and-delivery lifecycle; all modules
-below are internal wiring behind the SDK surface re-exported by
-`src/index.ts`:
-
 ```text
 package/src/
-├── index.ts                   # SDK 公共出口（export * 面保持稳定）
-├── cli.ts                     # CLI 入口：main/buildProgram 与 bin（dist/cli.js）
+├── index.ts                   # SDK public surface
+├── cli.ts                     # CLI entry: main/buildProgram and bin (dist/cli.js)
 ├── cli/
-│   ├── commands/              # 命令分发：wallet/product/serve/config/doctor/jobs/chain
-│   ├── options.ts             # 选项类型与参数解析辅助
-│   ├── output.ts              # ExecutorJobDTO 等 DTO 映射与退出码适配
-│   └── watcher.ts             # CLI 装配 watcher（state-dir 锁、存储选择、runtime env）
+│   ├── commands/              # chain(watch/signal), doctor, wallet command groups
+│   ├── options.ts             # CLI option shapes and parsing helpers
+│   ├── output.ts              # scan-result exit-code adaptation
+│   └── watcher.ts             # CLI watcher assembly (state-dir lock, storage, runtime env)
+├── doctor.ts                  # non-spending config/RPC/contract/wallet diagnostic
 ├── watcher/
-│   ├── index.ts               # watcher 域公共出口（纯重导出面）
-│   ├── watcher.ts             # 扫描与执行编排（StateMachineWatcher 及配置归一化）
-│   ├── scan/logs.ts           # 日志扫描：区块分段与日志排序
-│   ├── scan/reorg.ts          # 重组回退：finality 缓冲、checkpoint 锚点、回滚证据
-│   ├── jobs/model.ts          # job 数据模型、store 契约与 patch/CAS 机制
-│   ├── jobs/claim.ts          # 任务级运行认领（isHeldRunClaim、结论性写入释放）
-│   ├── jobs/retry.ts          # 手工重试、重试/重发回退配置
-│   ├── jobs/deadletter.ts     # 手工 dead-letter
-│   ├── jobs/revive.ts         # 手工复活（ignored → 重新入队 detected）
-│   ├── storage/memory.ts      # 内存 job store
-│   ├── storage/file.ts        # jobs.json 持久化（原子写、损坏隔离、复活）
-│   ├── storage/cursor.ts      # cursor.json 持久化与身份校验
-│   ├── storage/lock.ts        # jobs 文件锁与 state-dir 进程锁
-│   ├── execution/handler.ts   # handler 配置、解析与装配
-│   └── execution/receipt.ts   # 交付/回执判定：确认、未决广播与终态规则
-├── signal/
-│   ├── decode.ts              # HookReady 事件解码与 artifact 元数据
-│   ├── build.ts               # submitSignal 调用构建与配置归一化
-│   └── submit.ts              # 交易提交、签名账户与链客户端
-└── participant/               # 参与者侧（浏览器/Order App）导出，子路径不变
+│   ├── watcher.ts             # scan and execution orchestration
+│   ├── scan/logs.ts           # block chunking and log ordering
+│   ├── scan/reorg.ts          # finality buffer, checkpoints, common-ancestor rollback
+│   ├── jobs/                  # job model/store contract, retry, dead-letter, revive
+│   ├── storage/               # memory/file job store, cursor store, state-dir lock
+│   └── execution/             # handler config and receipt outcome rules
+├── signal/                    # HookReady decode, submitSignal build, submission
+├── participant/               # participant-wallet EIP-712 signing helpers
+├── chain-target.ts            # target-chain vocabulary (evm/solana reservation)
+├── evidence.ts                # canonical JSON and evidence hashes
+├── errors.ts                  # executor error classification
+├── signing.ts                 # private-key-from-env loading
+├── transport.ts               # bigint-safe JSON output
+├── validation.ts              # address/bytes32/number validation
+└── wallet.ts                  # local wallet env-file and faucet helpers
 ```
 
 ## CLI
 
-Create or inspect a local wallet env file:
+```bash
+uvp-executor --help
+```
+
+### Wallet
 
 ```bash
 uvp-executor wallet new --env-file .env.local
 uvp-executor wallet address --private-key-env UVP_ETH_DEPLOYER_PRIVATE_KEY
+uvp-executor faucet info --network base-sepolia --address 0x...
 ```
 
-Validate a state-machine executor config:
+Wallet commands read keys only from explicit env vars (or write a new key to a
+`0600` env file) and never print private key material.
+
+### Doctor
+
+Non-spending diagnostic for a config, RPC, state-machine deployment, and signer
+wallet. It prints a JSON report and exits non-zero when any check fails.
 
 ```bash
-uvp-executor config validate \
-  --config uvp-executor-kit/package/fixtures/state-machine-executor.config.json
+uvp-executor doctor --config uvp-executor-kit/package/fixtures/state-machine-executor.config.json
+
+uvp-executor doctor \
+  --rpc-url http://127.0.0.1:8545 \
+  --chain-id 31337 \
+  --state-machine 0x0000000000000000000000000000000000000001 \
+  --wallet-address 0x0000000000000000000000000000000000000002
+
+uvp-executor doctor \
+  --config ./executor.json \
+  --rpc-url http://127.0.0.1:8545 \
+  --chain-id 31337 \
+  --private-key-env UVP_EXECUTOR_PRIVATE_KEY
 ```
 
-Scan once for `HookReady` logs and dry-run callback transactions:
+Checks: `config` (handler config normalization plus warnings for missing
+wallet/chain/state-machine settings), `wallet` (signer address derived from the
+named env var, compared with `--wallet-address`), `rpc` (chain id and head),
+`chain-id` (probed chain id against `--chain-id`), and `state-machine` (contract
+code at the address). No transaction is signed or broadcast.
+
+### Watch
+
+Scan `HookReady` logs once or continuously and submit dry-run/real callback
+transactions:
 
 ```bash
 uvp-executor chain-once \
@@ -101,11 +113,7 @@ uvp-executor chain-once \
   --config uvp-executor-kit/package/fixtures/state-machine-executor.config.json \
   --wallet-address 0x0000000000000000000000000000000000000002 \
   --dry-run
-```
 
-Run the continuous watcher:
-
-```bash
 uvp-executor chain-watch \
   --rpc-url http://127.0.0.1:8545 \
   --chain-id 31337 \
@@ -135,72 +143,13 @@ State files are written atomically (temp file + rename). A crash-truncated or
 structurally invalid `jobs.json`/`cursor.json` is moved aside to
 `<file>.corrupt-<timestamp>` for inspection and recreated from scratch instead
 of aborting every later read. Writers to one jobs file serialize through a
-lock file beside it (`<jobs-file>.lock`, broken by age when a holder crashes);
-still, one watcher (or one CLI operation such as `jobs retry`) per jobs file
-is the intended operating mode — the lock only prevents silent lost updates,
-not the confusion of two operators racing the same job.
+lock file beside it (`<jobs-file>.lock`, broken by age when a holder crashes),
+and a state-dir process lock keeps two watchers off the same state directory.
 
-### Reorg and Outage Defenses
+### Signal
 
-The watcher applies the same defenses as the chain-services indexer, with
-configurable parameters (`--confirmations`, `--reorg-window`,
-`--max-get-logs-block-span` on `chain-once`/`chain-watch`):
-
-- **Finality buffer**: each round scans only up to `head - confirmations`
-  (default 1), so a short reorg cannot flip already-processed logs and their
-  confirmed submissions behind the cursor. `--confirmations 0` restores tip
-  scanning for throwaway local chains. The silent default is local-only:
-  declaring a non-local runtime with `--runtime-env <env>` on
-  `chain-once`/`chain-watch` (or `UVP_EXECUTOR_RUNTIME_ENV`) makes an explicit
-  positive `--confirmations` mandatory — the same caliber as chain-services
-  requiring an explicit `UVP_FINALITY_CONFIRMATIONS` outside local.
-- **Cursor block-hash continuity**: each successful round remembers the
-  canonical hash of its last scanned block (plus exponentially spaced anchors
-  inside the reorg window, default 64 blocks). The next round verifies the
-  hash before appending; on mismatch it walks the anchors to the common
-  ancestor and rescans from there. A reorg deeper than the window falls back
-  to rescanning from `--from-block`.
-- **Chunked log reads**: scan ranges larger than `--max-get-logs-block-span`
-  (default 9999) are split into multiple `eth_getLogs` calls, so deep-lag
-  catch-up rounds do not trip provider query limits.
-- **Poll backoff**: the watch loop never aborts on failed polls. Consecutive
-  failures are reported through the error channel and the poll cadence backs
-  off exponentially (capped at 8x the interval), returning to the configured
-  cadence on the first successful round.
-- **Resend backoff and later scans**: open jobs behind the cursor — `detected`
-  leftovers from a crash between detection and processing, `submitted`
-  jobs with an unconfirmed broadcast, and `matched` jobs stranded by a crash
-  between the run claim and the conclusive status write (the claim holder is
-  dead, so no run is in flight) — are revisited on later scans. A signal
-  whose prior broadcast was never confirmed is settled by evidence first: the
-  scan re-checks the receipt and adopts a mined success without rebroadcasting
-  (a mined revert ends the job as a visible failure instead of silently
-  counting as delivered). Only when the receipt cannot be obtained does a
-  rebroadcast happen, with exponential backoff (30s base, 10min cap) anchored
-  to the job's `lastSignalAttemptAt`, instead of once per poll round — and an
-  in-run retry never blind-rebroadcasts a transaction whose outcome is simply
-  unknown. Dedupe on chain is the contract's `SignalAlreadyExists` check on
-  the `(planId, orderId, sourceId, signalId)` tuple; the backoff only stops
-  the per-round gas burn. Manual `jobs retry` bypasses the throttle.
-- **Run-claim release retries**: a run-claim release whose store write fails
-  is reported through the error channel and retried on every poll round. A
-  live pid's claim blocks both scans and manual retries, so a silently stuck
-  release would park the job in this process forever — the release path gets
-  the same recovery guarantee the dead-holder pid check gives crashed
-  processes.
-- **Stuck-claim alerts and the pid-reuse override**: pid liveness is the only
-  claim-aliveness signal, and the OS can hand a crashed executor's pid to an
-  unrelated process — the dead claim then reads alive forever and blocks
-  later scans, `jobs retry`, and `jobs dead-letter` alike. A job whose claim
-  stays held by a live-looking foreign pid across consecutive poll rounds is
-  reported through the error channel (once per hold streak) with the pid to
-  verify; when the pid turns out not to be the executor,
-  `uvp-executor jobs dead-letter <jobId> --force --operator <id> --reason <why>`
-  is the explicit operator override that clears the claim and archives the
-  job for triage, with the operator and reason recorded in the job's manual
-  action audit trail.
-
-Build or submit one state-machine signal:
+Build one `submitSignal` transaction, or broadcast it without running the
+watcher:
 
 ```bash
 uvp-executor chain-signal \
@@ -209,334 +158,85 @@ uvp-executor chain-signal \
   --chain-id 31337 \
   --plan-id 0x2222222222222222222222222222222222222222222222222222222222222222 \
   --order-id 0x1111111111111111111111111111111111111111111111111111111111111111 \
-  --source logistics-provider-a \
-  --stage export.customs \
+  --source slot-a \
+  --stage exec.main \
   --signal-name cmp \
   --payload-hash 0x3333333333333333333333333333333333333333333333333333333333333333 \
   --wallet-address 0x0000000000000000000000000000000000000002 \
   --dry-run
 ```
 
-In the three chain examples above, `--dry-run` is an explicit test aid: the
-flag only builds and prints what would be sent without broadcasting. Without
-the flag the commands perform the real action, and real execution is always
-the default.
+`--dry-run` only builds and prints what would be sent; without it the command
+broadcasts by default. `--payload-ref` is rejected up front because
+`submitSignal` has no payload-reference field; only the 32-byte `payloadHash`
+goes on chain.
 
-Use Product API task mode for participant-facing signal containers:
+### Exit Codes
 
-```bash
-uvp-executor product tasks \
-  --chain-services-url http://127.0.0.1:8787 \
-  --wallet-address 0x0000000000000000000000000000000000000002 \
-  --auth-token-env UVP_PRODUCT_API_AUTH_TOKEN
+`chain-once`/`chain-watch` exit `1` when a scan result carries an error (except
+the benign `missing_handler`/`duplicate_signal` outcomes) or when a job ends
+`failed`/`dead_letter`. Schedulers should treat a non-zero exit as a failed
+round.
 
-uvp-executor product task get task_123 \
-  --chain-services-url http://127.0.0.1:8787 \
-  --wallet-address 0x0000000000000000000000000000000000000002 \
-  --auth-token-env UVP_PRODUCT_API_AUTH_TOKEN
+## Executor Config
 
-uvp-executor product evidence hash ./evidence/customs.json
-
-uvp-executor product prepare task_123 \
-  --chain-services-url http://127.0.0.1:8787 \
-  --wallet-address 0x0000000000000000000000000000000000000002 \
-  --evidence-id ev_123 \
-  --intent confirm_stage \
-  --prepared-file .uvp-prepared-submit.json \
-  --auth-token-env UVP_PRODUCT_API_AUTH_TOKEN
-
-UVP_PARTICIPANT_PRIVATE_KEY=0x... uvp-executor product submit task_123 \
-  --chain-services-url http://127.0.0.1:8787 \
-  --prepared-file .uvp-prepared-submit.json \
-  --private-key-env UVP_PARTICIPANT_PRIVATE_KEY \
-  --auth-token-env UVP_PRODUCT_API_AUTH_TOKEN
-
-uvp-executor product proof sub_123 \
-  --chain-services-url http://127.0.0.1:8787 \
-  --auth-token-env UVP_PRODUCT_API_AUTH_TOKEN
-
-uvp-executor product status sub_123 \
-  --chain-services-url http://127.0.0.1:8787 \
-  --auth-token-env UVP_PRODUCT_API_AUTH_TOKEN
+```json
+{
+  "supplierId": "role-a",
+  "walletAddress": "0x0000000000000000000000000000000000000002",
+  "chainId": 31337,
+  "stateMachineAddress": "0x0000000000000000000000000000000000000001",
+  "stateMachines": [
+    { "stateMachineAddress": "0x0000000000000000000000000000000000000001", "status": "active" }
+  ],
+  "dryRun": true,
+  "retry": { "maxAttempts": 3, "baseDelayMs": 0 },
+  "handlers": {
+    "exec.main#START": {
+      "signals": [
+        { "source": "slot-a", "stageIdentifier": "exec.main", "signalName": "cmp" }
+      ]
+    }
+  }
+}
 ```
 
-Product commands print JSON summaries for automation. Normal stdout omits
-low-level source/signal identifiers; pass `--verbose` when debugging typed data
-or the raw Product API payload. `product submit` loads wallet material only from
-the explicit `--private-key-env` name and verifies the prepared
-`typedData.message.submitter` matches the configured signer before signing.
-For authenticated Product APIs, pass `--auth-token-env <ENV_NAME>`; the CLI reads
-the bearer token only from that named env var and normal output reports only
-redacted auth status where applicable.
-Every task, prepare, submit, and proof result (and every `ProductApiError`)
-carries the server's `x-request-id` response header as `requestId` when present,
-so executor-side calls, errors, and logs can be correlated end to end with
-chain-services request logs.
-Funding and guarantee placeholder tasks use the same commands; the task summary
-keeps capability-plugin metadata, required inputs, settlement placeholder copy, proof
-rows, and funding impact language without treating UVP as a custodian,
-settlement rail, payment provider, exchange, or guarantor.
+Handlers route by `stageIdentifier#hookName`, then `stageIdentifier`, hook id,
+stage id, and finally `*`. A static signal may carry hashed `sourceId`/`signalId`
+pairs instead of text names, and may pin its own `planId`.
 
-Run a non-spending diagnostic before pulling out a private key:
+## Watcher Defenses
 
-```bash
-# Check API reachability only
-uvp-executor doctor --chain-services-url http://127.0.0.1:8787
+- **Finality buffer**: each round scans only up to `head - confirmations`
+  (default 1), so a short reorg cannot flip already-processed logs and their
+  confirmed submissions behind the cursor. `--confirmations 0` restores tip
+  scanning for throwaway local chains. Declaring a non-local runtime
+  (`--runtime-env <env>` or `UVP_EXECUTOR_RUNTIME_ENV`) makes an explicit
+  positive `--confirmations` mandatory.
+- **Cursor block-hash continuity**: each successful round remembers the
+  canonical hash of its last scanned block (plus exponentially spaced anchors
+  inside the reorg window, default 64 blocks). On mismatch the watcher walks
+  the anchors to the common ancestor and rescans from there; a reorg deeper
+  than the window falls back to rescanning from `--from-block`.
+- **Chunked log reads**: scan ranges larger than `--max-get-logs-block-span`
+  (default 9999) are split into multiple `eth_getLogs` calls.
+- **Poll backoff**: the watch loop never aborts on failed polls; consecutive
+  failures back off exponentially (capped at 8x) and return to the configured
+  cadence on the first successful round.
+- **Resend backoff**: open jobs behind the cursor are revisited on later scans.
+  A signal whose prior broadcast was never confirmed is settled by evidence
+  first; only an unobtainable receipt triggers a rebroadcast with exponential
+  backoff (30s base, 10min cap). On-chain dedupe stays the contract's
+  `SignalAlreadyExists` check on the `(planId, orderId, sourceId, signalId)`
+  tuple.
+- **Run claims**: a job run is claimed by pid, so a second executor cannot run
+  the same job concurrently. A claim whose pid is dead is taken over by later
+  scans or a manual retry; a pid that reads alive but is not the executor can be
+  cleared through the SDK dead-letter path.
 
-# Check API + proof endpoint shape
-uvp-executor doctor \
-  --chain-services-url http://127.0.0.1:8787 \
-  --submission-id sub_123
-
-# Check API + task visibility for my wallet
-uvp-executor doctor \
-  --chain-services-url http://127.0.0.1:8787 \
-  --wallet-address 0x0000000000000000000000000000000000000002
-
-# Per-task readiness: "Am I authorized? What do I need? What's blocking me?"
-uvp-executor doctor \
-  --chain-services-url http://127.0.0.1:8787 \
-  --wallet-address 0x0000000000000000000000000000000000000002 \
-  --task-id task_123 \
-  --auth-token-env UVP_PRODUCT_API_AUTH_TOKEN
-```
-
-The doctor command needs no private key. It reports reachability, task visibility,
-proof-endpoint shape, and per-task readiness (assignee match, canSubmit,
-blockedReason, deadline status, required evidence, and a concrete
-`nextAction` label: `prepare`, `wait`, `proof`, or `blocked`). Per-task
-readiness (`--task-id`) requires `--wallet-address`: without a wallet, assignee
-ownership cannot be checked, and the CLI refuses instead of printing an
-unverified "Ready to prepare". The server's `canSubmit` is the authoritative
-verdict — the locally computed deadline status (naive timestamps parsed as
-UTC) is display context and never overturns it. Normal output
-omits protocol fields and bearer token values; pass `--verbose` for raw API
-payloads.
-
-Enterprise scripts can use the same SDK helpers without shelling out:
-
-```ts
-import {
-  listSignalContainers,
-  prepareSignalContainer,
-  signPreparedSignalContainer,
-  submitPreparedSignalContainer,
-} from '@uvp-eth/executor-kit';
-
-const chainServicesUrl = 'http://127.0.0.1:8787';
-const walletAddress = '0x0000000000000000000000000000000000000002';
-const [task] = await listSignalContainers({ chainServicesUrl, walletAddress });
-const prepared = await prepareSignalContainer({
-  chainServicesUrl,
-  taskId: task.taskId,
-  walletAddress,
-  evidenceIds: ['ev_123'],
-  intent: 'confirm_stage',
-});
-const signed = await signPreparedSignalContainer({
-  prepared,
-  privateKeyEnv: 'UVP_PARTICIPANT_PRIVATE_KEY',
-  walletAddress,
-});
-await submitPreparedSignalContainer({
-  chainServicesUrl,
-  taskId: prepared.taskId,
-  prepareId: prepared.prepareId,
-  signature: signed.signature,
-  walletAddress: signed.walletAddress,
-});
-```
-
-Query and operate local watcher jobs:
-
-```bash
-uvp-executor jobs list --jobs-file .uvp-executor-jobs.json
-uvp-executor jobs get <jobId> --jobs-file .uvp-executor-jobs.json
-uvp-executor jobs retry <jobId> \
-  --jobs-file .uvp-executor-jobs.json \
-  --rpc-url http://127.0.0.1:8545 \
-  --chain-id 31337 \
-  --config uvp-executor-kit/package/fixtures/state-machine-executor.config.json \
-  --operator ops@example.com \
-  --dry-run
-uvp-executor jobs dead-letter <jobId> \
-  --jobs-file .uvp-executor-jobs.json \
-  --operator ops@example.com \
-  --reason "manual review required"
-# Override a run claim that reads alive because the OS reused the crashed
-# holder's pid (verify the pid first):
-uvp-executor jobs dead-letter <jobId> \
-  --jobs-file .uvp-executor-jobs.json \
-  --operator ops@example.com \
-  --reason "holder pid verified reused; executor crashed" \
-  --force
-# Revive an ignored job back into the scan queue (the next scan re-runs it):
-uvp-executor jobs revive <jobId> \
-  --jobs-file .uvp-executor-jobs.json \
-  --operator ops@example.com \
-  --reason "handler now configured"
-```
-
-Watcher job semantics:
-
-- Callback transactions wait for the receipt by default (`waitForReceipt`
-  defaults to `true`). A job whose transaction was broadcast but not yet
-  receipted stays in the non-terminal `submitted` state, so later scans or
-  manual retries can observe the real on-chain outcome instead of trusting
-  the broadcast — a broadcast without an observed receipt is never recorded
-  as delivered (not even with `waitForReceipt: false`; the later scan
-  re-checks the receipt and adopts or refutes it). The receipt recheck, the
-  resend backoff, and the terminal-state computation cover BOTH submission
-  channels: signals returned by the handler and signals submitted through the
-  handler-context `submitSignal` channel. That context channel answers an
-  already-delivered signal from its recorded evidence instead of
-  rebroadcasting, and resolves with `{ deferredBroadcast: true }` when the
-  signal's prior broadcast has an unknown outcome or sits inside the resend
-  backoff window — handlers must treat that marker as "pending, do not retry
-  now", never as success or failure. When the receipt step itself fails after
-  a successful broadcast, the error carries the broadcast `txHash` and the
-  job's `submissions` record keeps it, so "already broadcast" transactions
-  are never dropped from the audit trail — and a failure recorded alongside a
-  broadcast whose outcome is unknown leaves the job open (`submitted`) for the
-  later-scan receipt recheck instead of dead-lettering it; only a receipt
-  actually observed as reverted terminalizes the failure.
-- A re-run — manual `jobs retry` or a later scan of an open job — reconciles
-  the handler's returned signal set against recorded delivery evidence BY
-  CONTENT IDENTITY (the deterministic `submitSignal` calldata of each signal),
-  never by position in the returned array: delivered signals are answered from
-  their recorded evidence and never rebroadcast, and a signal that survives
-  into a retry can never inherit a delivered sibling's evidence (nor be
-  credited with it). Handlers should return their full signal set on every
-  run; an incremental subset that drops already-delivered signals is equally
-  safe.
-- A real-mode handler run that completes successfully with zero signals ends
-  terminal `completed`: a void execution is finished, not pending — its
-  handler's external side effects ran exactly once, later scans and restarts
-  never re-claim it, and `jobs retry` is the channel to re-open it when the
-  operator declares the void outcome wrong. Dry-run passes (void or not)
-  converge non-terminal in `matched` until a real pass or a manual retry runs.
-- Failures are classified from explicit machine-readable error codes first,
-  then from well-known real-world error texts and contract revert data
-  (for example `SignalAlreadyExists()`, `AccessControlUnauthorizedAccount`,
-  `insufficient funds`, nonce conflicts, timeouts, `ECONNRESET`, and HTTP
-  429). Transient (retryable) failures retry inside the run and land in
-  `failed` when exhausted, which `jobs retry` still accepts; deterministic
-  non-retryable failures and unrecognized errors dead-letter for human
-  triage via `jobs dead-letter`. A duplicate-signal fact
-  (`SignalAlreadyExists`) is not a failure: the contract's check on the
-  `(planId, orderId, sourceId, signalId)` tuple is itself the delivery
-  verdict, so a duplicate answered by the chain during `submitSignal` is
-  recorded as a delivered dedupe fact and — exactly like an observed success
-  receipt — completes the job as terminal `confirmed` once every signal is
-  delivered. (A handler that itself THROWS the duplicate classification still
-  ends the job as terminal `ignored`: the handler is asserting a failure, not
-  relaying a chain answer.) `jobs retry` also accepts `detected` jobs (crash
-  recovery: detection was persisted but the job never got a run), `completed`
-  jobs (the operator declares the void-handler outcome wrong and re-runs it),
-  and `confirmed` jobs: the retry resubmits every signal, which is the manual
-  recovery channel when a reorg flipped a confirmation off the canonical
-  chain (the contract's `SignalAlreadyExists` dedupe on
-  `(planId, orderId, sourceId, signalId)` absorbs the duplicate when the
-  signal actually survived).
-- `ignored` has a manual revival channel: `jobs revive <jobId> --operator
-  <id> --reason <why>` re-enqueues an ignored job as `detected` (the queue's
-  pending state) with a fresh attempt budget, and the next scan — or an
-  immediate `jobs retry` — re-runs it. This is the recovery path when the
-  ignore verdict turns out wrong (a `missing_handler` whose handler is now
-  configured, a handler-thrown duplicate verdict the operator disputes, or an
-  isolated undecodable log). Revival is manual only: scans never re-open an
-  ignored job by themselves. `dead_letter` stays a one-way archive.
-- `dead_letter` is a one-way archive with no revival channel: `jobs retry`
-  refuses it, and a later scan that re-encounters the same HookReady log
-  answers from the existing terminal record instead of re-opening it
-  (deleting just the jobs-file entry is not enough either — the cursor is
-  bound to the watcher identity, not the jobs file, and will not rescan
-  already-cleared blocks). If the dead-lettered work turns out to be required
-  after all, the operator paths are: deliver the signals directly
-  (`chain-signal`, or product prepare/submit), or re-detect the log by
-  starting a watcher on a fresh state directory so the scan replays from the
-  configured start block. Hand-editing jobs.json/cursor.json is not a
-  supported channel.
-- HookReady-topic logs that fail to decode (e.g. from a mixed-version
-  deployment) never crash the watcher: the scan skips them, records an
-  `ignored` job with the raw log preserved, counts them in poll results and
-  `describe()`, and reports them through `onError`. The cursor advances so
-  the same log is not rescanned forever.
-- Process exit codes are honest: when a scan result carries an error, or any
-  job ends in `failed`/`dead_letter`, the process exits with status 1 even
-  though result objects were produced without throwing.
-- Runtime-host callback delivery has built-in retries: up to 3 attempts with
-  exponential backoff from the configured base delay. Multi-signal callback
-  runs record per-signal delivery results, so partial success stays visible
-  instead of being collapsed into a single outcome.
-- When a callback HMAC secret is configured, dispatched callbacks are signed
-  over `timestamp.nonce.body` and carry `x-uvp-webhook-signature`,
-  `x-uvp-webhook-timestamp`, and `x-uvp-webhook-nonce` headers. Receivers
-  verify with `verifyWebhookSignature(body, signature, secret, { timestamp,
-  nonce })`: it fails closed on a missing timestamp/nonce, enforces an
-  acceptance window (5 minutes by default), and `createWebhookReplayGuard`
-  burns each nonce once inside the window — a captured `(body, signature)`
-  pair cannot be replayed past the window.
-- The `serve` HTTP server's callback egress is EXPLICIT ALLOWLIST ONLY: no
-  host — loopback included — is allowed by default, and starting the server
-  with an empty allowlist fails loudly. Allowlist callback hosts (including
-  `127.0.0.1` for a co-located local harness receiver) via the
-  `UVP_EXECUTOR_CALLBACK_HOST_ALLOWLIST` env var (comma-separated) or the
-  `callbackHostAllowlist` option. An implicitly loopback-open executor was a
-  probe proxy for the host's local services, with endpoint responses readable
-  back through the jobs API (delivery errors echo at most a bounded prefix of
-  the response body). A production callback dispatcher (real network policy,
-  credential handling, audit) is a separately designed and deployed
-  component — this allowlist is the kit's own fail-closed floor, not that
-  policy.
-
-## SDK Surface
-
-- `createStateMachineWatcher`: watches `HookReady` logs, resolves handlers, and
-  submits callback signals.
-- `submitStateMachineSignal`: builds and optionally broadcasts
-  `UVPStateMachine.submitSignal` transactions.
-- `buildSubmitStateMachineSignalCall`: returns deterministic dry-run call data.
-- `decodeHookReadyLog` and `hookReadyEventId`: normalize state-machine logs.
-- `InMemoryStateMachineJobStore` and `FileStateMachineJobStore`: record watcher
-  job state for retries, dead-lettering, and Product/Ops projection.
-- `FileStateMachineCursorStore`: persists the watcher scan cursor (pass it as
-  `cursorStore` to `createStateMachineWatcher`) so a restarted watcher resumes
-  instead of rescanning from `fromBlock`; without it the cursor stays in memory.
-- `stateMachineHandlerConfigToExecutorConfigDTO`,
-  `stateMachineJobToExecutorJobDTO`, and `summarizeSupplierOps`: product-facing
-  DTO helpers.
-- `hashEvidenceFile`: hashes off-chain evidence without storing plaintext.
-- `listSignalContainers`, `getSignalContainer`, `prepareSignalContainer`,
-  `signPreparedSignalContainer`, `submitPreparedSignalContainer`, and
-  `getSignalContainerProof`: thin Product API task helpers.
-- `loadPrivateKeyFromEnv`: loads a wallet key from an explicit env var without
-  logging it.
-
-## Product API Dock Boundary
-
-Participant add-on manifests are Store metadata. The kit does not expose an
-`AddOnClient` or any business-specific add-on SDK; app and integration surfaces
-should dock into the same low-level Product API boundaries:
-
-- Signal submit: `POST /product/tasks/:taskId/prepare-submit`, wallet signs the
-  returned EIP-712 typed data, then `POST /product/tasks/:taskId/submit`.
-- Executor patch: `POST /product/tasks/:taskId/prepare-stage-executor-patch`,
-  wallet signs the returned patch typed data, then
-  `POST /product/tasks/:taskId/submit-stage-executor-patch`. The relayer
-  broadcast resolves to `applyStageExecutorPatchFor`, which since the
-  delegation-retirement batch carries trailing `candidateProof` (executor
-  candidate-set Merkle proof) and `executorAuthorizations` (the explicit
-  order-level authorization set whose hash the selector signature commits);
-  only `assign` and `handoff` modes remain — non-cooperative executor changes
-  move to the governance fork lane, which is not part of this kit yet.
-- Resource patch: `POST /product/tasks/:taskId/prepare-stage-resource-patch`,
-  wallet signs the returned patch typed data, then
-  `POST /product/tasks/:taskId/submit-stage-resource-patch`.
-
-The manifest action is only a declarative mapping from page inputs to one of
-these protocol API calls. Permission still comes from Product API projection,
-order-level authorization, participant wallet signatures, and contract checks.
+The SDK exposes `retryStateMachineJob`, `deadLetterStateMachineJob`, and
+`reviveStateMachineJob` for operator tooling; the CLI intentionally has no job
+command group.
 
 ## ABI Boundary
 
@@ -547,22 +247,10 @@ ABI recorded in
 - `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId, bytes32 hookName)`;
 - `submitSignal(bytes32 planId, bytes32 orderId, bytes32 sourceId, bytes32 signalId, bytes32 payloadHash, bytes32 idempotencyKey, (bytes32 sourceId, bytes32 signalId, bytes32 stageId, bytes32[] capabilityProof) attribution)`.
 
-The trailing proof struct is the capabilities-Merkle surface: the plan commits
-one `capabilitiesRoot` over its frozen selector-binding and signal-capability
-tables, and the submitter re-derives membership proofs from a table mirror.
-`attribution` is the fact-owner self-attestation (relation=0 capability leaf);
-the all-zero struct means "no claim" (out-of-vocabulary fact caliber, valid
-against vocabulary-less plans). The proof never enters the signing envelope —
+The kit consumes that surface only through `@uvp-eth/protocol-bindings`'s
+exported ABI and typed-data field tables — never hand-copied here. The
 `PRODUCT_SUBMIT` typed data keeps its frozen shape with the domain version
-pinned by `@uvp-eth/protocol-bindings`
-Proofs never enter the signing envelope — `PRODUCT_SUBMIT` typed data keeps its
-frozen shape with the domain version pinned by `@uvp-eth/protocol-bindings`
-(`UVPStateMachine` version `0.15`). The stage-patch signing envelope is
-`UVPStagePatchModule` version `0.2`: the `StageExecutorPatch` digest commits
-`authorizationsHash` (the explicit order-level authorization set written for
-the incoming executor). The kit consumes that surface only through
-protocol-bindings' exported ABI and typed-data field tables — never
-hand-copied here.
+pinned by `@uvp-eth/protocol-bindings` (`UVPStateMachine` version `0.15`).
 
 ### Capability Proof Material (artifact index)
 
@@ -581,61 +269,46 @@ The watcher's `artifact` index may embed the two plan-frozen table mirrors:
 }
 ```
 
-When the tables are present, both submission channels (handler-returned
-signals and the handler-context `submitSignal`) derive proofs on the fly via
+When the tables are present, submissions derive proofs on the fly via
 `@uvp-eth/protocol-bindings`'s `factAttribution`: a signal whose
-(sourceId, signalId) hits a relation=0 capability submits with the owner
+`(sourceId, signalId)` hits a relation=0 capability submits with the owner
 attribution; an out-of-vocabulary signal and a table-less artifact both submit
 the all-zero struct. An explicit `attribution` field on a signal is never
-overwritten by derivation. A non-zero `stageId` whose attribution keys
-disagree with the signal keys is refused at build time (the contract's
-`InvalidFactAttribution` is a guaranteed revert). The same defaulting applies
-to SDK builders: `buildSubmitStateMachineSignalCall` accepts an optional
-`attribution` input and encodes the zero struct when it is omitted.
-
-`planId` is part of the event and submit boundary. It must be retained with the
-watcher job and never inferred from a bare `orderId`; the same state machine can
-contain the same order id under different plans. The watcher persists the
-planId decoded from each `HookReady` event on the job and uses it as the
-per-signal default; a handler-config signal may pin an explicit `planId`
-(`handlers.<key>.signals[].planId`) when it must diverge — one signal's pin
-never becomes the fallback for its siblings.
-
-On-chain dedupe is the contract's `SignalAlreadyExists` check on the
-`(planId, orderId, sourceId, signalId)` tuple, not the `idempotencyKey`
-argument. The kit's default key therefore hashes exactly that tuple, so the
-same logical signal keeps the same key even when its `HookReady` event is
-re-emitted in a new transaction after a deep reorg; a producer may still
-supply an explicit `idempotencyKey` for its own correlation needs. Off-chain
-metadata never participates in the verdict: the emitting `HookReady` event
-anchor (or any other off-chain correlation context) is not an input to the
-default key, and the kit deliberately exposes no `readyEventId` input surface
-on the CLI, the handler config, or the SDK signal type.
-
-There is no payload-reference input in this ABI, and the contract is frozen:
-`chain-signal --payload-ref` is rejected up front instead of silently dropping
-the reference. Only the 32-byte `payloadHash` goes on chain; record any
-off-chain payload reference in your own job/evidence store (the runtime
-callback envelope's `payloadRef` field is the off-chain channel for it).
-
-The contract also exposes `submitSignalFor(...)` and
-EIP-712 typed-data builders for gas-relay adapters. This package does not
-build a separate signed payload model; relayed business signatures must
-stay aligned with the contract's current EIP-712 digest.
+overwritten by derivation. A non-zero `stageId` whose attribution keys disagree
+with the signal keys is refused at build time (the contract's
+`InvalidFactAttribution` is a guaranteed revert).
 
 ### Zero `payloadHash` Semantics
 
 In `submitSignal(bytes32 ..., bytes32 payloadHash, bytes32 ...)`, the value
-`bytes32(0)` (`0x0000000000000000000000000000000000000000000000000000000000000000`)
-is the **protocol-defined encoding of "no payload"**. It is a legitimate
-constant of the `UVPStateMachine` protocol — not a runtime fallback or default.
+`bytes32(0)` is the protocol-defined encoding of "no payload". When a
+handler/config signal definition omits `payloadHash`, the kit encodes exactly
+`bytes32(0)`: the producer's explicit declaration that the signal carries no
+off-chain payload. Any non-empty payload must be declared with its full 32-byte
+hash.
 
-Consequently, when a handler/config signal definition omits `payloadHash`, the
-kit encodes exactly `bytes32(0)`: this is the producer's explicit declaration
-that the signal carries no off-chain payload, and it is indistinguishable on
-chain from a producer passing the zero hash by hand. Any non-empty payload must
-be declared with its full 32-byte hash.
+## SDK Surface
 
+- `createStateMachineWatcher`: watches `HookReady` logs, resolves handlers, and
+  submits callback signals.
+- `submitStateMachineSignal`: builds and optionally broadcasts
+  `UVPStateMachine.submitSignal` transactions.
+- `buildSubmitStateMachineSignalCall`: returns deterministic dry-run call data.
+- `decodeHookReadyLog` and `hookReadyEventId`: normalize state-machine logs.
+- `InMemoryStateMachineJobStore` and `FileStateMachineJobStore`: record watcher
+  job state for retries and dead-lettering.
+- `FileStateMachineCursorStore`: persists the watcher scan cursor (pass it as
+  `cursorStore` to `createStateMachineWatcher`) so a restarted watcher resumes
+  instead of rescanning from `fromBlock`.
+- `retryStateMachineJob`, `deadLetterStateMachineJob`, `reviveStateMachineJob`:
+  operator recovery over the watcher job store.
+- `runExecutorDoctor`: the non-spending config/RPC/contract/wallet diagnostic
+  used by the CLI `doctor` command.
+- `hashEvidenceFile`: hashes off-chain evidence without storing plaintext.
+- `loadPrivateKeyFromEnv`: loads a wallet key from an explicit env var without
+  logging it.
+- `@uvp-eth/executor-kit/participant`: EIP-1193 participant-wallet typed-data
+  signing helpers; re-exports the protocol-bindings typed-data surface.
 
 ## Boundaries
 
@@ -645,5 +318,5 @@ be declared with its full 32-byte hash.
   vars and never print secrets.
 - The kit does not run escrow, release, refund, exchange, or payment-provider
   flows.
-- Runtime-host callback envelopes are a local reference harness. Chain events
-  remain the source of truth for the EVM track.
+- The kit does not implement Product/order transport; use
+  `@uvp-eth/order-kernel/product/kernel` for that boundary.

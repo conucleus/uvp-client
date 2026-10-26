@@ -1207,7 +1207,7 @@ export class StateMachineWatcher {
             + ' pid liveness cannot tell a live executor from a crashed one whose pid the OS reused,'
             + ' and such a claim blocks later scans, manual retries, and dead-lettering;'
             + ' verify the pid on this host and, when it is not the executor, unlock the job with'
-            + ` uvp-executor jobs dead-letter ${job.id} --force --operator <id> --reason <why>`,
+            + ` deadLetterStateMachineJob(store, '${job.id}', { operator, reason, force: true })`,
         ));
       }
     }

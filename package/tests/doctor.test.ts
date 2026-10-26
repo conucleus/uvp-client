@@ -1,1033 +1,162 @@
 import { createServer } from 'node:http';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { main } from '../src/cli.js';
-import { runProductDoctor } from '../src/doctor.js';
-import {
-  type ProductApiFetch,
-  type ProductApiFetchResponse,
-} from '../src/product.js';
 import { privateKeyToAccount } from 'viem/accounts';
+import { main } from '../src/cli.js';
+import { runExecutorDoctor } from '../src/doctor.js';
 
-const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111' as const;
+const privateKey = `0x${'11'.repeat(32)}` as const;
 const account = privateKeyToAccount(privateKey);
-const submitter = account.address;
+const KEY_ENV = 'UVP_DOCTOR_TEST_PRIVATE_KEY';
+const STATE_MACHINE = '0x0000000000000000000000000000000000000001' as const;
 
-function bytes32(suffix: string): `0x${string}` {
-  return `0x${suffix.padStart(64, '0')}`;
-}
-
-function jsonResponse(body: unknown, status = 200): ProductApiFetchResponse {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    text: async () => JSON.stringify(body),
-  };
-}
-
-describe('Product API doctor', () => {
-  it('runs reachability check and reports ok when the Product API responds', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({ tasks: [] });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      fetch,
-    });
-
-    expect(report.chainServicesUrl).toBe('http://chain.local/api');
-    expect(report.checks).toHaveLength(1);
-    expect(report.checks[0]).toMatchObject({ ok: true, label: 'reachability' });
-    expect(report.ok).toBe(true);
-    expect(report.timestamp).toBeTypeOf('string');
-    const serialized = JSON.stringify(report);
-    expect(serialized).not.toContain('0x');
-  });
-
-  it('reports task visibility when a wallet address is provided', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        tasks: [
-          {
-            taskId: 'task_1',
-            orderId: 'order_1',
-            title: 'Confirm stage-1',
-            status: 'open',
-          },
-          {
-            taskId: 'task_2',
-            orderId: 'order_2',
-            title: 'Verify doc-1',
-            status: 'open',
-          },
-        ],
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      fetch,
-    });
-
-    expect(report.checks).toHaveLength(2);
-    const taskCheck = report.checks.find((c) => c.label === 'task-visibility');
-    expect(taskCheck).toMatchObject({ ok: true, label: 'task-visibility' });
-    expect(taskCheck?.detail).toContain('2 task(s)');
-    expect(report.walletAddress).toBe(submitter);
-    expect(report.tasks).toHaveLength(2);
-    expect(report.tasks?.[0]).toMatchObject({ taskId: 'task_1', title: 'Confirm stage-1' });
-    expect(report.ok).toBe(true);
-    expect(report.rawTasks).toBeUndefined();
-    const serialized = JSON.stringify(report);
-    expect(serialized).not.toContain('sourceId');
-    expect(serialized).not.toContain('signalId');
-  });
-
-  it('reports zero tasks gracefully', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({ tasks: [] });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      fetch,
-    });
-
-    const taskCheck = report.checks.find((c) => c.label === 'task-visibility');
-    expect(taskCheck?.ok).toBe(true);
-    expect(taskCheck?.detail).toContain('No tasks visible');
-    expect(report.tasks).toHaveLength(0);
-    expect(report.ok).toBe(true);
-  });
-
-  it('reports proof endpoint shape for a given submission id', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      if (url.includes('/product/tasks')) {
-        return jsonResponse({ tasks: [] });
-      }
-      return jsonResponse({
-        submissionId: 'sub_1',
-        prepareId: 'prep_1',
-        taskId: 'task_1',
-        orderId: 'order_1',
-        status: 'confirmed',
-        txHash: bytes32('44'),
-        proofRows: [{ label: 'Transaction', value: bytes32('44') }],
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      submissionId: 'sub_1',
-      fetch,
-    });
-
-    const proofCheck = report.checks.find((c) => c.label === 'proof-endpoint');
-    expect(proofCheck).toMatchObject({ ok: true, label: 'proof-endpoint' });
-    expect(proofCheck?.detail).toContain('confirmed');
-    expect(report.proof).toMatchObject({ submissionId: 'sub_1', status: 'confirmed' });
-    expect(report.ok).toBe(true);
-    expect(report.rawProof).toBeUndefined();
-  });
-
-  it('includes raw fields in verbose mode', async () => {
-    const sourceIdHex = bytes32('02');
-    const signalIdHex = bytes32('03');
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      if (url.includes('/product/tasks')) {
-        return jsonResponse({
-          tasks: [
-            {
-              taskId: 'task_1',
-              orderId: 'order_1',
-              title: 'Confirm stage-1',
-              status: 'open',
-              sourceId: sourceIdHex,
-              signalId: signalIdHex,
-            },
-          ],
-        });
-      }
-      return jsonResponse({
-        submissionId: 'sub_1',
-        prepareId: 'prep_1',
-        taskId: 'task_1',
-        orderId: 'order_1',
-        status: 'confirmed',
-        sourceId: sourceIdHex,
-        signalId: signalIdHex,
-        txHash: bytes32('44'),
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      submissionId: 'sub_1',
-      verbose: true,
-      fetch,
-    });
-
-    expect(report.rawTasks).toBeDefined();
-    expect(report.rawTasks?.[0]?.sourceId).toBe(sourceIdHex);
-    expect(report.rawProof).toBeDefined();
-    expect(report.rawProof?.sourceId).toBe(sourceIdHex);
-  });
-
-  it('reports failure when the Product API is unreachable', async () => {
-    const fetch: ProductApiFetch = async () => {
-      throw new Error('fetch failed');
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      fetch,
-    });
-
-    expect(report.checks).toHaveLength(1);
-    expect(report.checks[0]).toMatchObject({ ok: false, label: 'reachability' });
-    expect(report.checks[0]?.detail).toContain('fetch failed');
-    expect(report.ok).toBe(false);
-  });
-
-  it('aborts a hung reachability probe at the deadline instead of waiting forever', async () => {
-    const fetch: ProductApiFetch = (_url, init) => new Promise((_resolve, reject) => {
-      init?.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted due to timeout')));
-    });
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      fetch,
-      requestTimeoutMs: 25,
-    });
-
-    expect(report.checks).toHaveLength(1);
-    expect(report.checks[0]).toMatchObject({ ok: false, label: 'reachability' });
-    expect(report.checks[0]?.detail).toContain('aborted due to timeout');
-    expect(report.ok).toBe(false);
-  });
-
-  it('never follows a Product API redirect and never replays the bearer to the redirect target', async () => {
-    const seen: { path: string; authorization?: string }[] = [];
-    const redirector = createServer((request, response) => {
-      seen.push({
-        path: request.url ?? '',
-        ...(typeof request.headers.authorization === 'string'
-          ? { authorization: request.headers.authorization }
-          : {}),
-      });
-      response.statusCode = 302;
-      response.setHeader('location', '/leak');
-      response.end();
-    });
-    await new Promise<void>((resolve) => redirector.listen(0, '127.0.0.1', resolve));
-    const redirectorAddress = redirector.address();
-    if (!redirectorAddress || typeof redirectorAddress === 'string') {
-      throw new Error('redirect test server did not bind to a TCP address');
-    }
-
+describe('executor doctor', () => {
+  it('reports config, wallet, RPC, chain-id, and state-machine checks', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-doctor-'));
+    const configPath = join(dir, 'executor.json');
+    const previousKey = process.env[KEY_ENV];
+    process.env[KEY_ENV] = privateKey;
+    const stub = await startRpcStub({ chainId: '0x7a69', code: '0x6001' });
     try {
-      const report = await runProductDoctor({
-        chainServicesUrl: `http://127.0.0.1:${redirectorAddress.port}`,
-        headers: { Authorization: 'Bearer secret-doctor-token' },
+      await writeFile(configPath, JSON.stringify({
+        supplierId: 'role-a',
+        walletAddress: account.address,
+        chainId: 31_337,
+        stateMachines: [{ stateMachineAddress: STATE_MACHINE }],
+        handlers: {
+          'stage-a#START': {
+            signals: [{ source: 'role-a', stageIdentifier: 'stage-a', signalName: 'cmp' }],
+          },
+        },
+      }));
+
+      const report = await runExecutorDoctor({
+        configPath,
+        rpcUrl: stub.url,
+        chainId: 31_337,
+        stateMachineAddress: STATE_MACHINE,
+        privateKeyEnv: KEY_ENV,
       });
 
-      const reachability = report.checks.find((c) => c.label === 'reachability');
-      expect(reachability?.ok).toBe(false);
-      expect(reachability?.detail).toContain('HTTP 302 redirect');
-      expect(reachability?.detail).toContain('redirects are refused');
+      expect(report.ok).toBe(true);
+      expect(report.checks.map((check) => check.label))
+        .toEqual(['config', 'wallet', 'rpc', 'chain-id', 'state-machine']);
+      expect(report.config).toMatchObject({
+        handlerCount: 1,
+        signalCount: 1,
+        stateMachineAddresses: [STATE_MACHINE],
+        chainId: 31_337,
+        dryRun: false,
+      });
+      expect(report.rpc).toEqual({ chainId: 31_337, blockNumber: '16' });
+      expect(report.walletAddress).toBe(account.address);
+      expect(report.warnings).toEqual([]);
+    } finally {
+      await stub.close();
+      if (previousKey === undefined) {
+        delete process.env[KEY_ENV];
+      } else {
+        process.env[KEY_ENV] = previousKey;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails the chain-id and state-machine checks with both sides named', async () => {
+    const stub = await startRpcStub({ chainId: '0x2105', code: '0x' });
+    try {
+      const report = await runExecutorDoctor({
+        rpcUrl: stub.url,
+        chainId: 31_337,
+        stateMachineAddress: STATE_MACHINE,
+      });
+
       expect(report.ok).toBe(false);
-
-      expect(seen.filter((entry) => entry.path.startsWith('/leak'))).toEqual([]);
-      expect(seen.length).toBeGreaterThan(0);
-      expect(seen.every((entry) => entry.authorization === 'Bearer secret-doctor-token')).toBe(true);
+      expect(report.rpc).toEqual({ chainId: 8453, blockNumber: '16' });
+      const chainIdCheck = report.checks.find((check) => check.label === 'chain-id');
+      expect(chainIdCheck).toMatchObject({ ok: false });
+      expect(chainIdCheck?.detail).toContain('8453');
+      expect(chainIdCheck?.detail).toContain('31337');
+      const stateMachineCheck = report.checks.find((check) => check.label === 'state-machine');
+      expect(stateMachineCheck).toMatchObject({ ok: false });
+      expect(stateMachineCheck?.detail).toContain(STATE_MACHINE);
     } finally {
-      await new Promise<void>((resolve) => redirector.close(() => resolve()));
+      await stub.close();
     }
   });
 
-  it('reports task-visibility failure independently of reachability', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return { ok: false, status: 401, text: async () => JSON.stringify({ error: 'unauthorized', message: 'Not authorized' }) };
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      fetch,
-    });
-
-    const reachCheck = report.checks.find((c) => c.label === 'reachability');
-    const taskCheck = report.checks.find((c) => c.label === 'task-visibility');
-    expect(reachCheck?.ok).toBe(true);
-    expect(taskCheck?.ok).toBe(false);
-    expect(report.ok).toBe(false);
-  });
-
-  it('classifies network errors during task visibility check', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      throw new Error('ETIMEDOUT: connection timed out');
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      fetch,
-    });
-
-    const taskCheck = report.checks.find((c) => c.label === 'task-visibility');
-    expect(taskCheck?.ok).toBe(false);
-    expect(taskCheck?.detail).toBeTypeOf('string');
-  });
-
-  it('reports per-task readiness for an actionable task', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_actionable',
-          orderId: 'order_1',
-          title: 'Confirm stage-1',
-          status: 'open',
-          assigneeWallet: submitter,
-          stageName: 'Stage A advance',
-          deadline: '2099-01-01T00:00:00.000Z',
-          canSubmit: true,
-          primaryActionLabel: 'Confirm stage',
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_actionable',
-      fetch,
-    });
-
-    const taskCheck = report.checks.find((c) => c.label === 'task-readiness');
-    expect(taskCheck?.ok).toBe(true);
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_actionable',
-      orderId: 'order_1',
-      status: 'open',
-      canSubmit: true,
-      assigneeMatch: true,
-      nextAction: 'prepare',
-    });
-    expect(report.taskReadiness?.nextActionLabel).toContain('Ready to prepare');
-    expect(report.tasks).toBeUndefined();
-    expect(report.ok).toBe(true);
-    expect(report.rawTaskReadiness).toBeUndefined();
-    const serialized = JSON.stringify(report);
-    expect(serialized).not.toContain('sourceId');
-    expect(serialized).not.toContain('signalId');
-  });
-
-  it('reports per-task readiness for a blocked task', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_blocked',
-          orderId: 'order_2',
-          title: 'Verify doc-1',
-          status: 'open',
-          assigneeWallet: submitter,
-          deadline: '2099-01-01T00:00:00.000Z',
-          canSubmit: false,
-          blockedReason: 'Required evidence not yet uploaded',
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_blocked',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_blocked',
-      canSubmit: false,
-      blockedReason: 'Required evidence not yet uploaded',
-      assigneeMatch: true,
-      nextAction: 'wait',
-    });
-    expect(report.taskReadiness?.nextActionLabel).toContain('Required evidence not yet uploaded');
-    expect(report.ok).toBe(false);
-    expect(report.taskReadiness?.ok).toBe(false);
-    expect(report.taskReadiness?.check.ok).toBe(false);
-  });
-
-  it('reports next action as proof for a submitted task', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_submitted',
-          orderId: 'order_3b',
-          title: 'Completed check-1',
-          status: 'submitted',
-          assigneeWallet: submitter,
-          canSubmit: false,
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_submitted',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_submitted',
-      status: 'submitted',
-      nextAction: 'proof',
-    });
-    expect(report.taskReadiness?.ok).toBe(true);
-    expect(report.taskReadiness?.check.ok).toBe(true);
-    expect(report.taskReadiness?.nextActionLabel).toContain('Run product proof');
-    expect(report.ok).toBe(true);
-  });
-
-  it('treats a status outside the TaskStatus vocabulary as not complete', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_done',
-          orderId: 'order_3',
-          title: 'Completed check-1',
-          status: 'done',
-          assigneeWallet: submitter,
-          canSubmit: false,
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_done',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_done',
-      status: 'done',
-      nextAction: 'wait',
-    });
-    expect(report.taskReadiness?.nextActionLabel).not.toContain('Run product proof');
-    expect(report.taskReadiness?.ok).toBe(false);
-  });
-
-  it('reports per-task readiness without wallet address as explicitly unverified', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_nowallet',
-          orderId: 'order_4',
-          title: 'Any task',
-          status: 'open',
-          assigneeWallet: submitter,
-          canSubmit: true,
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      taskId: 'task_nowallet',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_nowallet',
-      status: 'open',
-      canSubmit: true,
-      assigneeMatch: false,
-      assigneeUnverified: true,
-      configuredWallet: '',
-    });
-    expect(report.taskReadiness?.nextActionLabel).toContain('NOT verified');
-    expect(report.tasks).toBeUndefined();
-    expect(report.walletAddress).toBeUndefined();
-  });
-
-  it('reports assignee mismatch when wallet differs from task assignee', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_mismatch',
-          orderId: 'order_5',
-          title: 'Wrong assignee task',
-          status: 'open',
-          assigneeWallet: '0x9999999999999999999999999999999999999999',
-          canSubmit: true,
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_mismatch',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_mismatch',
-      canSubmit: false,
-      assigneeMatch: false,
-      nextAction: 'blocked',
-    });
-    expect(report.taskReadiness?.nextActionLabel).toContain('not the task assignee');
-    expect(report.ok).toBe(false);
-  });
-
-  it('keeps the server canSubmit authoritative over the locally computed deadline', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_deadline',
-          orderId: 'order_deadline',
-          title: 'Skewed clock task',
-          status: 'open',
-          assigneeWallet: submitter,
-          deadline: '2020-01-01T00:00:00.000',
-          canSubmit: true,
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_deadline',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_deadline',
-      canSubmit: true,
-      assigneeMatch: true,
-      deadlineExpired: true,
-      nextAction: 'prepare',
-    });
-    expect(report.taskReadiness?.nextActionLabel).toContain('Ready to prepare');
-    expect(report.ok).toBe(true);
-  });
-
-  it('keeps the server blockedReason displayed even when the local clock computes the deadline as expired', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_blocked_skew',
-          orderId: 'order_blocked_skew',
-          title: 'Blocked with skewed clock',
-          status: 'open',
-          assigneeWallet: submitter,
-          deadline: '2020-01-01T00:00:00.000Z',
-          canSubmit: false,
-          blockedReason: 'Required evidence not yet uploaded',
-        },
-      });
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      walletAddress: submitter,
-      taskId: 'task_blocked_skew',
-      fetch,
-    });
-
-    expect(report.taskReadiness).toMatchObject({
-      taskId: 'task_blocked_skew',
-      canSubmit: false,
-      blockedReason: 'Required evidence not yet uploaded',
-      deadlineExpired: true,
-      nextAction: 'wait',
-    });
-    expect(report.taskReadiness?.nextActionLabel).toContain('Required evidence not yet uploaded');
-    expect(report.taskReadiness?.nextActionLabel).not.toContain('deadline has passed');
-  });
-
-  it('omits readiness and raw-task data when the task lookup fails', async () => {
-    const fetch: ProductApiFetch = async (url) => {
-      if (!url.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return { ok: false, status: 404, text: async () => JSON.stringify({ error: 'task_not_found' }) };
-    };
-
-    const report = await runProductDoctor({
-      chainServicesUrl: 'http://chain.local/api',
-      taskId: 'task_missing',
-      fetch,
-    });
-
-    const taskCheck = report.checks.find((c) => c.label === 'task-readiness');
-    expect(taskCheck?.ok).toBe(false);
-    expect(taskCheck?.detail).toBeTypeOf('string');
-    expect(report.taskReadiness).toBeUndefined();
-    expect(report.rawTaskReadiness).toBeUndefined();
-    expect(JSON.stringify(report)).not.toContain('"status":"unknown"');
-    expect(report.ok).toBe(false);
-  });
-});
-
-describe('doctor CLI', () => {
-  it('refuses --task-id without --wallet-address instead of printing unverified readiness', async () => {
-    await expect(main([
-      'node',
-      'uvp-executor',
-      'doctor',
-      '--chain-services-url',
-      'http://chain.local/api',
-      '--task-id',
-      'task_no_wallet',
-    ])).rejects.toThrow(/--task-id requires --wallet-address/);
-  });
-
-  it('passes Product API auth token env headers and reports only redacted auth status', async () => {
-    const logs: string[] = [];
-    const envName = 'UVP_DOCTOR_PRODUCT_API_TOKEN';
-    const token = 'doctor-secret-token';
-    const previousEnv = process.env[envName];
-    const originalLog = console.log;
-    const originalFetch = globalThis.fetch;
-    const authorizationHeaders: string[] = [];
-    process.env[envName] = token;
-    console.log = (message?: unknown) => {
-      logs.push(String(message));
-    };
-    globalThis.fetch = (async (_url: unknown, init?: { headers?: Record<string, string> }) => {
-      if (init?.headers?.Authorization) {
-        authorizationHeaders.push(init.headers.Authorization);
-      }
-      return jsonResponse({
-        tasks: [
-          {
-            taskId: 'task_auth_doctor',
-            orderId: 'order_auth',
-            title: 'Auth doctor task',
-            status: 'open',
-          },
-        ],
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    try {
-      await main([
-        'node',
-        'uvp-executor',
-        'doctor',
-        '--chain-services-url',
-        'http://chain.local/api',
-        '--wallet-address',
-        submitter,
-        '--auth-token-env',
-        envName,
-      ]);
-      const output = JSON.parse(logs[0] ?? '{}') as {
-        auth?: { bearerTokenEnv?: string; bearerTokenConfigured?: boolean; redacted?: boolean };
-      };
-      expect(authorizationHeaders).toContain(`Bearer ${token}`);
-      expect(output.auth).toEqual({
-        bearerTokenEnv: envName,
-        bearerTokenConfigured: true,
-        redacted: true,
-      });
-      expect(logs[0]).not.toContain(token);
-    } finally {
-      console.log = originalLog;
-      if (originalFetch) {
-        globalThis.fetch = originalFetch;
-      } else {
-        delete (globalThis as { fetch?: unknown }).fetch;
-      }
-      if (previousEnv === undefined) {
-        delete process.env[envName];
-      } else {
-        process.env[envName] = previousEnv;
-      }
-    }
-  });
-
-  it('prints per-task readiness from the CLI with --task-id', async () => {
+  it('prints the report and exits non-zero when the RPC check fails', async () => {
     const logs: string[] = [];
     const originalLog = console.log;
-    const originalFetch = globalThis.fetch;
-    console.log = (message?: unknown) => {
-      logs.push(String(message));
-    };
-    globalThis.fetch = (async (url: unknown) => {
-      const urlStr = String(url);
-      if (!urlStr.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_cli_ready',
-          orderId: 'order_cli',
-          title: 'CLI task',
-          status: 'open',
-          assigneeWallet: submitter,
-          stageName: 'Stage A advance',
-          deadline: '2099-01-01T00:00:00.000Z',
-          canSubmit: true,
-          primaryActionLabel: 'Confirm stage',
-        },
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    try {
-      await main([
-        'node',
-        'uvp-executor',
-        'doctor',
-        '--chain-services-url',
-        'http://chain.local/api',
-        '--wallet-address',
-        submitter,
-        '--task-id',
-        'task_cli_ready',
-      ]);
-      const output = JSON.parse(logs[0] ?? '{}') as {
-        ok?: boolean;
-        checks?: Array<{ label?: string; ok?: boolean }>;
-        taskReadiness?: { taskId?: string; nextAction?: string; canSubmit?: boolean; assigneeMatch?: boolean };
-        tasks?: unknown;
-      };
-      expect(output.ok).toBe(true);
-      expect(output.checks).toHaveLength(2);
-      expect(output.taskReadiness).toMatchObject({
-        taskId: 'task_cli_ready',
-        nextAction: 'prepare',
-        canSubmit: true,
-        assigneeMatch: true,
-      });
-      expect(output.tasks).toBeUndefined();
-      expect(logs[0]).not.toContain(privateKey);
-      expect(logs[0]).not.toContain('sourceId');
-      expect(logs[0]).not.toContain('signalId');
-    } finally {
-      console.log = originalLog;
-      if (originalFetch) {
-        globalThis.fetch = originalFetch;
-      } else {
-        delete (globalThis as { fetch?: unknown }).fetch;
-      }
-    }
-  });
-
-  it('includes raw task readiness data in CLI verbose mode', async () => {
-    const logs: string[] = [];
-    const originalLog = console.log;
-    const originalFetch = globalThis.fetch;
-    const sourceIdHex = bytes32('02');
-    console.log = (message?: unknown) => {
-      logs.push(String(message));
-    };
-    globalThis.fetch = (async (url: unknown) => {
-      const urlStr = String(url);
-      if (!urlStr.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        task: {
-          taskId: 'task_verbose',
-          orderId: 'order_verb',
-          title: 'Verbose task',
-          status: 'open',
-          assigneeWallet: submitter,
-          canSubmit: true,
-          sourceId: sourceIdHex,
-          signalId: bytes32('03'),
-        },
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    try {
-      await main([
-        'node',
-        'uvp-executor',
-        'doctor',
-        '--chain-services-url',
-        'http://chain.local/api',
-        '--wallet-address',
-        submitter,
-        '--task-id',
-        'task_verbose',
-        '--verbose',
-      ]);
-      const output = JSON.parse(logs[0] ?? '{}') as {
-        taskReadiness?: { taskId?: string };
-        rawTaskReadiness?: { sourceId?: string };
-      };
-      expect(output.taskReadiness?.taskId).toBe('task_verbose');
-      expect(output.rawTaskReadiness?.sourceId).toBe(sourceIdHex);
-    } finally {
-      console.log = originalLog;
-      if (originalFetch) {
-        globalThis.fetch = originalFetch;
-      } else {
-        delete (globalThis as { fetch?: unknown }).fetch;
-      }
-    }
-  });
-
-  it('prints a doctor report from the CLI without secrets', async () => {
-    const logs: string[] = [];
-    const originalLog = console.log;
-    const originalFetch = globalThis.fetch;
-    console.log = (message?: unknown) => {
-      logs.push(String(message));
-    };
-    globalThis.fetch = (async (url: unknown) => {
-      const urlStr = String(url);
-      if (!urlStr.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      return jsonResponse({
-        tasks: [
-          {
-            taskId: 'task_1',
-            orderId: 'order_1',
-            title: 'Confirm stage-1',
-            status: 'open',
-            sourceId: bytes32('02'),
-            signalId: bytes32('03'),
-          },
-        ],
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    try {
-      await main([
-        'node',
-        'uvp-executor',
-        'doctor',
-        '--chain-services-url',
-        'http://chain.local/api',
-        '--wallet-address',
-        submitter,
-      ]);
-      const output = JSON.parse(logs[0] ?? '{}') as {
-        ok?: boolean;
-        checks?: Array<{ ok?: boolean; label?: string }>;
-        tasks?: Array<{ taskId?: string }>;
-        chainServicesUrl?: string;
-        timestamp?: string;
-      };
-      expect(output.chainServicesUrl).toBe('http://chain.local/api');
-      expect(output.ok).toBe(true);
-      expect(output.checks).toHaveLength(2);
-      expect(output.tasks?.[0]?.taskId).toBe('task_1');
-      expect(output.timestamp).toBeTypeOf('string');
-      expect(logs[0]).not.toContain(privateKey);
-      expect(logs[0]).not.toContain('sourceId');
-      expect(logs[0]).not.toContain('signalId');
-    } finally {
-      console.log = originalLog;
-      if (originalFetch) {
-        globalThis.fetch = originalFetch;
-      } else {
-        delete (globalThis as { fetch?: unknown }).fetch;
-      }
-    }
-  });
-
-  it('includes raw fields in CLI verbose mode', async () => {
-    const logs: string[] = [];
-    const originalLog = console.log;
-    const originalFetch = globalThis.fetch;
-    const sourceIdHex = bytes32('02');
-    console.log = (message?: unknown) => {
-      logs.push(String(message));
-    };
-    globalThis.fetch = (async (url: unknown) => {
-      const urlStr = String(url);
-      if (!urlStr.includes('/product/')) {
-        return jsonResponse({ service: 'chain-services' });
-      }
-      if (urlStr.includes('/product/tasks')) {
-        return jsonResponse({
-          tasks: [
-            {
-              taskId: 'task_1',
-              orderId: 'order_1',
-              title: 'Confirm stage-1',
-              status: 'open',
-              sourceId: sourceIdHex,
-              signalId: bytes32('03'),
-            },
-          ],
-        });
-      }
-      return jsonResponse({
-        submissionId: 'sub_1',
-        prepareId: 'prep_1',
-        taskId: 'task_1',
-        orderId: 'order_1',
-        status: 'confirmed',
-        txHash: bytes32('44'),
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    try {
-      await main([
-        'node',
-        'uvp-executor',
-        'doctor',
-        '--chain-services-url',
-        'http://chain.local/api',
-        '--wallet-address',
-        submitter,
-        '--submission-id',
-        'sub_1',
-        '--verbose',
-      ]);
-      const output = JSON.parse(logs[0] ?? '{}') as {
-        rawTasks?: Array<{ sourceId?: string }>;
-        rawProof?: { sourceId?: string };
-        tasks?: Array<unknown>;
-        proof?: unknown;
-      };
-      expect(output.rawTasks).toBeDefined();
-      expect(output.rawTasks?.[0]?.sourceId).toBe(sourceIdHex);
-      expect(output.rawProof).toBeDefined();
-      expect(output.tasks).toBeDefined();
-      expect(output.proof).toBeDefined();
-    } finally {
-      console.log = originalLog;
-      if (originalFetch) {
-        globalThis.fetch = originalFetch;
-      } else {
-        delete (globalThis as { fetch?: unknown }).fetch;
-      }
-    }
-  });
-
-  it('prints reachability-only report when no wallet or submission id is given', async () => {
-    const logs: string[] = [];
-    const originalLog = console.log;
-    const originalFetch = globalThis.fetch;
-    console.log = (message?: unknown) => {
-      logs.push(String(message));
-    };
-    globalThis.fetch = (async () => jsonResponse({ service: 'chain-services' })) as unknown as typeof globalThis.fetch;
-
-    try {
-      await main([
-        'node',
-        'uvp-executor',
-        'doctor',
-        '--chain-services-url',
-        'http://chain.local/api',
-      ]);
-      const output = JSON.parse(logs[0] ?? '{}') as {
-        ok?: boolean;
-        checks?: Array<{ ok?: boolean; label?: string }>;
-        tasks?: unknown;
-        proof?: unknown;
-      };
-      expect(output.checks).toHaveLength(1);
-      expect(output.checks?.[0]?.label).toBe('reachability');
-      expect(output.tasks).toBeUndefined();
-      expect(output.proof).toBeUndefined();
-      expect(logs[0]).not.toContain('privateKey');
-    } finally {
-      console.log = originalLog;
-      if (originalFetch) {
-        globalThis.fetch = originalFetch;
-      } else {
-        delete (globalThis as { fetch?: unknown }).fetch;
-      }
-    }
-  });
-
-  it('sets a non-zero exit code while still printing the report when a doctor check fails', async () => {
     const previousExitCode = process.exitCode;
-    const logs: string[] = [];
-    const originalLog = console.log;
-    const originalFetch = globalThis.fetch;
+    process.exitCode = undefined;
     console.log = (message?: unknown) => {
       logs.push(String(message));
     };
-    globalThis.fetch = (async () => jsonResponse({ error: 'unavailable' }, 503)) as unknown as typeof globalThis.fetch;
-
     try {
       await main([
-        'node',
-        'uvp-executor',
-        'doctor',
-        '--chain-services-url',
-        'http://chain.local/api',
+        'node', 'uvp-executor', 'doctor',
+        '--rpc-url', 'http://127.0.0.1:1',
+        '--timeout-ms', '500',
       ]);
-      const output = JSON.parse(logs[0] ?? '{}') as {
+
+      const report = JSON.parse(logs[0] ?? '{}') as {
         ok?: boolean;
-        checks?: Array<{ ok?: boolean; label?: string; detail?: string }>;
+        checks?: Array<{ ok?: boolean; label?: string }>;
       };
-      expect(output.ok).toBe(false);
-      expect(output.checks?.[0]).toMatchObject({ ok: false, label: 'reachability', detail: expect.stringContaining('503') });
-      expect(logs[0]).toContain('"ok":false');
+      expect(report.ok).toBe(false);
+      expect(report.checks?.[0]).toMatchObject({ ok: false, label: 'rpc' });
       expect(process.exitCode).toBe(1);
     } finally {
-      console.log = originalLog;
-      if (originalFetch) {
-        globalThis.fetch = originalFetch;
-      } else {
-        delete (globalThis as { fetch?: unknown }).fetch;
-      }
       process.exitCode = previousExitCode;
+      console.log = originalLog;
     }
   });
 });
+
+async function startRpcStub(options: {
+  readonly chainId: string;
+  readonly blockNumber?: string;
+  readonly code?: string;
+}): Promise<{ readonly url: string; close(): Promise<void> }> {
+  const server = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as {
+        id?: unknown;
+        method?: string;
+      };
+      let result: unknown = null;
+      if (parsed.method === 'eth_chainId') {
+        result = options.chainId;
+      } else if (parsed.method === 'eth_blockNumber') {
+        result = options.blockNumber ?? '0x10';
+      } else if (parsed.method === 'eth_getCode') {
+        result = options.code ?? '0x6001';
+      }
+      response.statusCode = 200;
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ jsonrpc: '2.0', id: parsed.id ?? 1, result }));
+    })().catch(() => {
+      response.statusCode = 500;
+      response.end('{}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('RPC stub did not bind to a TCP address');
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    }),
+  };
+}

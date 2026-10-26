@@ -11,12 +11,6 @@
       "status": "active"
     }
   ],
-  "chainServicesUrl": "http://127.0.0.1:3001",
-  "stages": [
-    "stage-a"
-  ],
-  "callbackMode": "auto",
-  "authTokenRef": "UVP_EXECUTOR_TOKEN",
   "retry": {
     "maxAttempts": 3,
     "baseDelayMs": 0

@@ -2,7 +2,7 @@
   "name": "@uvp-eth/executor-kit",
   "version": "0.1.0",
   "private": true,
-  "description": "CLI and SDK for UVP EVM executors.",
+  "description": "Executor SDK and CLI for UVP EVM signal producers.",
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
@@ -15,14 +15,16 @@
     "./participant/solana": "./src/participant/solana.ts"
   },
   "files": [
+    "src",
     "dist",
     "fixtures",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepack": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && pnpm build",
+    "prepack": "pnpm build",
     "test": "vitest run && tsx --test \"tests/**/*.node.test.ts\"",
     "test:watch": "vitest",
     "dev": "tsx src/cli.ts",
@@ -31,8 +33,7 @@
   "dependencies": {
     "@uvp-eth/protocol-bindings": "workspace:*",
     "commander": "^12.1.0",
-    "viem": "^2.21.58",
-    "@uvp-eth/product-dto": "workspace:*"
+    "viem": "^2.21.58"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

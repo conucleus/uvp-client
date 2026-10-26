@@ -7,11 +7,6 @@ import { encodeAbiParameters, keccak256, stringToBytes, stringToHex, type Hex } 
 import { describe, expect, it, vi } from 'vitest';
 import { classifyExecutorKitError, CodedExecutorKitError } from '../src/errors.js';
 import {
-  stateMachineHandlerConfigToExecutorConfigDTO,
-  stateMachineJobToExecutorJobDTO,
-  summarizeSupplierOps,
-} from '../src/cli/output.js';
-import {
   buildSubmitStateMachineSignalCall,
   createStateMachineHandlersFromConfig,
   createStateMachineWatcher,
@@ -1220,7 +1215,6 @@ describe('state machine chain watcher', () => {
 
     expect(attempts).toBe(1);
     expect(result.job?.status).toBe('dead_letter');
-    expect(stateMachineJobToExecutorJobDTO(result.job!).status).toBe('dead_letter');
     expect(result.error?.kind).toBe('unauthorized');
     expect(result.error?.retryable).toBe(false);
     expect(result.error?.code).toBe('UNAUTHORIZED');
@@ -1415,7 +1409,6 @@ describe('state machine chain watcher', () => {
       }
 
       expect(failed.job?.status).toBe('failed');
-      expect(stateMachineJobToExecutorJobDTO(failed.job).status).toBe('failed');
       const persistedAfterFailure = await store.get(jobId);
       expect(persistedAfterFailure?.status).toBe('failed');
       expect(persistedAfterFailure?.attempts).toBe(2);
@@ -1436,13 +1429,6 @@ describe('state machine chain watcher', () => {
           reason: 'pushing past the attempt budget',
         },
       ]);
-      expect(summarizeSupplierOps({ supplierId: 'role-a', walletAddress: WALLET_ADDRESS }, [persistedAfterOverLimit!]))
-        .toMatchObject({
-          supplierId: 'role-a',
-          activeJobs: 0,
-          failedJobs: 1,
-        confirmedSignals: 0,
-      });
 
       const deadLetter = await deadLetterStateMachineJob(store, jobId, {
         operator: 'ops@example.com',
@@ -3758,7 +3744,7 @@ describe('state machine callback tx helper', () => {
 });
 
 describe('state machine executor config', () => {
-  it('loads the standard production-boundary config shape', async () => {
+  it('normalizes the state-machine handler config shape', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'uvp-state-machine-config-'));
     const configPath = join(dir, 'executor.json');
     try {
@@ -3772,11 +3758,7 @@ describe('state machine executor config', () => {
           { stateMachineAddress: STATE_MACHINE, deploymentId: `0x${'01'.repeat(32)}`, status: 'deprecated' },
           { stateMachineAddress: STATE_MACHINE_V2, deploymentId: `0x${'02'.repeat(32)}`, status: 'active' },
         ],
-        chainServicesUrl: 'http://127.0.0.1:3001',
-        stages: ['stage-a'],
-        callbackMode: 'auto',
         dryRun: true,
-        authTokenRef: 'UVP_EXECUTOR_TOKEN',
         retry: {
           maxAttempts: 4,
           baseDelayMs: 0,
@@ -3806,9 +3788,7 @@ describe('state machine executor config', () => {
           { stateMachineAddress: STATE_MACHINE, deploymentId: `0x${'01'.repeat(32)}`, status: 'deprecated' },
           { stateMachineAddress: STATE_MACHINE_V2, deploymentId: `0x${'02'.repeat(32)}`, status: 'active' },
         ],
-        callbackMode: 'auto',
         dryRun: true,
-        authTokenRef: 'UVP_EXECUTOR_TOKEN',
         retry: {
           maxAttempts: 4,
           baseDelayMs: 0,
@@ -3818,22 +3798,6 @@ describe('state machine executor config', () => {
         source: 'role-a',
         stageIdentifier: 'stage-a',
         signalName: 'cmp',
-      });
-      expect(stateMachineHandlerConfigToExecutorConfigDTO(config)).toMatchObject({
-        supplierId: 'role-a',
-        walletAddress: WALLET_ADDRESS,
-        chainId: 84_532,
-        stateMachineAddress: STATE_MACHINE,
-        stateMachines: [
-          { stateMachineAddress: STATE_MACHINE, deploymentId: `0x${'01'.repeat(32)}`, status: 'deprecated' },
-          { stateMachineAddress: STATE_MACHINE_V2, deploymentId: `0x${'02'.repeat(32)}`, status: 'active' },
-        ],
-        chainServicesUrl: 'http://127.0.0.1:3001',
-        stages: ['stage-a'],
-        signals: ['stage-a.cmp'],
-        callbackMode: 'auto',
-        dryRun: true,
-        authTokenRef: 'UVP_EXECUTOR_TOKEN',
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -4956,8 +4920,8 @@ describe('watcher held foreign claim alert', () => {
     await watcher.pollOnce();
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain(`pid ${foreignPid}`);
-    expect(errors[0]).toContain('jobs dead-letter');
-    expect(errors[0]).toContain('--force');
+    expect(errors[0]).toContain('deadLetterStateMachineJob');
+    expect(errors[0]).toContain('force: true');
 
     await watcher.pollOnce();
     await watcher.pollOnce();

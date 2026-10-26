@@ -1,18 +1,17 @@
 #!/usr/bin/env node
+/**
+ * CLI entry point: command registration lives in cli/commands/, watcher
+ * assembly in cli/watcher.ts, and scan exit-code adaptation in cli/output.ts.
+ * Programmatic callers depend on this single module.
+ */
 import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { registerChainCommands } from './cli/commands/chain.js';
-import { registerConfigValidateCommand } from './cli/commands/config.js';
 import { registerDoctorCommand } from './cli/commands/doctor.js';
-import { registerJobsCommands } from './cli/commands/jobs.js';
-import { registerProductCommands } from './cli/commands/product.js';
-import { registerServeCommand } from './cli/commands/serve.js';
 import { registerWalletCommands } from './cli/commands/wallet.js';
 import { ExecutorKitError } from './validation.js';
 
-// 命令分发、watcher 装配与输出/退出码适配分别在 cli/commands/、cli/watcher.ts、
-// cli/output.ts；此处集中重导出它们的公共面，CLI 的编程调用方只依赖 cli.ts 一个出口。
-export { chainPollExecutionFailed, executionOutcomeFailed } from './cli/output.js';
+export { chainPollExecutionFailed } from './cli/output.js';
 export {
   DEFAULT_WATCHER_STATE_DIR,
   EXECUTOR_RUNTIME_ENV,
@@ -32,11 +31,7 @@ export function buildProgram(): Command {
     .version('0.1.0');
 
   registerWalletCommands(program);
-  registerProductCommands(program);
-  registerServeCommand(program);
-  registerConfigValidateCommand(program);
   registerDoctorCommand(program);
-  registerJobsCommands(program);
   registerChainCommands(program);
 
   return program;

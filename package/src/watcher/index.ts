@@ -55,7 +55,6 @@ export {
   loadStateMachineHandlerConfig,
   resolveStateMachineHandler,
   type DeferredBroadcastOutcome,
-  type ExecutorCallbackMode,
   type StateMachineHandlerConfig,
   type StateMachineHookReadyHandler,
   type StateMachineHookReadyHandlerContext,
