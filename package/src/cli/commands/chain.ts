@@ -1,22 +1,22 @@
 import type { Command } from 'commander';
-import { stringifyForTransport } from '../../transport.js';
-import { parsePositiveInteger, ValidationError } from '../../validation.js';
+import { parseNonNegativeInteger, parsePositiveInteger, ValidationError } from '../../core/validation.js';
 import {
   DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV,
   submitStateMachineSignal,
-} from '../../watcher/index.js';
-import { chainPollExecutionFailed } from '../output.js';
+  type StateMachinePollResult,
+} from '../../headless/watcher/index.js';
+import { chainPollExecutionFailed, stringifyForTransport } from '../output.js';
 import {
   waitForShutdown,
   type ChainSignalOptions,
   type ChainWatchOptions,
 } from '../options.js';
 import {
-  buildStateMachineWatcherFromCli,
+  buildStateMachineWatcher,
   DEFAULT_WATCHER_STATE_DIR,
   EXECUTOR_RUNTIME_ENV,
   WATCHER_STATE_DIR_ENV,
-} from '../watcher.js';
+} from '../../headless/runtime.js';
 
 /** chain-once / chain-watch / chain-signal 命令分发。 */
 export function registerChainCommands(program: Command): void {
@@ -40,7 +40,7 @@ export function registerChainCommands(program: Command): void {
     .option('--dry-run', 'build submitSignal tx requests without broadcasting')
     .option('--wait-for-receipt', 'wait for tx receipt after broadcasting')
     .action(async (options: ChainWatchOptions) => {
-      const { watcher, storage, stateLock } = await buildStateMachineWatcherFromCli(options);
+      const { watcher, storage, stateLock } = await buildStateMachineWatcher(options, watchCallbacks());
       try {
         const poll = await watcher.pollOnce();
         console.log(stringifyForTransport({ watcher: watcher.describe(), storage, poll }));
@@ -73,7 +73,7 @@ export function registerChainCommands(program: Command): void {
     .option('--dry-run', 'build submitSignal tx requests without broadcasting')
     .option('--wait-for-receipt', 'wait for tx receipt after broadcasting')
     .action(async (options: ChainWatchOptions) => {
-      const { watcher, storage, stateLock } = await buildStateMachineWatcherFromCli(options);
+      const { watcher, storage, stateLock } = await buildStateMachineWatcher(options, watchCallbacks());
       try {
         console.log(stringifyForTransport({ watcher: watcher.describe(), storage }));
         const handle = await watcher.start();
@@ -135,4 +135,18 @@ export function registerChainCommands(program: Command): void {
       });
       console.log(stringifyForTransport({ stateMachineSignal: result }));
     });
+}
+
+function watchCallbacks(): Parameters<typeof buildStateMachineWatcher>[1] {
+  return {
+    onPoll: (poll: StateMachinePollResult) => {
+      console.log(stringifyForTransport({ poll }));
+    },
+    onError: (error: unknown) => {
+      console.error(error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+    },
+    onWarning: (message: string) => {
+      console.error(message);
+    },
+  };
 }

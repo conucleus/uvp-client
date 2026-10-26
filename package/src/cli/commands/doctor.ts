@@ -4,9 +4,9 @@
  * any check fails.
  */
 import type { Command } from 'commander';
-import { runExecutorDoctor } from '../../doctor.js';
-import { stringifyForTransport } from '../../transport.js';
-import { parsePositiveInteger } from '../../validation.js';
+import { runExecutorDoctor } from '../../headless/doctor.js';
+import { stringifyForTransport } from '../output.js';
+import { parsePositiveInteger } from '../../core/validation.js';
 import type { DoctorOptions } from '../options.js';
 
 export function registerDoctorCommand(program: Command): void {

@@ -1,18 +1,18 @@
 {
-  "name": "@uvp-eth/executor-kit",
+  "name": "@uvp-eth/uvp-client",
   "version": "0.1.0",
   "private": true,
-  "description": "Executor SDK and CLI for UVP EVM signal producers.",
+  "description": "Public UVP client: core, browser, headless SDK entries and the executor CLI.",
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
-    "uvp-executor": "./dist/cli.js"
+    "uvp-client": "./dist/cli/index.js"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./participant": "./src/participant/index.ts",
-    "./participant/evm": "./src/participant/evm.ts",
-    "./participant/solana": "./src/participant/solana.ts"
+    "./core": "./src/core/index.ts",
+    "./browser": "./src/browser/index.ts",
+    "./headless": "./src/headless/index.ts",
+    "./cli": "./src/cli/index.ts"
   },
   "files": [
     "src",
@@ -27,10 +27,11 @@
     "prepack": "pnpm build",
     "test": "vitest run && tsx --test \"tests/**/*.node.test.ts\"",
     "test:watch": "vitest",
-    "dev": "tsx src/cli.ts",
-    "cli": "tsx src/cli.ts"
+    "dev": "tsx src/cli/index.ts",
+    "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {
+    "@uvp-eth/product-dto": "workspace:*",
     "@uvp-eth/protocol-bindings": "workspace:*",
     "commander": "^12.1.0",
     "viem": "^2.21.58"

@@ -1,13 +1,13 @@
 import type { Command } from 'commander';
-import { stringifyForTransport } from '../../transport.js';
-import { ValidationError } from '../../validation.js';
+import { stringifyForTransport } from '../output.js';
+import { ValidationError } from '../../core/validation.js';
 import {
   addressFromPrivateKey,
   DEFAULT_WALLET_ADDRESS_ENV,
   DEFAULT_WALLET_PRIVATE_KEY_ENV,
   getFaucetInfo,
   writeWalletEnvFile,
-} from '../../wallet.js';
+} from '../../headless/wallet.js';
 import type {
   FaucetInfoOptions,
   WalletAddressOptions,

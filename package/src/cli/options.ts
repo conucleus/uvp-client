@@ -1,28 +1,10 @@
 /**
- * Commander option shapes shared by the executor CLI commands; the parsing
- * helpers mirror the validation rules owned by validation.ts.
+ * Commander option shapes for the uvp-client CLI commands; the watch/signal
+ * option shapes mirror the headless runtime and core builders they feed.
  */
-import { ValidationError } from '../validation.js';
+import type { StateMachineWatchOptions } from '../headless/runtime.js';
 
-export interface ChainWatchOptions {
-  rpcUrl: string;
-  stateMachine?: string;
-  chainId: string;
-  config: string;
-  walletAddress?: string;
-  privateKeyEnv: string;
-  fromBlock?: string;
-  pollIntervalMs?: string;
-  confirmations?: string;
-  runtimeEnv?: string;
-  reorgWindow?: string;
-  maxGetLogsBlockSpan?: string;
-  jobsFile?: string;
-  jobStore?: string;
-  stateDir?: string;
-  dryRun?: boolean;
-  waitForReceipt?: boolean;
-}
+export type ChainWatchOptions = StateMachineWatchOptions;
 
 export interface ChainSignalOptions {
   rpcUrl: string;
@@ -66,17 +48,6 @@ export interface DoctorOptions {
   walletAddress?: string;
   privateKeyEnv?: string;
   timeoutMs?: string;
-}
-
-export function parseNonNegativeIntegerOption(value: string, fieldName: string): number {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
-    throw new ValidationError(`${fieldName} must be a non-negative integer`);
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new ValidationError(`${fieldName} must be a non-negative safe integer`);
-  }
-  return parsed;
 }
 
 export function waitForShutdown(close: () => Promise<void>): Promise<void> {
