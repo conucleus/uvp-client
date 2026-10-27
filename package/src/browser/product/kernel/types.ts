@@ -3,7 +3,6 @@
 
 import type {
   ProductFetcher,
-  ProductRequestOptions,
   ProductSessionTokenProvider
 } from "../../../core/product-transport.js";
 import type {
@@ -59,7 +58,6 @@ import type {
 
 export type {
   ProductFetcher,
-  ProductRequestOptions,
   ProductSessionTokenProvider,
   AcceptStageInviteInput,
   AcceptStageInviteResult,
@@ -120,7 +118,6 @@ export interface ProductClientOptions {
   readonly timeoutMs?: number | undefined;
   /** 固定会话 token（与 getSessionToken 二选一，getSessionToken 优先）。 */
   readonly sessionToken?: string | undefined;
-  /** 每次请求前读取 wallet proof token（由 wallet proof transport 的 verify 结果提供）。 */
   readonly getSessionToken?: ProductSessionTokenProvider | undefined;
 }
 

@@ -23,13 +23,10 @@ export {
   requireRecord,
   requireString,
   DEFAULT_PRODUCT_TIMEOUT_MS,
-  PRODUCT_IDEMPOTENCY_HEADER,
-  PRODUCT_SESSION_HEADER,
   ProductTransport,
   type ProductErrorInput,
   type ProductErrorKind,
   type ProductFetcher,
-  type ProductRequestOptions,
   type ProductSessionTokenProvider,
   type ProductTransportConfig,
 } from "../../../core/product-transport.js";

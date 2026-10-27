@@ -4,10 +4,11 @@
  */
 
 import { getAddress, isAddress } from 'viem';
-import type {
-  WalletProofChallengeView,
-  WalletProofVerifyResult,
-  WalletSessionView,
+import {
+  WALLET_PROOF_SESSION_HEADER,
+  type WalletProofChallengeView,
+  type WalletProofVerifyResult,
+  type WalletSessionView,
 } from '@uvp-eth/product-dto';
 
 export type WalletProofFetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -24,7 +25,6 @@ export interface WalletProofTransportOptions {
   readonly timeoutMs?: number | undefined;
 }
 
-export const WALLET_PROOF_SESSION_HEADER = 'x-uvp-store-session';
 const ROOT = '/product/v3/wallet-proof';
 const DEFAULT_TIMEOUT_MS = 6_000;
 

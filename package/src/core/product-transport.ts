@@ -5,12 +5,9 @@
  * readable message); malformed 2xx shapes become invalid_response, never an
  * empty result. Shared by browser and headless callers.
  */
-export type ProductFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+import { WALLET_PROOF_SESSION_HEADER } from "@uvp-eth/product-dto";
 
-export interface ProductRequestOptions {
-  /** 写请求的幂等键：服务端按 (wallet, operation, idempotencyKey, payload) 去重。 */
-  readonly idempotencyKey?: string | undefined;
-}
+export type ProductFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /** 钱包会话 token 提供者：宿主注入已有会话，core 不读取 env/localStorage。 */
 export type ProductSessionTokenProvider = () => string | undefined;
@@ -141,8 +138,6 @@ export function classifyProductFailure(status: number, message: string): Product
 }
 
 
-export const PRODUCT_SESSION_HEADER = "x-uvp-store-session";
-export const PRODUCT_IDEMPOTENCY_HEADER = "idempotency-key";
 export const DEFAULT_PRODUCT_TIMEOUT_MS = 6000;
 
 export interface ProductTransportConfig {
@@ -176,17 +171,13 @@ export class ProductTransport {
     method: "GET" | "POST" | "PATCH",
     pathname: string,
     body: unknown,
-    options: ProductRequestOptions = {},
   ): Promise<T> {
     const timeoutMs = this.#config.timeoutMs;
     const signal = AbortSignal.timeout(timeoutMs);
     const sessionToken = this.#resolveSessionToken();
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (sessionToken !== undefined) {
-      headers[PRODUCT_SESSION_HEADER] = sessionToken;
-    }
-    if (options.idempotencyKey !== undefined) {
-      headers[PRODUCT_IDEMPOTENCY_HEADER] = options.idempotencyKey;
+      headers[WALLET_PROOF_SESSION_HEADER] = sessionToken;
     }
 
     let response: Response;

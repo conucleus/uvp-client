@@ -154,7 +154,7 @@ describe("product error mapping", () => {
 });
 
 describe("product transport", () => {
-  it("sends the session header and never forwards an Idempotency-Key", async () => {
+  it("sends the session header", async () => {
     const seen: {
       headers?: Record<string, string> | undefined;
       method?: string | undefined;
@@ -179,13 +179,11 @@ describe("product transport", () => {
         currency: "USDT",
         stageSubset: ["stage-b"],
         stageTerms: [{ stageKey: "stage-b", amount: "1", inviteDeadline: "2026-11-01T00:00:00Z", workDeadline: "2026-11-20T00:00:00Z" }]
-      },
-      { idempotencyKey: "idem-1" }
+      }
     );
     assert.equal(seen.method, "POST");
     assert.equal(seen.url, "https://product.test/product/v3/order-drafts");
     assert.equal(seen.headers?.["x-uvp-store-session"], "session-abc");
-    assert.equal(seen.headers?.["idempotency-key"], undefined);
   });
 
   it("prefers the injected session token provider over the fixed token", async () => {

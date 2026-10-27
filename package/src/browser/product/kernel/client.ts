@@ -35,7 +35,6 @@ import type {
   StageViewResponse,
   TaskListView,
   ProductClientOptions,
-  ProductRequestOptions,
   RejectStageInviteInput,
   StageInviteCreated,
   StageInvitePreview,
@@ -61,49 +60,27 @@ export interface ProductClient {
   getConfig(configId: string, version: string, options?: GetConfigOptions): Promise<ConfigVersion>;
   /** 已发布配置目录（只读，configId/version 稳定排序）。 */
   listConfigs(): Promise<readonly ConfigVersion[]>;
-  /** 配置发布前置校验（dry-run，与 publish 共用解析逻辑；不落库/不注册 plan）。 */
   /** 我的订单（服务端按会话钱包裁剪为 buyer/participant；陌生钱包的订单不返回）。 */
   listOrders(): Promise<readonly OrderSummary[]>;
   /** operator 订单排查视图（仅 operator 钱包；非 operator 保留服务端 403 operator_required）。 */
   getOperatorOrder(orderId: string): Promise<OperatorOrderView>;
-  /** operator 审计读面（白名单字段，newest first；limit 默认 50/上限 200）。 */
   getOperatorAudit(query?: OperatorAuditQuery): Promise<readonly AuditEventView[]>;
   /** 任务动作装配（signal.submit 输入；不返回签名，不代签/广播）。 */
   prepareTaskAction(orderId: string, taskId: string): Promise<TaskActionView>;
-  createOrderDraft(input: CreateOrderDraftInput, options?: ProductRequestOptions): Promise<OrderDraftDetail>;
+  createOrderDraft(input: CreateOrderDraftInput): Promise<OrderDraftDetail>;
   getOrderDraft(draftId: string): Promise<OrderDraftDetail>;
-  updateOrderDraft(
-    draftId: string,
-    input: UpdateOrderDraftInput,
-    options?: ProductRequestOptions
-  ): Promise<OrderDraftDetail>;
+  updateOrderDraft(draftId: string, input: UpdateOrderDraftInput): Promise<OrderDraftDetail>;
   createInvite(draftId: string, input: CreateStageInviteInput): Promise<StageInviteCreated>;
   previewInvite(inviteId: string, token: string): Promise<StageInvitePreview>;
-  acceptInvite(
-    inviteId: string,
-    input: AcceptStageInviteInput,
-    options?: ProductRequestOptions
-  ): Promise<AcceptStageInviteResult>;
-  rejectInvite(
-    inviteId: string,
-    input: RejectStageInviteInput,
-    options?: ProductRequestOptions
-  ): Promise<AcceptStageInviteResult>;
+  acceptInvite(inviteId: string, input: AcceptStageInviteInput): Promise<AcceptStageInviteResult>;
+  rejectInvite(inviteId: string, input: RejectStageInviteInput): Promise<AcceptStageInviteResult>;
   revokeInvite(inviteId: string): Promise<Invite>;
   /** finalize 第一步：服务端返回 UVPOrderFinalize typed data 与 funded/skipped 段。 */
   prepareFinalize(draftId: string): Promise<FinalizeOrderDraftPreparation>;
   /** finalize 第二步：提交 buyer 对 UVPOrderFinalize 的 EIP-712 签名。 */
-  finalizeWithSignature(
-    draftId: string,
-    input: FinalizeOrderDraftInput,
-    options?: ProductRequestOptions
-  ): Promise<FinalizeOrderDraftResult>;
+  finalizeWithSignature(draftId: string, input: FinalizeOrderDraftInput): Promise<FinalizeOrderDraftResult>;
   /** attach 已出生的链上订单到草稿（birth 仍由 buyer/relayer 完成；本方法只登记业务行）。 */
-  attachOrder(
-    draftId: string,
-    input: AttachOrderInput,
-    options?: ProductRequestOptions
-  ): Promise<AttachOrderResult>;
+  attachOrder(draftId: string, input: AttachOrderInput): Promise<AttachOrderResult>;
   /** 订单读面（服务端按 scope 裁剪；字段随 scope 缺失属正常）。 */
   getOrder(orderId: string): Promise<OrderView>;
   /** 单阶段读面（服务端投影）。 */
@@ -119,11 +96,8 @@ export interface ProductClient {
     stageKey: string,
     handleKey: string
   ): Promise<ResourceResolutionView>;
-  /** 上传证据（JSON body；会话与 Idempotency-Key 由 transport 透传）。 */
-  uploadEvidence(
-    input: CreateEvidenceRequestDTO,
-    options?: ProductRequestOptions
-  ): Promise<EvidenceUploadResponseDTO>;
+  /** 上传证据（JSON body；wallet proof token 由 transport 透传）。 */
+  uploadEvidence(input: CreateEvidenceRequestDTO): Promise<EvidenceUploadResponseDTO>;
   /** 读取证据元数据；404 由 ProductError 具名 evidence_not_found 保留，不当作空。 */
   getEvidence(evidenceId: string): Promise<EvidenceRecordDTO>;
   /** 读取证据证明（hash、绑定与 verificationStatus）。 */
@@ -164,7 +138,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return configs.map((config) => configVersionFrom(config, pathname));
     },
 
-    async createOrderDraft(input, requestOptions = {}) {
+    async createOrderDraft(input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts`;
       const body = await transport.request<unknown>("POST", pathname, input);
       return draftDetailFrom(body, pathname);
@@ -176,7 +150,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return draftDetailFrom(body, pathname);
     },
 
-    async updateOrderDraft(draftId, input, requestOptions = {}) {
+    async updateOrderDraft(draftId, input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}`;
       const body = await transport.request<unknown>("PATCH", pathname, input);
       return draftDetailFrom(body, pathname);
@@ -207,13 +181,13 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return record as unknown as StageInvitePreview;
     },
 
-    async acceptInvite(inviteId, input, requestOptions = {}) {
+    async acceptInvite(inviteId, input) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/accept`;
       const body = await transport.request<unknown>("POST", pathname, input);
       return acceptanceFrom(body, pathname);
     },
 
-    async rejectInvite(inviteId, input, requestOptions = {}) {
+    async rejectInvite(inviteId, input) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/reject`;
       const body = await transport.request<unknown>("POST", pathname, input);
       return acceptanceFrom(body, pathname);
@@ -234,14 +208,13 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return finalizePreparationFrom(body, pathname);
     },
 
-    async finalizeWithSignature(draftId, input, requestOptions = {}) {
-      // finalize 不发送 body；建单授权由 buyer 的 UVPOrderFinalize 签名承载。
+    async finalizeWithSignature(draftId, input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/finalize`;
       const body = await transport.request<unknown>("POST", pathname, { signature: input.signature });
       return finalizeResultFrom(body, pathname);
     },
 
-    async attachOrder(draftId, input, requestOptions = {}) {
+    async attachOrder(draftId, input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/attach-order`;
       const body = await transport.request<unknown>("POST", pathname, input);
       return attachResultFrom(body, pathname);
@@ -331,7 +304,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return resolutionViewFrom(body, pathname);
     },
 
-    async uploadEvidence(input, requestOptions = {}) {
+    async uploadEvidence(input) {
       const pathname = PRODUCT_EVIDENCE_ROOT;
       const body = await transport.request<unknown>("POST", pathname, input);
       return evidenceUploadFrom(body, pathname);
