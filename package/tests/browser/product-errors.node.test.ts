@@ -396,6 +396,40 @@ describe("product transport", () => {
     assert.equal((await attachClient.attachOrder("draft-1", { orderId: order.orderId, planId: `0x${"32".repeat(32)}` })).status, "triggered");
   });
 
+  it("strictly decodes the stage executorChange signal set", async () => {
+    const sourceId = `0x${"21".repeat(32)}`;
+    const signalId = `0x${"22".repeat(32)}`;
+    const signalsHash = `0x${"23".repeat(32)}`;
+    const config = {
+      configId: "example/order-config",
+      version: "1.0.0",
+      status: "published",
+      configHash: `0x${"11".repeat(32)}`,
+      bundle: {
+        stages: [{ key: "stage-b", executorChange: { signalsHash, signals: [{ sourceId, signalId }] } }]
+      }
+    };
+    const validClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse(config)
+    });
+    const decoded = await validClient.getConfig("example/order-config", "1.0.0");
+    assert.deepEqual(decoded.bundle.stages[0]?.executorChange?.signals, [{ sourceId, signalId }]);
+
+    const brokenClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () =>
+        jsonResponse({
+          ...config,
+          bundle: { stages: [{ key: "stage-b", executorChange: { signalsHash: "0x23", signals: [] } }] }
+        })
+    });
+    const error = await expectError(() => brokenClient.getConfig("example/order-config", "1.0.0"));
+    assert.equal(error.kind, "invalid_response");
+    assert.match(error.message, /bundle\.stages\[0\]\.executorChange\.signalsHash/u);
+    assert.match(error.message, /signals_hash_invalid/u);
+  });
+
   it("uploads and reads evidence with strict shapes and a named 404", async () => {
     let uploadUrl = "";
     const uploadClient = createProductClient({

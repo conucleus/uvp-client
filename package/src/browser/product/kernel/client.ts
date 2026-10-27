@@ -40,7 +40,11 @@ import type {
   StageInvitePreview,
   TaskActionView
 } from "./types.js";
-import { AUDIT_ACTIONS } from "@uvp-eth/product-dto";
+import {
+  AUDIT_ACTIONS,
+  ConfigStageExecutorChangeError,
+  parseConfigStageExecutorChange
+} from "@uvp-eth/product-dto";
 import type {
   AttachOrderInput,
   CreateEvidenceRequestDTO,
@@ -338,7 +342,20 @@ function configVersionFrom(body: unknown, pathname: string): ConfigVersion {
   requireString(record, "version", pathname, "配置版本响应缺少 version");
   requireString(record, "status", pathname, "配置版本响应缺少 status");
   requireString(record, "configHash", pathname, "配置版本响应缺少 configHash");
-  requireRecord(record.bundle, pathname, "配置版本响应缺少 bundle");
+  const bundle = requireRecord(record.bundle, pathname, "配置版本响应缺少 bundle");
+  const stages = bundle.stages;
+  if (Array.isArray(stages)) {
+    stages.forEach((entry, index) => {
+      const stage = requireRecord(entry, pathname, `配置版本响应 bundle.stages[${index}] 不是 JSON 对象`);
+      if (stage.executorChange === undefined) return;
+      try {
+        parseConfigStageExecutorChange(stage.executorChange, `配置版本响应 bundle.stages[${index}].executorChange`);
+      } catch (error) {
+        const reason = error instanceof ConfigStageExecutorChangeError ? `${error.reason}: ` : "";
+        throw invalidResponse(pathname, `${reason}${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+  }
   return record as unknown as ConfigVersion;
 }
 

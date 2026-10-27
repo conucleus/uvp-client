@@ -78,6 +78,25 @@ describe("flattenConfigVersion", () => {
     assert.equal(flatStageByKey(withIds, "stage-c")?.stageId, undefined);
   });
 
+  it("carries the stage executorChange assign surface into the flat read model", () => {
+    const base = configVersionFixture();
+    const executorChange = {
+      signalsHash: `0x${"21".repeat(32)}`,
+      signals: [{ sourceId: `0x${"22".repeat(32)}`, signalId: `0x${"23".repeat(32)}` }]
+    };
+    const flat = flattenConfigVersion({
+      ...base,
+      bundle: {
+        ...base.bundle,
+        stages: base.bundle.stages.map((stage) =>
+          stage.key === "stage-b" ? { ...stage, executorChange } : stage
+        )
+      }
+    });
+    assert.deepEqual(flatStageByKey(flat, "stage-b")?.executorChange, executorChange);
+    assert.equal(flatStageByKey(flat, "stage-a")?.executorChange, undefined);
+  });
+
   it("derives token decimals from currency but never guesses unknown ones", () => {
     const usdt = flattenConfigVersion(configVersionFixture());
     assert.equal(usdt.tokenDecimals, 6);

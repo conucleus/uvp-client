@@ -8,6 +8,7 @@ import type {
   ConfigBundle,
   ConfigSlot,
   ConfigStage,
+  ConfigStageExecutorChange,
   ConfigVersion,
   StageStandardRef
 } from "@uvp-eth/product-dto";
@@ -62,6 +63,7 @@ export interface FlatStage {
   readonly timeExpressions: readonly FlatStageTime[];
   readonly standards: readonly FlatStandard[];
   readonly defaultStandard?: FlatStandard;
+  readonly executorChange?: ConfigStageExecutorChange;
 }
 
 export interface FlatConfig {
@@ -195,7 +197,8 @@ function flattenStage(input: {
     ...(timeExpressions[0]?.expr !== undefined ? { timeExpression: timeExpressions[0].expr } : {}),
     timeExpressions,
     standards,
-    ...(defaultStandard !== undefined ? { defaultStandard } : {})
+    ...(defaultStandard !== undefined ? { defaultStandard } : {}),
+    ...(stage.executorChange !== undefined ? { executorChange: stage.executorChange } : {})
   };
 }
 
