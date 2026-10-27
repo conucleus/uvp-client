@@ -154,7 +154,7 @@ describe("product error mapping", () => {
 });
 
 describe("product transport", () => {
-  it("sends the session header and idempotency key", async () => {
+  it("sends the session header and never forwards an Idempotency-Key", async () => {
     const seen: {
       headers?: Record<string, string> | undefined;
       method?: string | undefined;
@@ -172,6 +172,7 @@ describe("product transport", () => {
     });
     await client.createOrderDraft(
       {
+        draftId: "0f8fad5b-d9cb-469f-a165-70867728950e",
         configId: "example/order-config",
         configVersion: "1.0.0",
         title: "t",
@@ -184,7 +185,7 @@ describe("product transport", () => {
     assert.equal(seen.method, "POST");
     assert.equal(seen.url, "https://product.test/product/v3/order-drafts");
     assert.equal(seen.headers?.["x-uvp-store-session"], "session-abc");
-    assert.equal(seen.headers?.["idempotency-key"], "idem-1");
+    assert.equal(seen.headers?.["idempotency-key"], undefined);
   });
 
   it("prefers the injected session token provider over the fixed token", async () => {
@@ -314,7 +315,7 @@ describe("product transport", () => {
     assert.match(error.endpoint, /\/orders\/order-1\/stages\/stage-1\/resources\/0xabc$/u);
   });
 
-  it("strictly decodes draft invites and resend responses", async () => {
+  it("strictly decodes draft invites", async () => {
     const invite = {
       inviteId: "invite-1",
       draftId: "draft-1",
@@ -335,18 +336,6 @@ describe("product transport", () => {
       fetcher: async () => jsonResponse({ draft: { draftId: "draft-1" }, slots: [] })
     });
     assert.equal((await expectError(() => missingInvites.getOrderDraft("draft-1"))).kind, "invalid_response");
-
-    const resendClient = createProductClient({
-      baseUrl: "https://product.test",
-      fetcher: async () => jsonResponse({ ...invite, inviteToken: "token-2", nonce: "9" })
-    });
-    assert.equal((await resendClient.resendInvite("invite-1")).inviteToken, "token-2");
-
-    const badResend = createProductClient({
-      baseUrl: "https://product.test",
-      fetcher: async () => jsonResponse({ ...invite, nonce: "9" })
-    });
-    assert.equal((await expectError(() => badResend.resendInvite("invite-1"))).kind, "invalid_response");
   });
 
   it("strictly decodes config catalogs, my orders and attach receipts", async () => {
@@ -424,10 +413,10 @@ describe("product transport", () => {
         });
       }
     });
-    const uploaded = await uploadClient.uploadEvidence(
-      { stageIdentifier: "inspection", content: { encoding: "text", value: "check" } },
-      { idempotencyKey: "idem-evidence" }
-    );
+    const uploaded = await uploadClient.uploadEvidence({
+      stageIdentifier: "inspection",
+      content: { encoding: "text", value: "check" }
+    });
     assert.equal(uploaded.evidence.evidenceId, "ev_1");
     assert.equal(uploadUrl, "https://product.test/product/evidence");
 

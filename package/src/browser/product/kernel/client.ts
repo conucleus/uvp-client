@@ -37,7 +37,6 @@ import type {
   ProductClientOptions,
   ProductRequestOptions,
   RejectStageInviteInput,
-  ResendStageInviteInput,
   StageInviteCreated,
   StageInvitePreview,
   TaskActionView
@@ -92,8 +91,6 @@ export interface ProductClient {
     options?: ProductRequestOptions
   ): Promise<AcceptStageInviteResult>;
   revokeInvite(inviteId: string): Promise<Invite>;
-  /** 重发邀请：旋转 token/nonce 与到期时间；旧 token 立即失效，新 token 只返回一次。 */
-  resendInvite(inviteId: string, input?: ResendStageInviteInput): Promise<StageInviteCreated>;
   /** finalize 第一步：服务端返回 UVPOrderFinalize typed data 与 funded/skipped 段。 */
   prepareFinalize(draftId: string): Promise<FinalizeOrderDraftPreparation>;
   /** finalize 第二步：提交 buyer 对 UVPOrderFinalize 的 EIP-712 签名。 */
@@ -154,7 +151,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
   return {
     async publishConfig(input, requestOptions = {}) {
       const pathname = `${PRODUCT_ROOT}/configs`;
-      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      const body = await transport.request<unknown>("POST", pathname, input);
       return configVersionFrom(body, pathname);
     },
 
@@ -194,7 +191,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async createOrderDraft(input, requestOptions = {}) {
       const pathname = `${PRODUCT_ROOT}/order-drafts`;
-      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      const body = await transport.request<unknown>("POST", pathname, input);
       return draftDetailFrom(body, pathname);
     },
 
@@ -206,7 +203,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async updateOrderDraft(draftId, input, requestOptions = {}) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}`;
-      const body = await transport.request<unknown>("PATCH", pathname, input, requestOptions);
+      const body = await transport.request<unknown>("PATCH", pathname, input);
       return draftDetailFrom(body, pathname);
     },
 
@@ -237,13 +234,13 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async acceptInvite(inviteId, input, requestOptions = {}) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/accept`;
-      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      const body = await transport.request<unknown>("POST", pathname, input);
       return acceptanceFrom(body, pathname);
     },
 
     async rejectInvite(inviteId, input, requestOptions = {}) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/reject`;
-      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      const body = await transport.request<unknown>("POST", pathname, input);
       return acceptanceFrom(body, pathname);
     },
 
@@ -256,16 +253,6 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return record as unknown as Invite;
     },
 
-    async resendInvite(inviteId, input = {}) {
-      const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/resend`;
-      const body = await transport.request<unknown>("POST", pathname, input);
-      const record = requireRecord(body, pathname, "重发邀请响应不是 JSON 对象");
-      requireString(record, "inviteId", pathname, "重发邀请响应缺少 inviteId");
-      requireString(record, "inviteToken", pathname, "重发邀请响应缺少一次性 inviteToken");
-      requireString(record, "nonce", pathname, "重发邀请响应缺少 nonce");
-      return record as unknown as StageInviteCreated;
-    },
-
     async prepareFinalize(draftId) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/finalize/prepare`;
       const body = await transport.request<unknown>("POST", pathname, undefined);
@@ -275,13 +262,13 @@ export function createProductClient(options: ProductClientOptions = {}): Product
     async finalizeWithSignature(draftId, input, requestOptions = {}) {
       // finalize 不发送 body；建单授权由 buyer 的 UVPOrderFinalize 签名承载。
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/finalize`;
-      const body = await transport.request<unknown>("POST", pathname, { signature: input.signature }, requestOptions);
+      const body = await transport.request<unknown>("POST", pathname, { signature: input.signature });
       return finalizeResultFrom(body, pathname);
     },
 
     async attachOrder(draftId, input, requestOptions = {}) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/attach-order`;
-      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      const body = await transport.request<unknown>("POST", pathname, input);
       return attachResultFrom(body, pathname);
     },
 
@@ -352,7 +339,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async uploadEvidence(input, requestOptions = {}) {
       const pathname = PRODUCT_EVIDENCE_ROOT;
-      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      const body = await transport.request<unknown>("POST", pathname, input);
       return evidenceUploadFrom(body, pathname);
     },
 
