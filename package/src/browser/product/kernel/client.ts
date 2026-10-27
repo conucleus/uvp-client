@@ -15,6 +15,7 @@ import type {
   AcceptStageInviteInput,
   AcceptStageInviteResult,
   AttachOrderResult,
+  AuditEventView,
   ConfigValidationResult,
   ConfigVersion,
   FinalizeOrderDraftInput,
@@ -27,6 +28,7 @@ import type {
   Invite,
   OperatorOrderView,
   OrderDraftDetail,
+  OperatorAuditQuery,
   OrderSummary,
   OrderView,
   PublishConfigInput,
@@ -41,6 +43,7 @@ import type {
   StageInvitePreview,
   TaskActionView
 } from "./types.js";
+import { AUDIT_ACTIONS } from "@uvp-eth/product-dto";
 import type {
   AttachOrderInput,
   CreateEvidenceRequestDTO,
@@ -69,6 +72,8 @@ export interface ProductClient {
   listOrders(): Promise<readonly OrderSummary[]>;
   /** operator 订单排查视图（仅 operator 钱包；非 operator 保留服务端 403 operator_required）。 */
   getOperatorOrder(orderId: string): Promise<OperatorOrderView>;
+  /** operator 审计读面（白名单字段，newest first；limit 默认 50/上限 200）。 */
+  getOperatorAudit(query?: OperatorAuditQuery): Promise<readonly AuditEventView[]>;
   /** 任务动作装配（signal.submit 输入；不返回签名，不代签/广播）。 */
   prepareTaskAction(orderId: string, taskId: string): Promise<TaskActionView>;
   createOrderDraft(input: CreateOrderDraftInput, options?: ProductRequestOptions): Promise<OrderDraftDetail>;
@@ -290,6 +295,25 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       const pathname = `${PRODUCT_ROOT}/ops/orders/${segment(orderId)}`;
       const body = await transport.request<unknown>("GET", pathname, undefined);
       return operatorOrderFrom(body, pathname);
+    },
+
+    async getOperatorAudit(query = {}) {
+      const params = new URLSearchParams();
+      if (query.orderId !== undefined) {
+        params.set("orderId", query.orderId);
+      }
+      if (query.actor !== undefined) {
+        params.set("actor", query.actor);
+      }
+      if (query.limit !== undefined) {
+        params.set("limit", String(query.limit));
+      }
+      const search = params.toString();
+      const pathname = `${PRODUCT_ROOT}/ops/audit${search.length > 0 ? `?${search}` : ""}`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      const record = requireRecord(body, pathname, "审计响应不是 JSON 对象");
+      const events = requireArray(record, "events", pathname);
+      return events.map((event) => auditEventFrom(event, pathname));
     },
 
     async prepareTaskAction(orderId, taskId) {
@@ -624,6 +648,27 @@ function evidenceProofFrom(body: unknown, pathname: string): EvidenceProofDTO {
     requireString(record, field, pathname, `证据证明响应缺少 ${field}`);
   }
   return record as unknown as EvidenceProofDTO;
+}
+
+const AUDIT_ACTION_SET: ReadonlySet<unknown> = new Set(AUDIT_ACTIONS);
+
+function auditEventFrom(body: unknown, pathname: string): AuditEventView {
+  const record = requireRecord(body, pathname, "审计事件不是 JSON 对象");
+  for (const field of ["eventId", "actorWallet", "action", "createdAt"] as const) {
+    requireString(record, field, pathname, `审计事件缺少 ${field}`);
+  }
+  if (!AUDIT_ACTION_SET.has(record.action)) {
+    throw invalidResponse(pathname, "审计事件的 action 不在白名单词表");
+  }
+  if (record.chainId !== undefined && (typeof record.chainId !== "number" || !Number.isSafeInteger(record.chainId))) {
+    throw invalidResponse(pathname, "审计事件的 chainId 不是安全整数");
+  }
+  for (const field of ["orderId", "draftId", "inviteId", "ref", "payloadHash", "requestId"] as const) {
+    if (record[field] !== undefined && typeof record[field] !== "string") {
+      throw invalidResponse(pathname, `审计事件的 ${field} 不是字符串`);
+    }
+  }
+  return record as unknown as AuditEventView;
 }
 
 function segment(value: string): string {

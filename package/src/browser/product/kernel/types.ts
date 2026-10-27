@@ -11,6 +11,7 @@ import type {
   AcceptStageInviteResult,
   AttachOrderInput,
   AttachOrderResult,
+  AuditEventView,
   ConfigBundle,
   ConfigFileResourceRef,
   ConfigSlotKind,
@@ -66,6 +67,7 @@ export type {
   AcceptStageInviteResult,
   AttachOrderInput,
   AttachOrderResult,
+  AuditEventView,
   ConfigBundle,
   ConfigFileResourceRef,
   ConfigSlotKind,
@@ -137,6 +139,13 @@ export interface ProductClientOptions {
   readonly sessionToken?: string | undefined;
   /** 每次请求前读取会话 token（接已有客户端的 proveWalletControl 结果）。 */
   readonly getSessionToken?: ProductSessionTokenProvider | undefined;
+}
+
+/** operator 审计查询（字段与 app audit 读面 query 对齐）。 */
+export interface OperatorAuditQuery {
+  readonly orderId?: string | undefined;
+  readonly actor?: string | undefined;
+  readonly limit?: number | undefined;
 }
 
 // ---------------------------------------------------------------------------

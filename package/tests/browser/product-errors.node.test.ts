@@ -497,6 +497,39 @@ describe("product transport", () => {
     );
   });
 
+  it("strictly decodes operator audit events", async () => {
+    let seenUrl = "";
+    const client = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async (input) => {
+        seenUrl = String(input);
+        return jsonResponse({
+          events: [
+            {
+              eventId: "aud_1",
+              chainId: 31337,
+              actorWallet: "0x2222222222222222222222222222222222222222",
+              action: "invite.accept",
+              orderId: `0x${"31".repeat(32)}`,
+              inviteId: "invite-1",
+              createdAt: "2026-10-27T00:00:00.000Z"
+            }
+          ]
+        });
+      }
+    });
+    const events = await client.getOperatorAudit({ orderId: `0x${"31".repeat(32)}`, limit: 10 });
+    assert.equal(events[0]?.action, "invite.accept");
+    assert.match(seenUrl, /\/product\/v3\/ops\/audit\?orderId=/u);
+    assert.match(seenUrl, /limit=10$/u);
+
+    const wrongShape = failingClient(
+      { events: [{ eventId: "aud_1", actorWallet: "0x22", action: "evil.action", createdAt: "now" }] },
+      200
+    );
+    assert.equal((await expectError(() => wrongShape.getOperatorAudit())).kind, "invalid_response");
+  });
+
   it("strictly decodes task action assembly and keeps named failures", async () => {
     const action = {
       orderId: `0x${"31".repeat(32)}`,
