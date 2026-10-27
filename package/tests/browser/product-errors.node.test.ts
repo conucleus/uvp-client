@@ -167,7 +167,7 @@ describe("product transport", () => {
         seen.url = String(input);
         seen.method = init?.method;
         seen.headers = init?.headers as Record<string, string>;
-        return jsonResponse({ draft: { draftId: "draft-1", status: "draft" }, slots: [] });
+        return jsonResponse({ draft: { draftId: "draft-1", status: "draft" }, slots: [], invites: [] });
       }
     });
     await client.createOrderDraft(
@@ -296,5 +296,259 @@ describe("product transport", () => {
     assert.equal(error.kind, "invalid_terms");
     assert.equal(error.errorCode, "fee_override_forbidden");
     assert.equal(error.retryable, false);
+  });
+
+  it("decodes only the four file resource resolution kinds", async () => {
+    const external: ProductFetcher = async () =>
+      jsonResponse({ kind: "external", type: "curator-doc", handle: { name: "std/inspection" } });
+    const client = createProductClient({ baseUrl: "https://product.test", fetcher: external });
+    assert.deepEqual(await client.resolveStageResource("order-1", "stage-1", "0xabc"), {
+      kind: "external",
+      type: "curator-doc",
+      handle: { name: "std/inspection" }
+    });
+
+    const wrongShape = failingClient({ kind: "ok", contentHash: "0x00" }, 200);
+    const error = await expectError(() => wrongShape.resolveStageResource("order-1", "stage-1", "0xabc"));
+    assert.equal(error.kind, "invalid_response");
+    assert.match(error.endpoint, /\/orders\/order-1\/stages\/stage-1\/resources\/0xabc$/u);
+  });
+
+  it("strictly decodes draft invites and resend responses", async () => {
+    const invite = {
+      inviteId: "invite-1",
+      draftId: "draft-1",
+      stageKey: "stage-1",
+      slotKey: "performer",
+      status: "active",
+      expiresAt: "2026-10-28T00:00:00.000Z",
+      createdAt: "2026-10-27T00:00:00.000Z"
+    };
+    const detailClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ draft: { draftId: "draft-1" }, slots: [], invites: [invite] })
+    });
+    assert.equal((await detailClient.getOrderDraft("draft-1")).invites[0]?.status, "active");
+
+    const missingInvites = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ draft: { draftId: "draft-1" }, slots: [] })
+    });
+    assert.equal((await expectError(() => missingInvites.getOrderDraft("draft-1"))).kind, "invalid_response");
+
+    const resendClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ ...invite, inviteToken: "token-2", nonce: "9" })
+    });
+    assert.equal((await resendClient.resendInvite("invite-1")).inviteToken, "token-2");
+
+    const badResend = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ ...invite, nonce: "9" })
+    });
+    assert.equal((await expectError(() => badResend.resendInvite("invite-1"))).kind, "invalid_response");
+  });
+
+  it("strictly decodes config catalogs, my orders and attach receipts", async () => {
+    const configClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () =>
+        jsonResponse({
+          configs: [
+            {
+              configId: "example/order-config",
+              version: "1.0.0",
+              status: "published",
+              configHash: `0x${"11".repeat(32)}`,
+              bundle: { configId: "example/order-config", version: "1.0.0" }
+            }
+          ]
+        })
+    });
+    assert.equal((await configClient.listConfigs())[0]?.configId, "example/order-config");
+
+    const order = {
+      orderId: `0x${"31".repeat(32)}`,
+      draftId: "draft-1",
+      configId: "example/order-config",
+      configVersion: "1.0.0",
+      buyerWallet: "0x2222222222222222222222222222222222222222",
+      role: "buyer",
+      title: "t",
+      currency: "USDT",
+      status: "triggered",
+      createdAt: "2026-10-27T00:00:00.000Z",
+      updatedAt: "2026-10-27T00:00:00.000Z"
+    };
+    const ordersClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ orders: [order] })
+    });
+    assert.equal((await ordersClient.listOrders())[0]?.role, "buyer");
+
+    const badRole = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ orders: [{ ...order, role: "owner" }] })
+    });
+    assert.equal((await expectError(() => badRole.listOrders())).kind, "invalid_response");
+
+    const attachClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () =>
+        jsonResponse({
+          draftId: "draft-1",
+          orderId: order.orderId,
+          planId: `0x${"32".repeat(32)}`,
+          planHash: `0x${"33".repeat(32)}`,
+          stateMachine: "0x1111111111111111111111111111111111111111",
+          status: "triggered",
+          fundedStageKeys: ["inspection"],
+          skippedStageKeys: []
+        })
+    });
+    assert.equal((await attachClient.attachOrder("draft-1", { orderId: order.orderId, planId: `0x${"32".repeat(32)}` })).status, "triggered");
+  });
+
+  it("uploads and reads evidence with strict shapes and a named 404", async () => {
+    let uploadUrl = "";
+    const uploadClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async (input) => {
+        uploadUrl = String(input);
+        return jsonResponse({
+          evidence: { evidenceId: "ev_1", status: "uploaded" },
+          metadata: { evidenceId: "ev_1" },
+          accessPolicy: { evidenceId: "ev_1" },
+          payloadHash: `0x${"11".repeat(32)}`,
+          payloadRef: "uvp-evidence://product/ev_1"
+        });
+      }
+    });
+    const uploaded = await uploadClient.uploadEvidence(
+      { stageIdentifier: "inspection", content: { encoding: "text", value: "check" } },
+      { idempotencyKey: "idem-evidence" }
+    );
+    assert.equal(uploaded.evidence.evidenceId, "ev_1");
+    assert.equal(uploadUrl, "https://product.test/product/evidence");
+
+    const badUpload = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ evidence: { evidenceId: "ev_1" } })
+    });
+    assert.equal((await expectError(() => badUpload.uploadEvidence({}))).kind, "invalid_response");
+
+    const notFound = failingClient({ error: "evidence_not_found", message: "evidence was not found" }, 404);
+    const missing = await expectError(() => notFound.getEvidence("ev_1"));
+    assert.equal(missing.kind, "not_found");
+    assert.equal(missing.errorCode, "evidence_not_found");
+
+    const proofClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () =>
+        jsonResponse({
+          evidenceId: "ev_1",
+          payloadHash: `0x${"11".repeat(32)}`,
+          contentHash: `0x${"22".repeat(32)}`,
+          metadataHash: `0x${"33".repeat(32)}`,
+          payloadRef: "uvp-evidence://product/ev_1",
+          storageURI: "local://evidence/ev_1",
+          verificationStatus: "matched"
+        })
+    });
+    assert.equal((await proofClient.getEvidenceProof("ev_1")).verificationStatus, "matched");
+  });
+
+  it("decodes operator order views and config dry-run results strictly", async () => {
+    const opsClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () =>
+        jsonResponse({
+          orderId: `0x${"31".repeat(32)}`,
+          planId: `0x${"32".repeat(32)}`,
+          status: "triggered",
+          dataState: "ok",
+          stages: [{ stageKey: "inspection", index: 0, status: "active" }],
+          exceptions: []
+        })
+    });
+    assert.equal((await opsClient.getOperatorOrder(`0x${"31".repeat(32)}`)).stages[0]?.stageKey, "inspection");
+
+    const forbidden = failingClient({ error: "operator_required", message: "operator wallet required" }, 403);
+    const denied = await expectError(() => forbidden.getOperatorOrder(`0x${"31".repeat(32)}`));
+    assert.equal(denied.kind, "forbidden");
+    assert.equal(denied.errorCode, "operator_required");
+
+    const validateClient = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () =>
+        jsonResponse({
+          ok: false,
+          issues: [{ path: "fileResources[0]", code: "invalid_request", message: "file resource handle requires a type" }]
+        })
+    });
+    const validation = await validateClient.validateConfigBundle({
+      config: {
+        configId: "used-car/validate-test",
+        version: "1.0.0",
+        status: "published",
+        slots: [{ key: "buyer", kind: "participant" }],
+        stages: [{ key: "inspection" }]
+      }
+    });
+    assert.equal(validation.issues[0]?.path, "fileResources[0]");
+    assert.equal(validation.issues[0]?.code, "invalid_request");
+
+    const badValidation = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ ok: "yes", issues: [] })
+    });
+    assert.equal(
+      (await expectError(() => badValidation.validateConfigBundle({ config: { configId: "c", version: "1.0.0", status: "published", slots: [], stages: [] } }))).kind,
+      "invalid_response"
+    );
+  });
+
+  it("strictly decodes task action assembly and keeps named failures", async () => {
+    const action = {
+      orderId: `0x${"31".repeat(32)}`,
+      taskId: "task:0x31:inspection:performer:perform_stage",
+      stageKey: "inspection",
+      slotKey: "performer",
+      kind: "perform_stage",
+      chainId: 31337,
+      stateMachineAddress: "0x1111111111111111111111111111111111111111",
+      planId: `0x${"32".repeat(32)}`,
+      planHash: `0x${"33".repeat(32)}`,
+      submitter: "0x2222222222222222222222222222222222222222",
+      signals: [
+        {
+          signalName: "report_ready",
+          admissionId: `0x${"44".repeat(32)}`,
+          stageId: `0x${"55".repeat(32)}`,
+          sourceId: `0x${"66".repeat(32)}`,
+          signalId: `0x${"77".repeat(32)}`
+        }
+      ],
+      nextAction: "履约/提交"
+    };
+    const client = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse(action)
+    });
+    assert.equal((await client.prepareTaskAction(action.orderId, action.taskId)).signals[0]?.signalName, "report_ready");
+
+    const wrongShape = createProductClient({
+      baseUrl: "https://product.test",
+      fetcher: async () => jsonResponse({ ...action, chainId: "31337" })
+    });
+    assert.equal((await expectError(() => wrongShape.prepareTaskAction(action.orderId, action.taskId))).kind, "invalid_response");
+
+    const noSignal = failingClient({ error: "no_signal_for_task", message: "no admission for task" }, 409);
+    assert.equal((await expectError(() => noSignal.prepareTaskAction(action.orderId, action.taskId))).errorCode, "no_signal_for_task");
+
+    const unavailable = failingClient({ error: "plan_artifact_unavailable", message: "plan artifact missing" }, 503);
+    const error = await expectError(() => unavailable.prepareTaskAction(action.orderId, action.taskId));
+    assert.equal(error.kind, "unavailable");
+    assert.equal(error.retryable, true);
   });
 });

@@ -14,30 +14,43 @@ import {
 import type {
   AcceptStageInviteInput,
   AcceptStageInviteResult,
+  AttachOrderResult,
+  ConfigValidationResult,
   ConfigVersion,
   FinalizeOrderDraftInput,
   CreateStageInviteInput,
+  EvidenceProofDTO,
+  EvidenceRecordDTO,
+  EvidenceUploadResponseDTO,
   FinalizeOrderDraftPreparation,
   FinalizeOrderDraftResult,
   Invite,
+  OperatorOrderView,
   OrderDraftDetail,
+  OrderSummary,
   OrderView,
   PublishConfigInput,
   ResourceListView,
+  ResourceResolutionView,
   StageViewResponse,
   TaskListView,
   ProductClientOptions,
   ProductRequestOptions,
   RejectStageInviteInput,
+  ResendStageInviteInput,
   StageInviteCreated,
-  StageInvitePreview
+  StageInvitePreview,
+  TaskActionView
 } from "./types.js";
 import type {
+  AttachOrderInput,
+  CreateEvidenceRequestDTO,
   CreateOrderDraftInput,
   UpdateOrderDraftInput
 } from "@uvp-eth/product-dto";
 
 const PRODUCT_ROOT = "/product/v3";
+const PRODUCT_EVIDENCE_ROOT = "/product/evidence";
 
 export interface GetConfigOptions {
   /** 用 /versions/:version 别名路径（服务端两条读路径等价）。 */
@@ -49,6 +62,16 @@ export interface ProductClient {
   publishConfigVersion(configId: string, version: string): Promise<ConfigVersion>;
   deprecateConfig(configId: string, version: string): Promise<ConfigVersion>;
   getConfig(configId: string, version: string, options?: GetConfigOptions): Promise<ConfigVersion>;
+  /** 已发布配置目录（只读，configId/version 稳定排序）。 */
+  listConfigs(): Promise<readonly ConfigVersion[]>;
+  /** 配置发布前置校验（dry-run，与 publish 共用解析逻辑；不落库/不注册 plan）。 */
+  validateConfigBundle(input: PublishConfigInput): Promise<ConfigValidationResult>;
+  /** 我的订单（服务端按会话钱包裁剪为 buyer/participant；陌生钱包的订单不返回）。 */
+  listOrders(): Promise<readonly OrderSummary[]>;
+  /** operator 订单排查视图（仅 operator 钱包；非 operator 保留服务端 403 operator_required）。 */
+  getOperatorOrder(orderId: string): Promise<OperatorOrderView>;
+  /** 任务动作装配（signal.submit 输入；不返回签名，不代签/广播）。 */
+  prepareTaskAction(orderId: string, taskId: string): Promise<TaskActionView>;
   createOrderDraft(input: CreateOrderDraftInput, options?: ProductRequestOptions): Promise<OrderDraftDetail>;
   getOrderDraft(draftId: string): Promise<OrderDraftDetail>;
   updateOrderDraft(
@@ -69,6 +92,8 @@ export interface ProductClient {
     options?: ProductRequestOptions
   ): Promise<AcceptStageInviteResult>;
   revokeInvite(inviteId: string): Promise<Invite>;
+  /** 重发邀请：旋转 token/nonce 与到期时间；旧 token 立即失效，新 token 只返回一次。 */
+  resendInvite(inviteId: string, input?: ResendStageInviteInput): Promise<StageInviteCreated>;
   /** finalize 第一步：服务端返回 UVPOrderFinalize typed data 与 funded/skipped 段。 */
   prepareFinalize(draftId: string): Promise<FinalizeOrderDraftPreparation>;
   /** finalize 第二步：提交 buyer 对 UVPOrderFinalize 的 EIP-712 签名。 */
@@ -77,6 +102,12 @@ export interface ProductClient {
     input: FinalizeOrderDraftInput,
     options?: ProductRequestOptions
   ): Promise<FinalizeOrderDraftResult>;
+  /** attach 已出生的链上订单到草稿（birth 仍由 buyer/relayer 完成；本方法只登记业务行）。 */
+  attachOrder(
+    draftId: string,
+    input: AttachOrderInput,
+    options?: ProductRequestOptions
+  ): Promise<AttachOrderResult>;
   /** 订单读面（服务端按 scope 裁剪；字段随 scope 缺失属正常）。 */
   getOrder(orderId: string): Promise<OrderView>;
   /** 单阶段读面（服务端投影）。 */
@@ -84,8 +115,23 @@ export interface ProductClient {
   /** 本单任务投影（服务端派生，不是状态机）。 */
   listTasks(orderId: string): Promise<TaskListView>;
   listStageTasks(orderId: string, stageKey: string): Promise<TaskListView>;
-  /** 阶段 fileResources 句柄（无 locator/URI）。 */
+  /** 阶段 fileResources 句柄（type + type 定义字段；服务端不代抓、不担保内容）。 */
   listStageResources(orderId: string, stageKey: string): Promise<ResourceListView>;
+  /** 单个句柄的解析结果（inline/link/app_evidence/external 四态；错误走 HTTP 错误码）。 */
+  resolveStageResource(
+    orderId: string,
+    stageKey: string,
+    handleKey: string
+  ): Promise<ResourceResolutionView>;
+  /** 上传证据（JSON body；会话与 Idempotency-Key 由 transport 透传）。 */
+  uploadEvidence(
+    input: CreateEvidenceRequestDTO,
+    options?: ProductRequestOptions
+  ): Promise<EvidenceUploadResponseDTO>;
+  /** 读取证据元数据；404 由 ProductError 具名 evidence_not_found 保留，不当作空。 */
+  getEvidence(evidenceId: string): Promise<EvidenceRecordDTO>;
+  /** 读取证据证明（hash、绑定与 verificationStatus）。 */
+  getEvidenceProof(evidenceId: string): Promise<EvidenceProofDTO>;
   /** 客户端当前会话 token（getSessionToken 注入时返回注入值）。 */
   currentSessionToken(): string | undefined;
   /** 恢复/清除本地会话 token；返回是否真的改变了持有值。 */
@@ -130,6 +176,20 @@ export function createProductClient(options: ProductClientOptions = {}): Product
         : `${PRODUCT_ROOT}/configs/${segment(configId)}/${segment(version)}`;
       const body = await transport.request<unknown>("GET", pathname, undefined);
       return configVersionFrom(body, pathname);
+    },
+
+    async listConfigs() {
+      const pathname = `${PRODUCT_ROOT}/configs`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      const record = requireRecord(body, pathname, "配置目录响应不是 JSON 对象");
+      const configs = requireArray(record, "configs", pathname);
+      return configs.map((config) => configVersionFrom(config, pathname));
+    },
+
+    async validateConfigBundle(input) {
+      const pathname = `${PRODUCT_ROOT}/configs/validate`;
+      const body = await transport.request<unknown>("POST", pathname, input);
+      return configValidationFrom(body, pathname);
     },
 
     async createOrderDraft(input, requestOptions = {}) {
@@ -196,6 +256,16 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return record as unknown as Invite;
     },
 
+    async resendInvite(inviteId, input = {}) {
+      const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/resend`;
+      const body = await transport.request<unknown>("POST", pathname, input);
+      const record = requireRecord(body, pathname, "重发邀请响应不是 JSON 对象");
+      requireString(record, "inviteId", pathname, "重发邀请响应缺少 inviteId");
+      requireString(record, "inviteToken", pathname, "重发邀请响应缺少一次性 inviteToken");
+      requireString(record, "nonce", pathname, "重发邀请响应缺少 nonce");
+      return record as unknown as StageInviteCreated;
+    },
+
     async prepareFinalize(draftId) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/finalize/prepare`;
       const body = await transport.request<unknown>("POST", pathname, undefined);
@@ -209,11 +279,36 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return finalizeResultFrom(body, pathname);
     },
 
+    async attachOrder(draftId, input, requestOptions = {}) {
+      const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/attach-order`;
+      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      return attachResultFrom(body, pathname);
+    },
 
     async getOrder(orderId) {
       const pathname = `${PRODUCT_ROOT}/orders/${segment(orderId)}`;
       const body = await transport.request<unknown>("GET", pathname, undefined);
       return orderViewFrom(body, pathname);
+    },
+
+    async listOrders() {
+      const pathname = `${PRODUCT_ROOT}/orders`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      const record = requireRecord(body, pathname, "订单列表响应不是 JSON 对象");
+      const orders = requireArray(record, "orders", pathname);
+      return orders.map((order) => orderSummaryFrom(order, pathname));
+    },
+
+    async getOperatorOrder(orderId) {
+      const pathname = `${PRODUCT_ROOT}/ops/orders/${segment(orderId)}`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      return operatorOrderFrom(body, pathname);
+    },
+
+    async prepareTaskAction(orderId, taskId) {
+      const pathname = `${PRODUCT_ROOT}/orders/${segment(orderId)}/tasks/${segment(taskId)}/action`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      return taskActionFrom(body, pathname);
     },
 
     async getOrderStage(orderId, stageKey) {
@@ -249,6 +344,30 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       return record as unknown as ResourceListView;
     },
 
+    async resolveStageResource(orderId, stageKey, handleKey) {
+      const pathname = `${PRODUCT_ROOT}/orders/${segment(orderId)}/stages/${segment(stageKey)}/resources/${segment(handleKey)}`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      return resolutionViewFrom(body, pathname);
+    },
+
+    async uploadEvidence(input, requestOptions = {}) {
+      const pathname = PRODUCT_EVIDENCE_ROOT;
+      const body = await transport.request<unknown>("POST", pathname, input, requestOptions);
+      return evidenceUploadFrom(body, pathname);
+    },
+
+    async getEvidence(evidenceId) {
+      const pathname = `${PRODUCT_EVIDENCE_ROOT}/${segment(evidenceId)}`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      return evidenceRecordFrom(body, pathname);
+    },
+
+    async getEvidenceProof(evidenceId) {
+      const pathname = `${PRODUCT_EVIDENCE_ROOT}/${segment(evidenceId)}/proof`;
+      const body = await transport.request<unknown>("GET", pathname, undefined);
+      return evidenceProofFrom(body, pathname);
+    },
+
     currentSessionToken() {
       return transport.currentSessionToken();
     },
@@ -274,6 +393,13 @@ function draftDetailFrom(body: unknown, pathname: string): OrderDraftDetail {
   const draft = requireRecord(record.draft, pathname, "草稿响应缺少 draft");
   requireString(draft, "draftId", pathname, "草稿响应缺少 draftId");
   requireArray(record, "slots", pathname);
+  const invites = requireArray(record, "invites", pathname);
+  for (const entry of invites) {
+    const invite = requireRecord(entry, pathname, "草稿响应的 invites 条目不是 JSON 对象");
+    for (const field of ["inviteId", "status", "stageKey", "slotKey", "expiresAt", "createdAt"] as const) {
+      requireString(invite, field, pathname, `草稿响应的 invite 缺少 ${field}`);
+    }
+  }
   return record as unknown as OrderDraftDetail;
 }
 
@@ -318,6 +444,19 @@ function finalizeResultFrom(body: unknown, pathname: string): FinalizeOrderDraft
   return record as unknown as FinalizeOrderDraftResult;
 }
 
+function attachResultFrom(body: unknown, pathname: string): AttachOrderResult {
+  const record = requireRecord(body, pathname, "attach 响应不是 JSON 对象");
+  for (const field of ["draftId", "orderId", "planId", "planHash", "stateMachine"] as const) {
+    requireString(record, field, pathname, `attach 响应缺少 ${field}`);
+  }
+  if (record.status !== "triggered") {
+    throw invalidResponse(pathname, "attach 响应的订单状态不是 triggered");
+  }
+  requireArray(record, "fundedStageKeys", pathname);
+  requireArray(record, "skippedStageKeys", pathname);
+  return record as unknown as AttachOrderResult;
+}
+
 const DATA_STATES: ReadonlySet<unknown> = new Set(["ok", "none", "pending", "unknown"]);
 
 function requireDataState(record: Readonly<Record<string, unknown>>, pathname: string): void {
@@ -334,11 +473,170 @@ function orderViewFrom(body: unknown, pathname: string): OrderView {
   return record as unknown as OrderView;
 }
 
+const ORDER_SUMMARY_ROLES: ReadonlySet<unknown> = new Set(["buyer", "participant"]);
+
+function orderSummaryFrom(body: unknown, pathname: string): OrderSummary {
+  const record = requireRecord(body, pathname, "订单摘要不是 JSON 对象");
+  for (const field of [
+    "orderId",
+    "draftId",
+    "configId",
+    "configVersion",
+    "buyerWallet",
+    "title",
+    "currency",
+    "status",
+    "createdAt",
+    "updatedAt"
+  ] as const) {
+    requireString(record, field, pathname, `订单摘要缺少 ${field}`);
+  }
+  if (!ORDER_SUMMARY_ROLES.has(record.role)) {
+    throw invalidResponse(pathname, "订单摘要 role 不是 buyer/participant");
+  }
+  return record as unknown as OrderSummary;
+}
+
+function operatorOrderFrom(body: unknown, pathname: string): OperatorOrderView {
+  const record = requireRecord(body, pathname, "operator 订单响应不是 JSON 对象");
+  requireString(record, "orderId", pathname, "operator 订单响应缺少 orderId");
+  requireDataState(record, pathname);
+  const stages = requireArray(record, "stages", pathname);
+  for (const entry of stages) {
+    const stage = requireRecord(entry, pathname, "operator 订单 stages 条目不是 JSON 对象");
+    requireString(stage, "stageKey", pathname, "operator stage 缺少 stageKey");
+    requireString(stage, "status", pathname, "operator stage 缺少 status");
+    if (typeof stage.index !== "number" || !Number.isSafeInteger(stage.index)) {
+      throw invalidResponse(pathname, "operator stage 的 index 不是安全整数");
+    }
+  }
+  const exceptions = requireArray(record, "exceptions", pathname);
+  for (const entry of exceptions) {
+    const exception = requireRecord(entry, pathname, "operator 订单 exceptions 条目不是 JSON 对象");
+    requireString(exception, "code", pathname, "operator exception 缺少 code");
+    if (typeof exception.count !== "number" || !Number.isSafeInteger(exception.count)) {
+      throw invalidResponse(pathname, "operator exception 的 count 不是安全整数");
+    }
+  }
+  return record as unknown as OperatorOrderView;
+}
+
+function configValidationFrom(body: unknown, pathname: string): ConfigValidationResult {
+  const record = requireRecord(body, pathname, "配置校验响应不是 JSON 对象");
+  if (typeof record.ok !== "boolean") {
+    throw invalidResponse(pathname, "配置校验响应缺少布尔 ok");
+  }
+  const issues = requireArray(record, "issues", pathname);
+  for (const entry of issues) {
+    const issue = requireRecord(entry, pathname, "配置校验 issue 不是 JSON 对象");
+    requireString(issue, "code", pathname, "配置校验 issue 缺少 code");
+    requireString(issue, "message", pathname, "配置校验 issue 缺少 message");
+    if (issue.path !== undefined && typeof issue.path !== "string") {
+      throw invalidResponse(pathname, "配置校验 issue 的 path 不是字符串");
+    }
+  }
+  return record as unknown as ConfigValidationResult;
+}
+
+const TASK_KINDS: ReadonlySet<unknown> = new Set(["accept_invite", "perform_stage"]);
+
+function taskActionFrom(body: unknown, pathname: string): TaskActionView {
+  const record = requireRecord(body, pathname, "任务动作响应不是 JSON 对象");
+  for (const field of [
+    "orderId",
+    "taskId",
+    "stageKey",
+    "slotKey",
+    "stateMachineAddress",
+    "planId",
+    "planHash",
+    "submitter",
+    "nextAction"
+  ] as const) {
+    requireString(record, field, pathname, `任务动作响应缺少 ${field}`);
+  }
+  if (!TASK_KINDS.has(record.kind)) {
+    throw invalidResponse(pathname, "任务动作响应的 kind 不是 accept_invite/perform_stage");
+  }
+  if (typeof record.chainId !== "number" || !Number.isSafeInteger(record.chainId) || record.chainId <= 0) {
+    throw invalidResponse(pathname, "任务动作响应的 chainId 不是合法链 id");
+  }
+  const signals = requireArray(record, "signals", pathname);
+  for (const entry of signals) {
+    const signal = requireRecord(entry, pathname, "任务动作 signals 条目不是 JSON 对象");
+    for (const field of ["signalName", "admissionId", "stageId", "sourceId", "signalId"] as const) {
+      requireString(signal, field, pathname, `任务动作 signal 缺少 ${field}`);
+    }
+  }
+  return record as unknown as TaskActionView;
+}
+
 function taskListFrom(body: unknown, pathname: string): TaskListView {
   const record = requireRecord(body, pathname, "任务响应不是 JSON 对象");
   requireArray(record, "items", pathname);
   requireDataState(record, pathname);
   return record as unknown as TaskListView;
+}
+
+function resolutionViewFrom(body: unknown, pathname: string): ResourceResolutionView {
+  const record = requireRecord(body, pathname, "阶段资源解析响应不是 JSON 对象");
+  switch (record.kind) {
+    case "inline":
+      return { kind: "inline", text: requireString(record, "text", pathname, "inline 句柄响应缺少 text") };
+    case "link":
+      return { kind: "link", url: requireString(record, "url", pathname, "link 句柄响应缺少 url") };
+    case "app_evidence": {
+      const ref = requireString(record, "ref", pathname, "app_evidence 响应缺少 ref");
+      if (record.contentHash === undefined) {
+        return { kind: "app_evidence", ref };
+      }
+      if (typeof record.contentHash !== "string") {
+        throw invalidResponse(pathname, "app_evidence 响应的 contentHash 不是字符串");
+      }
+      return { kind: "app_evidence", ref, contentHash: record.contentHash };
+    }
+    case "external":
+      return {
+        kind: "external",
+        type: requireString(record, "type", pathname, "external 句柄响应缺少 type"),
+        handle: requireRecord(record.handle, pathname, "external 句柄响应缺少 handle 对象"),
+      };
+    default:
+      throw invalidResponse(pathname, "阶段资源解析响应的 kind 不是 inline/link/app_evidence/external");
+  }
+}
+
+function evidenceRecordFrom(body: unknown, pathname: string): EvidenceRecordDTO {
+  const record = requireRecord(body, pathname, "证据响应不是 JSON 对象");
+  const evidence = requireRecord(record.evidence, pathname, "证据响应缺少 evidence");
+  requireString(evidence, "evidenceId", pathname, "证据响应缺少 evidence.evidenceId");
+  requireString(evidence, "status", pathname, "证据响应缺少 evidence.status");
+  requireRecord(record.metadata, pathname, "证据响应缺少 metadata");
+  requireRecord(record.accessPolicy, pathname, "证据响应缺少 accessPolicy");
+  return record as unknown as EvidenceRecordDTO;
+}
+
+function evidenceUploadFrom(body: unknown, pathname: string): EvidenceUploadResponseDTO {
+  const record = evidenceRecordFrom(body, pathname) as unknown as Record<string, unknown>;
+  requireString(record, "payloadHash", pathname, "证据上传响应缺少 payloadHash");
+  requireString(record, "payloadRef", pathname, "证据上传响应缺少 payloadRef");
+  return record as unknown as EvidenceUploadResponseDTO;
+}
+
+function evidenceProofFrom(body: unknown, pathname: string): EvidenceProofDTO {
+  const record = requireRecord(body, pathname, "证据证明响应不是 JSON 对象");
+  for (const field of [
+    "evidenceId",
+    "payloadHash",
+    "contentHash",
+    "metadataHash",
+    "payloadRef",
+    "storageURI",
+    "verificationStatus"
+  ] as const) {
+    requireString(record, field, pathname, `证据证明响应缺少 ${field}`);
+  }
+  return record as unknown as EvidenceProofDTO;
 }
 
 function segment(value: string): string {

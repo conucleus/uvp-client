@@ -69,12 +69,12 @@ export function configBundleFixture(): ConfigBundle {
         funded: true,
         slots: { "slot-c": "阶段 C" },
         senders: ["slot-a", "slot-b"],
-        fileResources: [{ ref: "std/stage-c" }],
+        fileResources: [{ type: "curator-doc", ref: "std/stage-c" }],
       }
     ],
     fileResources: [
-      { name: "std/stage-b", version: "1.0.0", hash: STANDARD_HASH, ref: "standards/stage-b.md" },
-      { name: "std/stage-c", version: "1.0.0", hash: ALT_STANDARD_HASH, ref: "standards/stage-c.md" }
+      { type: "curator-doc", name: "std/stage-b", version: "1.0.0", hash: STANDARD_HASH, ref: "standards/stage-b.md" },
+      { type: "curator-doc", name: "std/stage-c", version: "1.0.0", hash: ALT_STANDARD_HASH, ref: "standards/stage-c.md" }
     ],
     stageProfiles: { default: ["stage-a", "stage-b", "stage-c"] },
     defaultProfile: "default"

@@ -9,27 +9,42 @@ import type {
 import type {
   AcceptStageInviteInput,
   AcceptStageInviteResult,
+  AttachOrderInput,
+  AttachOrderResult,
   ConfigBundle,
   ConfigFileResourceRef,
   ConfigSlotKind,
   ConfigSlot,
   ConfigSlotVisibility,
   ConfigStage,
+  ConfigValidationIssue,
+  ConfigValidationResult,
   ConfigVersion,
   CreateOrderDraftInput,
+  CreateEvidenceRequestDTO,
   CreateStageInviteInput,
+  DataState,
+  EvidenceProofDTO,
+  EvidenceRecordDTO,
+  EvidenceUploadResponseDTO,
   FinalizeOrderDraftInput,
   FinalizeOrderDraftPreparation,
   FinalizeOrderDraftResult,
+  HandleView,
   Invite,
   OrderBirthStatus,
+  OrderErrorCode,
   OrderDraftDetail,
   OrderDraftStatus,
   OrderDraft,
   OrderStage,
   Order,
+  OperatorOrderView,
   OrderStageDetail,
+  OrderSummary,
   RejectStageInviteInput,
+  ResendStageInviteInput,
+  ResourceResolutionView,
   StageInviteCreated,
   StageInvitePreview,
   StageInviteStatus,
@@ -39,6 +54,8 @@ import type {
   StageTermsInput,
   StageTerms,
   StageWindowValues,
+  TaskActionSignal,
+  TaskActionView,
   UpdateOrderDraftInput
 } from "@uvp-eth/product-dto";
 
@@ -48,27 +65,42 @@ export type {
   ProductSessionTokenProvider,
   AcceptStageInviteInput,
   AcceptStageInviteResult,
+  AttachOrderInput,
+  AttachOrderResult,
   ConfigBundle,
   ConfigFileResourceRef,
   ConfigSlotKind,
   ConfigSlot,
   ConfigSlotVisibility,
   ConfigStage,
+  ConfigValidationIssue,
+  ConfigValidationResult,
   ConfigVersion,
   CreateOrderDraftInput as CreateOrderDraftKernelInput,
+  CreateEvidenceRequestDTO,
   CreateStageInviteInput,
+  DataState,
+  EvidenceProofDTO,
+  EvidenceRecordDTO,
+  EvidenceUploadResponseDTO,
   FinalizeOrderDraftInput,
   FinalizeOrderDraftPreparation,
   FinalizeOrderDraftResult,
+  HandleView,
   Invite,
   OrderBirthStatus,
+  OrderErrorCode,
   OrderDraftDetail,
   OrderDraftStatus,
   OrderDraft,
   OrderStage,
   Order,
+  OperatorOrderView,
   OrderStageDetail,
+  OrderSummary,
   RejectStageInviteInput,
+  ResendStageInviteInput,
+  ResourceResolutionView,
   StageInviteCreated,
   StageInvitePreview,
   StageInviteStatus,
@@ -78,6 +110,8 @@ export type {
   StageTermsInput,
   StageTerms,
   StageWindowValues,
+  TaskActionSignal,
+  TaskActionView,
   UpdateOrderDraftInput as UpdateOrderDraftKernelInput
 };
 
@@ -112,8 +146,6 @@ export interface ProductClientOptions {
 // 客户端只做结构校验与展示，不自行放行/补字段。
 // ---------------------------------------------------------------------------
 
-export type DataState = "ok" | "none" | "pending" | "unknown";
-
 export interface StandardView {
   readonly name: string;
   readonly version?: string;
@@ -127,12 +159,6 @@ export interface SlotView {
   readonly status: string;
   readonly wallet?: string;
   readonly contactRef?: string;
-}
-
-export interface HandleView {
-  readonly handleKey: string;
-  readonly version?: string;
-  readonly hash?: string;
 }
 
 export interface OrderStageView {

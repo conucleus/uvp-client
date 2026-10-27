@@ -3,6 +3,7 @@
 // 与 chain-services src/order/canonical.ts 同口径；stageId 只能来自服务端事实
 // （草稿/订单），本模块绝不自算 keccak。
 
+import { fileResourceHandleKey } from "@uvp-eth/product-dto";
 import type {
   ConfigBundle,
   ConfigSlot,
@@ -204,21 +205,33 @@ function resolveStandards(bundle: ConfigBundle, stage: ConfigStage): readonly Fl
     ? hashes as Readonly<Record<string, unknown>>
     : undefined;
   return (stage.fileResources ?? []).map((resource) => {
-    const refName = typeof resource === "string" ? resource : resource.ref;
-    const declared = (bundle.fileResources ?? []).find(
-      (candidate) => candidate.name === refName || candidate.ref === refName
-    );
-    const declaredHash = typeof resource === "string" ? undefined : resource.hash;
-    const hashed = hashTable?.[refName] ?? declaredHash ?? declared?.hash;
+    const handle = typeof resource === "string" ? undefined : resource;
+    const refName = handle === undefined
+      ? (resource as string)
+      : optionalString(handle.name) ?? optionalString(handle.ref);
+    const declared = refName === undefined
+      ? undefined
+      : (bundle.fileResources ?? []).find(
+          (candidate) => candidate.name === refName || candidate.ref === refName
+        );
+    const declaredHash = handle === undefined ? undefined : optionalString(handle.hash);
+    const hashed = (refName === undefined ? undefined : hashTable?.[refName]) ?? declaredHash ?? optionalString(declared?.hash);
     const hash = typeof hashed === "string" ? hashed : undefined;
+    const version = optionalString(declared?.version);
+    const ref = optionalString(declared?.ref);
+    const fallbackName = handle === undefined ? (resource as string) : fileResourceHandleKey(handle);
     return {
-      name: (typeof resource === "string" ? undefined : resource.name) ?? declared?.name ?? refName,
-      ...(declared?.version !== undefined ? { version: declared.version } : {}),
+      name: optionalString(handle?.name) ?? optionalString(declared?.name) ?? fallbackName,
+      ...(version !== undefined ? { version } : {}),
       ...(hash !== undefined ? { hash } : {}),
-      ...(declared?.ref !== undefined ? { ref: declared.ref } : {}),
+      ...(ref !== undefined ? { ref } : {}),
       resolvable: isStandardHash(hash)
     };
   });
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 /** 从已摊平配置取单段；缺失返回 undefined（由调用方显式报错，不造默认段）。 */
