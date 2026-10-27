@@ -18,8 +18,6 @@ import type {
   ConfigSlot,
   ConfigSlotVisibility,
   ConfigStage,
-  ConfigValidationIssue,
-  ConfigValidationResult,
   ConfigVersion,
   CreateOrderDraftInput,
   CreateEvidenceRequestDTO,
@@ -74,8 +72,6 @@ export type {
   ConfigSlot,
   ConfigSlotVisibility,
   ConfigStage,
-  ConfigValidationIssue,
-  ConfigValidationResult,
   ConfigVersion,
   CreateOrderDraftInput as CreateOrderDraftKernelInput,
   CreateEvidenceRequestDTO,
@@ -115,19 +111,6 @@ export type {
   UpdateOrderDraftInput as UpdateOrderDraftKernelInput
 };
 
-/**
- * 配置发布入参：服务端接受 `{config, status?, configHash?}`（也接受裸 bundle，
- * 内核只暴露带 `config` 的显式形态，避免与状态字段混淆）。
- */
-export interface PublishConfigInput {
-  readonly config: ConfigBundle;
-  readonly status?: "draft" | "published" | undefined;
-  /** 可选：客户端已有权威 hash 时回呈，服务端不一致会 422 config_hash_mismatch。 */
-  readonly configHash?: string | undefined;
-  /** 发布时登记已编译/注册的 UVP plan；与 planHash 必须成对出现，订单复用它。 */
-  readonly planId?: string | undefined;
-  readonly planHash?: string | undefined;
-}
 
 export interface ProductClientOptions {
   /** 参与者服务基地址；缺省直接抛错，不回退任何样例数据。 */

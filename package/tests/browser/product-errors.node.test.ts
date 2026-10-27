@@ -467,34 +467,6 @@ describe("product transport", () => {
     assert.equal(denied.kind, "forbidden");
     assert.equal(denied.errorCode, "operator_required");
 
-    const validateClient = createProductClient({
-      baseUrl: "https://product.test",
-      fetcher: async () =>
-        jsonResponse({
-          ok: false,
-          issues: [{ path: "fileResources[0]", code: "invalid_request", message: "file resource handle requires a type" }]
-        })
-    });
-    const validation = await validateClient.validateConfigBundle({
-      config: {
-        configId: "used-car/validate-test",
-        version: "1.0.0",
-        status: "published",
-        slots: [{ key: "buyer", kind: "participant" }],
-        stages: [{ key: "inspection" }]
-      }
-    });
-    assert.equal(validation.issues[0]?.path, "fileResources[0]");
-    assert.equal(validation.issues[0]?.code, "invalid_request");
-
-    const badValidation = createProductClient({
-      baseUrl: "https://product.test",
-      fetcher: async () => jsonResponse({ ok: "yes", issues: [] })
-    });
-    assert.equal(
-      (await expectError(() => badValidation.validateConfigBundle({ config: { configId: "c", version: "1.0.0", status: "published", slots: [], stages: [] } }))).kind,
-      "invalid_response"
-    );
   });
 
   it("strictly decodes operator audit events", async () => {

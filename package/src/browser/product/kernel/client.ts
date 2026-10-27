@@ -16,7 +16,6 @@ import type {
   AcceptStageInviteResult,
   AttachOrderResult,
   AuditEventView,
-  ConfigValidationResult,
   ConfigVersion,
   FinalizeOrderDraftInput,
   CreateStageInviteInput,
@@ -31,7 +30,6 @@ import type {
   OperatorAuditQuery,
   OrderSummary,
   OrderView,
-  PublishConfigInput,
   ResourceListView,
   ResourceResolutionView,
   StageViewResponse,
@@ -60,14 +58,10 @@ export interface GetConfigOptions {
 }
 
 export interface ProductClient {
-  publishConfig(input: PublishConfigInput, options?: ProductRequestOptions): Promise<ConfigVersion>;
-  publishConfigVersion(configId: string, version: string): Promise<ConfigVersion>;
-  deprecateConfig(configId: string, version: string): Promise<ConfigVersion>;
   getConfig(configId: string, version: string, options?: GetConfigOptions): Promise<ConfigVersion>;
   /** 已发布配置目录（只读，configId/version 稳定排序）。 */
   listConfigs(): Promise<readonly ConfigVersion[]>;
   /** 配置发布前置校验（dry-run，与 publish 共用解析逻辑；不落库/不注册 plan）。 */
-  validateConfigBundle(input: PublishConfigInput): Promise<ConfigValidationResult>;
   /** 我的订单（服务端按会话钱包裁剪为 buyer/participant；陌生钱包的订单不返回）。 */
   listOrders(): Promise<readonly OrderSummary[]>;
   /** operator 订单排查视图（仅 operator 钱包；非 operator 保留服务端 403 operator_required）。 */
@@ -154,24 +148,6 @@ export function createProductClient(options: ProductClientOptions = {}): Product
   });
 
   return {
-    async publishConfig(input, requestOptions = {}) {
-      const pathname = `${PRODUCT_ROOT}/configs`;
-      const body = await transport.request<unknown>("POST", pathname, input);
-      return configVersionFrom(body, pathname);
-    },
-
-    async publishConfigVersion(configId, version) {
-      const pathname = `${PRODUCT_ROOT}/configs/${segment(configId)}/${segment(version)}/publish`;
-      const body = await transport.request<unknown>("POST", pathname, undefined);
-      return configVersionFrom(body, pathname);
-    },
-
-    async deprecateConfig(configId, version) {
-      const pathname = `${PRODUCT_ROOT}/configs/${segment(configId)}/${segment(version)}/deprecate`;
-      const body = await transport.request<unknown>("POST", pathname, undefined);
-      return configVersionFrom(body, pathname);
-    },
-
     async getConfig(configId, version, configOptions = {}) {
       const pathname = configOptions.viaVersionsAlias === true
         ? `${PRODUCT_ROOT}/configs/${segment(configId)}/versions/${segment(version)}`
@@ -186,12 +162,6 @@ export function createProductClient(options: ProductClientOptions = {}): Product
       const record = requireRecord(body, pathname, "配置目录响应不是 JSON 对象");
       const configs = requireArray(record, "configs", pathname);
       return configs.map((config) => configVersionFrom(config, pathname));
-    },
-
-    async validateConfigBundle(input) {
-      const pathname = `${PRODUCT_ROOT}/configs/validate`;
-      const body = await transport.request<unknown>("POST", pathname, input);
-      return configValidationFrom(body, pathname);
     },
 
     async createOrderDraft(input, requestOptions = {}) {
@@ -532,22 +502,6 @@ function operatorOrderFrom(body: unknown, pathname: string): OperatorOrderView {
   return record as unknown as OperatorOrderView;
 }
 
-function configValidationFrom(body: unknown, pathname: string): ConfigValidationResult {
-  const record = requireRecord(body, pathname, "配置校验响应不是 JSON 对象");
-  if (typeof record.ok !== "boolean") {
-    throw invalidResponse(pathname, "配置校验响应缺少布尔 ok");
-  }
-  const issues = requireArray(record, "issues", pathname);
-  for (const entry of issues) {
-    const issue = requireRecord(entry, pathname, "配置校验 issue 不是 JSON 对象");
-    requireString(issue, "code", pathname, "配置校验 issue 缺少 code");
-    requireString(issue, "message", pathname, "配置校验 issue 缺少 message");
-    if (issue.path !== undefined && typeof issue.path !== "string") {
-      throw invalidResponse(pathname, "配置校验 issue 的 path 不是字符串");
-    }
-  }
-  return record as unknown as ConfigValidationResult;
-}
 
 const TASK_KINDS: ReadonlySet<unknown> = new Set(["accept_invite", "perform_stage"]);
 
