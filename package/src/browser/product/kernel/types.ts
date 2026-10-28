@@ -5,6 +5,7 @@ import type {
   ProductFetcher,
   ProductSessionTokenProvider
 } from "../../../core/product-transport.js";
+import type { UVPStageInviteCreateTypedData } from "@uvp-eth/protocol-bindings";
 import type {
   AcceptStageInviteInput,
   AcceptStageInviteResult,
@@ -23,6 +24,7 @@ import type {
   CreateStageInviteInput,
   DataState,
   EvidenceProofDTO,
+  UvpAppWriteTypedData,
   EvidenceRecordDTO,
   EvidenceUploadResponseDTO,
   FinalizeOrderDraftInput,
@@ -43,7 +45,7 @@ import type {
   RejectStageInviteInput,
   ResourceResolutionView,
   StageInviteCreated,
-  StageInvitePreview,
+  StageInvitePreview as StageInvitePreviewDTO,
   StageInviteStatus,
   StageSlotStatus,
   StageSlot,
@@ -96,7 +98,6 @@ export type {
   RejectStageInviteInput,
   ResourceResolutionView,
   StageInviteCreated,
-  StageInvitePreview,
   StageInviteStatus,
   StageSlotStatus,
   StageSlot,
@@ -108,6 +109,31 @@ export type {
   TaskActionView,
   UpdateOrderDraftInput as UpdateOrderDraftKernelInput
 };
+
+export interface StageInvitePreview extends StageInvitePreviewDTO {
+  readonly rejectTypedData: UvpAppWriteTypedData;
+}
+
+export interface PrepareStageInviteInput {
+  readonly stageKey: string;
+  readonly slotKey: string;
+  /** 必需：prepare 与 create 用同一 expiresAt，typed data deadline 才能复现。 */
+  readonly expiresAt: string;
+  readonly invitee?: string | undefined;
+}
+
+export interface StageInvitePreparation {
+  readonly typedData: UVPStageInviteCreateTypedData;
+  readonly termsHash: string;
+  readonly stageId: string;
+  readonly amount: string;
+  readonly finalStandardHash: string;
+  readonly workDeadline: string;
+  readonly nonce: string;
+  readonly deadline: string;
+  readonly chainId: number;
+  readonly stateMachineAddress: string;
+}
 
 
 export interface ProductClientOptions {

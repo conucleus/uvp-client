@@ -154,19 +154,28 @@ describe("product error mapping", () => {
 });
 
 describe("product transport", () => {
-  it("sends the session header", async () => {
-    const seen: {
+  it("sends the session header on reads but not on signed writes", async () => {
+    const writes: {
       headers?: Record<string, string> | undefined;
       method?: string | undefined;
+      url?: string | undefined;
+    } = {};
+    const reads: {
+      headers?: Record<string, string> | undefined;
       url?: string | undefined;
     } = {};
     const client = createProductClient({
       baseUrl: "https://product.test",
       sessionToken: "session-abc",
       fetcher: async (input, init) => {
-        seen.url = String(input);
-        seen.method = init?.method;
-        seen.headers = init?.headers as Record<string, string>;
+        if (init?.method === "GET") {
+          reads.url = String(input);
+          reads.headers = init.headers as Record<string, string>;
+          return jsonResponse({ stageKey: "sourcing", dataState: "ok", items: [] });
+        }
+        writes.url = String(input);
+        writes.method = init?.method;
+        writes.headers = init?.headers as Record<string, string>;
         return jsonResponse({ draft: { draftId: "draft-1", status: "draft" }, slots: [], invites: [] });
       }
     });
@@ -179,11 +188,15 @@ describe("product transport", () => {
         currency: "USDT",
         stageSubset: ["stage-b"],
         stageTerms: [{ stageKey: "stage-b", amount: "1", inviteDeadline: "2026-11-01T00:00:00Z", workDeadline: "2026-11-20T00:00:00Z" }]
-      }
+      } as never
     );
-    assert.equal(seen.method, "POST");
-    assert.equal(seen.url, "https://product.test/product/v3/order-drafts");
-    assert.equal(seen.headers?.["x-uvp-store-session"], "session-abc");
+    assert.equal(writes.method, "POST");
+    assert.equal(writes.url, "https://product.test/product/v3/order-drafts");
+    assert.equal(writes.headers?.["x-uvp-store-session"], undefined);
+
+    await client.listStageResources("order-1", "sourcing");
+    assert.equal(reads.url, "https://product.test/product/v3/orders/order-1/stages/sourcing/resources");
+    assert.equal(reads.headers?.["x-uvp-store-session"], "session-abc");
   });
 
   it("prefers the injected session token provider over the fixed token", async () => {

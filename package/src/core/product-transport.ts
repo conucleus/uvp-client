@@ -1,7 +1,9 @@
 /**
  * Runtime-agnostic transport and auth/session seam for product-service HTTP:
  * caller-injected fetch, host-supplied session token, redirect refusal, and
- * stable error classification. Failures throw ProductError (status/error code/
+ * stable error classification. Read requests carry the wallet-proof session
+ * token; signed write requests opt out because D4b authenticates each write by
+ * its EIP-712 signature. Failures throw ProductError (status/error code/
  * readable message); malformed 2xx shapes become invalid_response, never an
  * empty result. Shared by browser and headless callers.
  */
@@ -11,6 +13,11 @@ export type ProductFetcher = (input: RequestInfo | URL, init?: RequestInit) => P
 
 /** 钱包会话 token 提供者：宿主注入已有会话，core 不读取 env/localStorage。 */
 export type ProductSessionTokenProvider = () => string | undefined;
+
+export interface ProductRequestOptions {
+  /** 读请求默认带 wallet-proof 会话头；签名写请求传 "none"（写鉴权只看 EIP-712 签名）。 */
+  readonly auth?: "session" | "none" | undefined;
+}
 
 export type ProductErrorKind =
   | "invalid_request"
@@ -171,10 +178,11 @@ export class ProductTransport {
     method: "GET" | "POST" | "PATCH",
     pathname: string,
     body: unknown,
+    options?: ProductRequestOptions,
   ): Promise<T> {
     const timeoutMs = this.#config.timeoutMs;
     const signal = AbortSignal.timeout(timeoutMs);
-    const sessionToken = this.#resolveSessionToken();
+    const sessionToken = options?.auth === "none" ? undefined : this.#resolveSessionToken();
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (sessionToken !== undefined) {
       headers[WALLET_PROOF_SESSION_HEADER] = sessionToken;

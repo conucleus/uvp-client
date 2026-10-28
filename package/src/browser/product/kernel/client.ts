@@ -1,6 +1,8 @@
 // 订单域客户端：逐条对齐 chain-services 的 /product/v3 路由（配置注册、
-// 草稿、slot 邀请、EIP-712 接受、finalize、订单/阶段读），身份只经
-// x-uvp-store-session 传递；响应形状不符即 invalid_response，不降级成空。
+// 草稿、slot 邀请、EIP-712 接受、finalize、订单/阶段读）。私有读经
+// x-uvp-store-session 传递；8 个写动作只收已带 writeSignature 的 body，写请求
+// 不再发送会话 token（D4b 写鉴权只看 EIP-712 签名）；响应形状不符即
+// invalid_response，不降级成空。
 
 import {
   DEFAULT_PRODUCT_TIMEOUT_MS,
@@ -12,7 +14,6 @@ import {
   requireString
 } from "../../../core/product-transport.js";
 import type {
-  AcceptStageInviteInput,
   AcceptStageInviteResult,
   AttachOrderResult,
   AuditEventView,
@@ -35,9 +36,10 @@ import type {
   StageViewResponse,
   TaskListView,
   ProductClientOptions,
-  RejectStageInviteInput,
   StageInviteCreated,
+  StageInvitePreparation,
   StageInvitePreview,
+  PrepareStageInviteInput,
   TaskActionView
 } from "./types.js";
 import {
@@ -51,6 +53,16 @@ import type {
   CreateOrderDraftInput,
   UpdateOrderDraftInput
 } from "@uvp-eth/product-dto";
+import type {
+  InviteAcceptWriteBody,
+  InviteRejectWriteBody,
+  WriteSignatureOnlyBody,
+  WriteSignedBody
+} from "../../app-write.js";
+import {
+  validateUVPStageInviteCreateTypedData,
+  UVP_APP_WRITE_PRIMARY_TYPES
+} from "@uvp-eth/protocol-bindings";
 
 const PRODUCT_ROOT = "/product/v3";
 const PRODUCT_EVIDENCE_ROOT = "/product/evidence";
@@ -71,20 +83,29 @@ export interface ProductClient {
   getOperatorAudit(query?: OperatorAuditQuery): Promise<readonly AuditEventView[]>;
   /** 任务动作装配（signal.submit 输入；不返回签名，不代签/广播）。 */
   prepareTaskAction(orderId: string, taskId: string): Promise<TaskActionView>;
-  createOrderDraft(input: CreateOrderDraftInput): Promise<OrderDraftDetail>;
+  createOrderDraft(input: WriteSignedBody<CreateOrderDraftInput>): Promise<OrderDraftDetail>;
   getOrderDraft(draftId: string): Promise<OrderDraftDetail>;
-  updateOrderDraft(draftId: string, input: UpdateOrderDraftInput): Promise<OrderDraftDetail>;
-  createInvite(draftId: string, input: CreateStageInviteInput): Promise<StageInviteCreated>;
-  previewInvite(inviteId: string, token: string): Promise<StageInvitePreview>;
-  acceptInvite(inviteId: string, input: AcceptStageInviteInput): Promise<AcceptStageInviteResult>;
-  rejectInvite(inviteId: string, input: RejectStageInviteInput): Promise<AcceptStageInviteResult>;
-  revokeInvite(inviteId: string): Promise<Invite>;
+  updateOrderDraft(
+    draftId: string,
+    input: WriteSignedBody<UpdateOrderDraftInput>
+  ): Promise<OrderDraftDetail>;
+  createInvite(
+    draftId: string,
+    input: WriteSignedBody<CreateStageInviteInput>
+  ): Promise<StageInviteCreated>;
+  /** D4b：写签名前的私有读（wallet proof token）：返回 UVPStageInviteCreate typed data 与条款事实。 */
+  prepareInvite(draftId: string, input: PrepareStageInviteInput): Promise<StageInvitePreparation>;
+  /** 邀请预览（邀请 token bearer；open link 传 invitee 才能渲染 accept typed data）。 */
+  previewInvite(inviteId: string, token: string, invitee?: string): Promise<StageInvitePreview>;
+  acceptInvite(inviteId: string, input: InviteAcceptWriteBody): Promise<AcceptStageInviteResult>;
+  rejectInvite(inviteId: string, input: InviteRejectWriteBody): Promise<AcceptStageInviteResult>;
+  revokeInvite(inviteId: string, input: WriteSignatureOnlyBody): Promise<Invite>;
   /** finalize 第一步：服务端返回 UVPOrderFinalize typed data 与 funded/skipped 段。 */
   prepareFinalize(draftId: string): Promise<FinalizeOrderDraftPreparation>;
   /** finalize 第二步：提交 buyer 对 UVPOrderFinalize 的 EIP-712 签名。 */
   finalizeWithSignature(draftId: string, input: FinalizeOrderDraftInput): Promise<FinalizeOrderDraftResult>;
   /** attach 已出生的链上订单到草稿（birth 仍由 buyer/relayer 完成；本方法只登记业务行）。 */
-  attachOrder(draftId: string, input: AttachOrderInput): Promise<AttachOrderResult>;
+  attachOrder(draftId: string, input: WriteSignedBody<AttachOrderInput>): Promise<AttachOrderResult>;
   /** 订单读面（服务端按 scope 裁剪；字段随 scope 缺失属正常）。 */
   getOrder(orderId: string): Promise<OrderView>;
   /** 单阶段读面（服务端投影）。 */
@@ -100,8 +121,8 @@ export interface ProductClient {
     stageKey: string,
     handleKey: string
   ): Promise<ResourceResolutionView>;
-  /** 上传证据（JSON body；wallet proof token 由 transport 透传）。 */
-  uploadEvidence(input: CreateEvidenceRequestDTO): Promise<EvidenceUploadResponseDTO>;
+  /** 上传证据（body 已带 writeSignature；写请求不带会话 token）。 */
+  uploadEvidence(input: WriteSignedBody<CreateEvidenceRequestDTO>): Promise<EvidenceUploadResponseDTO>;
   /** 读取证据元数据；404 由 ProductError 具名 evidence_not_found 保留，不当作空。 */
   getEvidence(evidenceId: string): Promise<EvidenceRecordDTO>;
   /** 读取证据证明（hash、绑定与 verificationStatus）。 */
@@ -144,7 +165,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async createOrderDraft(input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts`;
-      const body = await transport.request<unknown>("POST", pathname, input);
+      const body = await transport.request<unknown>("POST", pathname, input, { auth: "none" });
       return draftDetailFrom(body, pathname);
     },
 
@@ -156,26 +177,101 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async updateOrderDraft(draftId, input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}`;
-      const body = await transport.request<unknown>("PATCH", pathname, input);
+      const body = await transport.request<unknown>("PATCH", pathname, input, { auth: "none" });
       return draftDetailFrom(body, pathname);
     },
 
     async createInvite(draftId, input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/invites`;
-      const body = await transport.request<unknown>("POST", pathname, input);
+      const body = await transport.request<unknown>("POST", pathname, input, { auth: "none" });
       const record = requireRecord(body, pathname, "邀请创建响应不是 JSON 对象");
       requireString(record, "inviteId", pathname, "邀请创建响应缺少 inviteId");
       requireString(record, "inviteToken", pathname, "邀请创建响应缺少一次性 inviteToken");
       return record as unknown as StageInviteCreated;
     },
 
-    async previewInvite(inviteId, token) {
+    async prepareInvite(draftId, input) {
+      const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/invites/prepare`;
+      const body = await transport.request<unknown>("POST", pathname, {
+        stageKey: input.stageKey,
+        slotKey: input.slotKey,
+        expiresAt: input.expiresAt,
+        ...(input.invitee === undefined ? {} : { invitee: input.invitee })
+      });
+      const record = requireRecord(body, pathname, "邀请 prepare 响应不是 JSON 对象");
+      let typedData;
+      try {
+        typedData = validateUVPStageInviteCreateTypedData(record.typedData);
+      } catch (error) {
+        throw invalidResponse(
+          pathname,
+          `邀请 prepare typedData 不符 UVPStageInviteCreate：${errorMessage(error)}`
+        );
+      }
+      requireString(record, "termsHash", pathname, "邀请 prepare 响应缺少 termsHash");
+      const stageId = requireString(record, "stageId", pathname, "邀请 prepare 响应缺少 stageId");
+      const amount = requireString(record, "amount", pathname, "邀请 prepare 响应缺少 amount");
+      const finalStandardHash = requireString(
+        record,
+        "finalStandardHash",
+        pathname,
+        "邀请 prepare 响应缺少 finalStandardHash"
+      );
+      const workDeadline = requireString(
+        record,
+        "workDeadline",
+        pathname,
+        "邀请 prepare 响应缺少 workDeadline"
+      );
+      const nonce = requireString(record, "nonce", pathname, "邀请 prepare 响应缺少 nonce");
+      const deadline = requireString(record, "deadline", pathname, "邀请 prepare 响应缺少 deadline");
+      const stateMachineAddress = requireString(
+        record,
+        "stateMachineAddress",
+        pathname,
+        "邀请 prepare 响应缺少 stateMachineAddress"
+      );
+      if (typeof record.chainId !== "number" || !Number.isSafeInteger(record.chainId) || record.chainId <= 0) {
+        throw invalidResponse(pathname, "邀请 prepare 响应缺少合法 chainId");
+      }
+      if (
+        record.chainId !== typedData.domain.chainId ||
+        stateMachineAddress.toLowerCase() !== typedData.domain.verifyingContract.toLowerCase()
+      ) {
+        throw invalidResponse(pathname, "邀请 prepare 响应的 chainId/stateMachine 与 typedData 域不一致");
+      }
+      return {
+        typedData,
+        termsHash: record.termsHash as string,
+        stageId,
+        amount,
+        finalStandardHash,
+        workDeadline,
+        nonce,
+        deadline,
+        chainId: record.chainId,
+        stateMachineAddress
+      };
+    },
+
+    async previewInvite(inviteId, token, invitee) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/preview`;
-      const body = await transport.request<unknown>("POST", pathname, { token });
+      const body = await transport.request<unknown>("POST", pathname, {
+        token,
+        ...(invitee === undefined ? {} : { invitee })
+      });
       const record = requireRecord(body, pathname, "邀请预览响应不是 JSON 对象");
       requireRecord(record.invite, pathname, "邀请预览响应缺少 invite");
       requireRecord(record.terms, pathname, "邀请预览响应缺少 stage 条款");
       requireRecord(record.typedData, pathname, "邀请预览响应缺少 typedData");
+      const rejectTypedData = requireRecord(
+        record.rejectTypedData,
+        pathname,
+        "邀请预览响应缺少 rejectTypedData"
+      );
+      if (rejectTypedData.primaryType !== UVP_APP_WRITE_PRIMARY_TYPES["invite.reject"]) {
+        throw invalidResponse(pathname, "邀请预览 rejectTypedData 的 primaryType 不符");
+      }
       requireString(record, "termsHash", pathname, "邀请预览响应缺少 termsHash");
       requireString(record, "signNonce", pathname, "邀请预览响应缺少 signNonce");
       requireString(record, "stateMachineAddress", pathname, "邀请预览响应缺少 stateMachineAddress");
@@ -187,19 +283,19 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async acceptInvite(inviteId, input) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/accept`;
-      const body = await transport.request<unknown>("POST", pathname, input);
+      const body = await transport.request<unknown>("POST", pathname, input, { auth: "none" });
       return acceptanceFrom(body, pathname);
     },
 
     async rejectInvite(inviteId, input) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/reject`;
-      const body = await transport.request<unknown>("POST", pathname, input);
+      const body = await transport.request<unknown>("POST", pathname, input, { auth: "none" });
       return acceptanceFrom(body, pathname);
     },
 
-    async revokeInvite(inviteId) {
+    async revokeInvite(inviteId, input) {
       const pathname = `${PRODUCT_ROOT}/invites/${segment(inviteId)}/revoke`;
-      const body = await transport.request<unknown>("POST", pathname, undefined);
+      const body = await transport.request<unknown>("POST", pathname, input, { auth: "none" });
       const record = requireRecord(body, pathname, "撤销邀请响应不是 JSON 对象");
       requireString(record, "inviteId", pathname, "撤销邀请响应缺少 inviteId");
       requireString(record, "status", pathname, "撤销邀请响应缺少 status");
@@ -220,7 +316,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async attachOrder(draftId, input) {
       const pathname = `${PRODUCT_ROOT}/order-drafts/${segment(draftId)}/attach-order`;
-      const body = await transport.request<unknown>("POST", pathname, input);
+      const body = await transport.request<unknown>("POST", pathname, input, { auth: "none" });
       return attachResultFrom(body, pathname);
     },
 
@@ -310,7 +406,7 @@ export function createProductClient(options: ProductClientOptions = {}): Product
 
     async uploadEvidence(input) {
       const pathname = PRODUCT_EVIDENCE_ROOT;
-      const body = await transport.request<unknown>("POST", pathname, input);
+      const body = await transport.request<unknown>("POST", pathname, input, { auth: "none" });
       return evidenceUploadFrom(body, pathname);
     },
 
@@ -626,6 +722,10 @@ function segment(value: string): string {
     });
   }
   return encodeURIComponent(trimmed);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
