@@ -11,6 +11,8 @@
   "exports": {
     "./core": "./src/core/index.ts",
     "./browser": "./src/browser/index.ts",
+    "./chain-read": "./src/chain-read/index.ts",
+    "./server": "./src/server/index.ts",
     "./headless": "./src/headless/index.ts",
     "./cli": "./src/cli/index.ts"
   },
@@ -32,8 +34,8 @@
   },
   "dependencies": {
     "@uvp-eth/canonical-json": "workspace:*",
+    "@uvp-eth/chain-read-contract": "workspace:*",
     "@uvp-eth/compiler": "workspace:*",
-    "@uvp-eth/product-dto": "workspace:*",
     "@uvp-eth/protocol-bindings": "workspace:*",
     "commander": "^12.1.0",
     "viem": "^2.21.58"

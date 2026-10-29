@@ -1,8 +1,9 @@
 # @uvp-eth/uvp-client
 
-Public UVP client SDK and executor CLI. One package, four entries: browser
+Public UVP client SDK and executor CLI. One package, six entries: browser
 hosts use `/browser`, scripts and bots use `/headless`, shared operation and
-protocol primitives live in `/core`, and the executor binary is `/cli`.
+protocol primitives live in `/core`, chain projection reads use `/chain-read`,
+Node-only server tooling uses `/server`, and the executor binary is `/cli`.
 Chain events and contract state are the only source of business truth; this
 package produces and reads signals, it never owns orders, sessions, or keys.
 
@@ -10,16 +11,21 @@ package produces and reads signals, it never owns orders, sessions, or keys.
 
 | Entry | Responsibility (one sentence) |
 |---|---|
-| `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, buyer-intent vs birthAuthorizer split, plan-registration builders, signal build/decode/submit, product-service transport seam, validation, signing helpers, evidence hashing, and re-exported protocol typed data. |
-| `@uvp-eth/uvp-client/browser` | Browser-host client: `createBrowserClient` exposes the same operation set through the injected EIP-1193 wallet (direct or relay); Product V3 client, session read model, deadline/format, and typed-data verification — no compiler/env/localStorage/private keys. |
+| `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, buyer-intent vs birthAuthorizer split, re-exported plan-registration and HookReady surfaces, signal build/decode/submit, validation, signing helpers, evidence hashing, and re-exported protocol typed data. No Node builtins. |
+| `@uvp-eth/uvp-client/chain-read` | Typed HTTP client for chain-services' generic `/chain/*` projection reads plus the bigint projection decoders; wire DTOs/structural decoders are single-sourced in `@uvp-eth/chain-read-contract`, failures stay typed (`invalid_config`/`timeout`/`transport`/`http`/`not_found`/`invalid_response`). |
+| `@uvp-eth/uvp-client/server` | Node-only server tooling: the `@uvp-eth/compiler` primitives a dock relayer orchestrates plus file-based evidence hashing. Never imported by `/browser` or `/core`. |
+| `@uvp-eth/uvp-client/browser` | Browser-host client: `createBrowserClient` exposes the same operation set through the injected EIP-1193 wallet (direct or relay); wallet signing primitives, deadline/format derivations, and the stage executor change typed-data surface — no compiler/env/localStorage/private keys. |
 | `@uvp-eth/uvp-client/headless` | Script/bot client: `createHeadlessClient` exposes the same operation set signed by a local private key (direct RPC or relay); Node plan compilation and the HookReady watcher remain extras, plus wallet handling and the non-spending doctor. |
 | `@uvp-eth/uvp-client/cli` | Executor CLI: `plan compile/register`, `order birth-intent|birth-authorize|finalize`, `invite accept`, `signal submit`, `registry sign`, `wallet`, `doctor`, and the watcher commands (`chain-once`/`chain-watch`/`chain-signal`). |
 
-There is no root entry and no wildcard export; consumers pick one of the four
-subpaths. ABI, EIP-712 typed data, and canonical hashing are single-sourced in
-`@uvp-eth/protocol-bindings`; API DTOs are single-sourced in
-`@uvp-eth/product-dto`; Zhixu compilation is single-sourced in
-`@uvp-eth/compiler` (headless only).
+There is no root entry and no wildcard export; consumers pick one of the six
+subpaths. ABI, EIP-712 typed data, plan-registration calldata, the HookReady
+decoder, and canonical hashing are single-sourced in
+`@uvp-eth/protocol-bindings`; chain-read wire DTOs are single-sourced in
+`@uvp-eth/chain-read-contract`; Zhixu compilation is single-sourced in
+`@uvp-eth/compiler` (headless and server only). Used-car product DTOs and
+product transport/kernel live in `@used-car/app-contract` and
+`@used-car/product-client` (used-car repo), not in this package.
 
 ## Operations
 
@@ -134,7 +140,6 @@ package/src/
 │   ├── transport.ts            # direct/relay operation delivery + receipt errors
 │   ├── birth.ts                # buyer intent vs birthAuthorizer authorization
 │   ├── registration.ts         # plan commit/finalize calldata builders
-│   ├── product-transport.ts    # product HTTP transport + product API errors
 │   ├── signing.ts              # private-key-from-env loading
 │   ├── chain-target.ts         # evm/solana target vocabulary
 │   ├── validation.ts           # address/bytes32/number validation
@@ -144,9 +149,7 @@ package/src/
 ├── browser/
 │   ├── client.ts               # createBrowserClient (EIP-1193, direct/relay)
 │   ├── write.ts                # provider sign/send primitives
-│   ├── product/kernel/         # Product V3 client, config, draft, typed data
 │   ├── wallet/                 # EIP-1193 provider, connector types, signing
-│   ├── session/                # participant read model + wallet session transport
 │   ├── tasks/deadline.ts       # UTC deadline parsing/formatting
 │   └── format/                 # base-unit amount display
 ├── headless/

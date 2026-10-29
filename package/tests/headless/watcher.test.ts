@@ -69,47 +69,6 @@ const STATE_MACHINE_FIXTURE = JSON.parse(
 };
 
 describe('state machine chain watcher', () => {
-  it('decodes HookReady logs', () => {
-    const log = hookReadyLog();
-    const event = decodeHookReadyLog(log, artifactIndex());
-
-    expect(STATE_MACHINE_FIXTURE.hashes.artifactHash).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(STATE_MACHINE_FIXTURE.events.HookReady.signature).toBe('HookReady(bytes32,bytes32,bytes32,bytes32,bytes32)');
-    expect(event).toMatchObject({
-      type: 'HookReady',
-      stateMachineAddress: STATE_MACHINE,
-      orderId: ORDER_ID,
-      hookId: HOOK_ID,
-      stageId: STAGE_ID,
-      hookNameId: HOOK_NAME_ID,
-      stageIdentifier: 'exec.main',
-      hookName: 'START',
-      blockNumber: 12n,
-      transactionHash: TX_HASH,
-      logIndex: 7n,
-    });
-    expect(event?.eventId).toBe(hookReadyEventId(log));
-  });
-
-  it('throws with the original context when a HookReady-topic log fails to decode', () => {
-    const broken = { ...hookReadyLog(), data: '0xdeadbeef' as Hex };
-
-    expect(() => decodeHookReadyLog(broken, artifactIndex())).toThrow(/failed to decode HookReady log data/);
-  });
-
-  it('still skips logs without the HookReady topic', () => {
-    const otherTopic = keccak256(stringToBytes('Other(uint256)'));
-    const unrelated = { ...hookReadyLog(), topics: [otherTopic, ORDER_ID] };
-
-    expect(decodeHookReadyLog(unrelated, artifactIndex())).toBeUndefined();
-  });
-
-  it('refuses to derive event ids from zero values when transactionHash or logIndex is missing', () => {
-    expect(() => hookReadyEventId({ transactionHash: null, logIndex: 7 })).toThrow(/transactionHash/);
-    expect(() => hookReadyEventId({ transactionHash: TX_HASH, logIndex: null })).toThrow(/logIndex/);
-    expect(() => hookReadyEventId({ transactionHash: TX_HASH })).toThrow(/logIndex/);
-  });
-
   it('routes by stage, hook, and source before dry-running callback txs', async () => {
     const matchedKeys: string[] = [];
     const watcher = createStateMachineWatcher({

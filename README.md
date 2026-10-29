@@ -14,13 +14,14 @@ CLI; it never owns orders, sessions, keys, or a server process.
 | `@uvp-eth/uvp-client/headless` | Private-key wallet handling, HookReady watcher/runtime, job store/retry, executor doctor. |
 | `@uvp-eth/uvp-client/cli` | Executor commands: wallet, doctor, watch, signal. |
 
-Dependencies are only `@uvp-eth/product-dto`, `@uvp-eth/protocol-bindings`,
+Dependencies are only `@uvp-eth/canonical-json`, `@uvp-eth/chain-read-contract`,
+`@uvp-eth/protocol-bindings`,
 `viem`, and `commander`; the browser entry carries the Product V3 client directly, with no separate kernel package.
 
 ## Development Topology
 
 This repository is mounted by `uvp-eth` as a Git submodule. The package depends
-on `@uvp-eth/protocol-bindings` and `@uvp-eth/product-dto`, both owned by
+on `@uvp-eth/protocol-bindings` and `@uvp-eth/canonical-json`, both owned by
 `uvp-protocol`.
 
 Use the `uvp-eth` umbrella checkout for local integration development so pnpm
