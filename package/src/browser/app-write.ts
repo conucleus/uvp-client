@@ -1,4 +1,4 @@
-// D4b 写动作签名面：9 个链下写动作的 typed data 计划、bodyHash、writeSignature
+// D4b 写动作签名面：链下写动作的 typed data 计划、bodyHash、writeSignature
 // envelope 与 body 组装。域/字段/typehash/构造单源是 @uvp-eth/protocol-bindings
 // （经 product-dto re-export），bodyHash/contentHash 单源是 @uvp-eth/canonical-json；
 // 本模块不重写域/字段表，也不持有哈希实现，只按动作组合参数与签名 envelope。
@@ -71,7 +71,12 @@ export type WritePlanAction = UvpAppWriteAction | "invite.create" | "invite.acce
 
 export type BodyHashWriteAction = Extract<
   UvpAppWriteAction,
-  "draft.create" | "draft.update" | "order.attach" | "evidence.upload" | "joint.child_order"
+  | "draft.create"
+  | "draft.update"
+  | "order.attach"
+  | "evidence.upload"
+  | "joint.child_order"
+  | "joint.child_settle"
 >;
 
 export type NoBodyHashWriteAction = Exclude<WritePlanAction, BodyHashWriteAction>;
@@ -681,6 +686,77 @@ export function planJointChildOrder(
       parentStageKey,
       childPlanId,
       creator,
+      bodyHash,
+      nonce,
+      deadline
+    }),
+    bodyHash,
+    nonce,
+    deadline
+  };
+}
+
+export interface JointChildSettleParent {
+  readonly planId: string;
+  readonly orderId: string;
+  readonly stageKey: string;
+}
+
+export interface JointChildSettleChild {
+  readonly planId: string;
+  readonly creator: Address | string;
+  readonly jointRef: string;
+  /** child 自身的 deadline（进转发 body，不是签名窗口）。 */
+  readonly deadline: BigUint;
+}
+
+/** 转发给 relayer /dock/child-settle 的 body：parent + child 两层，字段形状是 app wire。 */
+export interface JointChildSettlePayload {
+  readonly parent: {
+    readonly planId: Hex;
+    readonly orderId: Hex;
+    readonly stageKey: string;
+  };
+  readonly child: {
+    readonly planId: Hex;
+    readonly creator: Address;
+    readonly jointRef: Hex;
+    readonly deadline: string;
+  };
+}
+
+export function planJointChildSettle(
+  input: {
+    readonly chainId: number;
+    readonly parent: JointChildSettleParent;
+    readonly child: JointChildSettleChild;
+  } & WriteTimingInput
+): BodyHashWritePlan<JointChildSettlePayload> {
+  const chainId = chainIdOf(input.chainId);
+  const parentPlanId = hash32Of(input.parent.planId, "parent.planId");
+  const parentOrderId = hash32Of(input.parent.orderId, "parent.orderId");
+  const parentStageKey = fieldText(input.parent.stageKey, "parent.stageKey", 36);
+  const childPlanId = hash32Of(input.child.planId, "child.planId");
+  const creator = addressOf(input.child.creator, "child.creator");
+  const jointRef = hash32Of(input.child.jointRef, "child.jointRef");
+  const childDeadline = decimalOf(input.child.deadline, "deadline");
+  const payload: JointChildSettlePayload = {
+    parent: { planId: parentPlanId, orderId: parentOrderId, stageKey: parentStageKey },
+    child: { planId: childPlanId, creator, jointRef, deadline: childDeadline }
+  };
+  const nonce = nonceOf(input.nonce);
+  const deadline = deadlineOf(input.deadline);
+  const bodyHash = hashAppWritePayload(payload);
+  return {
+    action: "joint.child_settle",
+    payload,
+    typedData: appTypedData("joint.child_settle", chainId, {
+      parentPlanId,
+      parentOrderId,
+      parentStageKey,
+      childPlanId,
+      creator,
+      jointRef,
       bodyHash,
       nonce,
       deadline

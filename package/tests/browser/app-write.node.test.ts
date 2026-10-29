@@ -1,4 +1,4 @@
-// D4b 写签名面：9 个动作的 typed data 绑定（资源 id/bodyHash/nonce/deadline）、
+// D4b 写签名面：各写动作的 typed data 绑定（资源 id/bodyHash/nonce/deadline）、
 // canonical-json bodyHash、accept/reject 用 preview 签发值、evidence contentHash
 // 三态、以及签名后能由恢复函数还原 signer。编码/域由 protocol-bindings 拥有，
 // 本文件只测 client 组合行为，不镜像 typehash/字段表。
@@ -26,6 +26,7 @@ import {
   planInviteReject,
   planInviteRevoke,
   planJointChildOrder,
+  planJointChildSettle,
   recoverWriteSigner,
   signWritePlan,
   writeDeadline,
@@ -486,5 +487,71 @@ describe("write signature plans", () => {
     });
     assert.notEqual(changed.bodyHash, plan.bodyHash);
     assert.equal(changed.typedData.message.bodyHash, changed.bodyHash);
+  });
+
+  it("joint.child_settle：bodyHash 覆盖转发的 settle body，typed data 绑定 jointRef，jointRef 变化改变 bodyHash", async () => {
+    const childPlanId = `0x${"1c".repeat(32)}` as const;
+    const jointRef = `0x${"1d".repeat(32)}` as const;
+    const plan = planJointChildSettle({
+      chainId: CHAIN_ID,
+      parent: { planId: PLAN_ID, orderId: ORDER_ID, stageKey: "acquisition" },
+      child: {
+        planId: childPlanId,
+        creator: account.address,
+        jointRef,
+        deadline: "1800000000"
+      },
+      nonce: "81",
+      deadline: "1800000300"
+    });
+    assert.equal(plan.action, "joint.child_settle");
+    assert.equal(plan.bodyHash, hashAppWritePayload(plan.payload));
+    assert.deepEqual(plan.payload, {
+      parent: { planId: PLAN_ID, orderId: ORDER_ID, stageKey: "acquisition" },
+      child: {
+        planId: childPlanId,
+        creator: account.address,
+        jointRef,
+        deadline: "1800000000"
+      }
+    });
+    assert.equal(plan.typedData.domain.name, "UVPAppBackend");
+    assert.equal(plan.typedData.domain.chainId, CHAIN_ID);
+    assert.equal(plan.typedData.primaryType, UVP_APP_WRITE_PRIMARY_TYPES["joint.child_settle"]);
+    const message = plan.typedData.message as Readonly<Record<string, string>>;
+    assert.equal(message["parentPlanId"], PLAN_ID);
+    assert.equal(message["parentOrderId"], ORDER_ID);
+    assert.equal(message["parentStageKey"], "acquisition");
+    assert.equal(message["childPlanId"], childPlanId);
+    assert.equal(message["creator"]?.toLowerCase(), account.address.toLowerCase());
+    assert.equal(message["jointRef"], jointRef);
+    assert.equal(message["bodyHash"], plan.bodyHash);
+    assert.equal(message["nonce"], "81");
+    assert.equal(message["deadline"], "1800000300");
+
+    const signature = await signWithAccount(plan.typedData);
+    assert.equal(
+      (await recoverWriteSigner(plan, signature)).toLowerCase(),
+      account.address.toLowerCase()
+    );
+    const signed = completeSignedWrite(plan, signature);
+    assert.equal(signed.writeSignature.scheme, "eip712");
+    assert.equal(signed.writeSignature.bodyHash, plan.bodyHash);
+
+    const changed = planJointChildSettle({
+      chainId: CHAIN_ID,
+      parent: { planId: PLAN_ID, orderId: ORDER_ID, stageKey: "acquisition" },
+      child: {
+        planId: childPlanId,
+        creator: account.address,
+        jointRef: `0x${"1e".repeat(32)}`,
+        deadline: "1800000000"
+      },
+      nonce: "82",
+      deadline: "1800000300"
+    });
+    assert.notEqual(changed.bodyHash, plan.bodyHash);
+    assert.equal(changed.typedData.message.bodyHash, changed.bodyHash);
+    assert.equal(changed.typedData.message.jointRef, `0x${"1e".repeat(32)}`);
   });
 });
