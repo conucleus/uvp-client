@@ -1,4 +1,4 @@
-// D4b 写签名面：8 个动作的 typed data 绑定（资源 id/bodyHash/nonce/deadline）、
+// D4b 写签名面：9 个动作的 typed data 绑定（资源 id/bodyHash/nonce/deadline）、
 // canonical-json bodyHash、accept/reject 用 preview 签发值、evidence contentHash
 // 三态、以及签名后能由恢复函数还原 signer。编码/域由 protocol-bindings 拥有，
 // 本文件只测 client 组合行为，不镜像 typehash/字段表。
@@ -25,6 +25,7 @@ import {
   planInviteCreate,
   planInviteReject,
   planInviteRevoke,
+  planJointChildOrder,
   recoverWriteSigner,
   signWritePlan,
   writeDeadline,
@@ -411,5 +412,79 @@ describe("write signature plans", () => {
       message: { inviteId: "invite-1", nonce: "1", deadline: "2" }
     });
     assert.equal(appTyped.domain.name, "UVPAppBackend");
+  });
+
+  it("joint.child_order：bodyHash 覆盖转发的 parent/child body，typed data 绑定 parent/child 身份", async () => {
+    const childPlanId = `0x${"0c".repeat(32)}` as const;
+    const idempotencyKey = `0x${"0d".repeat(32)}` as const;
+    const participants = [
+      { stageKey: "propose", signalName: "proposed", submitter: account.address },
+      { stageKey: "accept", signalName: "payer_signed", submitter: account.address }
+    ];
+    const plan = planJointChildOrder({
+      chainId: CHAIN_ID,
+      parent: { planId: PLAN_ID, orderId: ORDER_ID, stageKey: "acquisition" },
+      child: {
+        planId: childPlanId,
+        creator: account.address,
+        payloadHash: TERMS_HASH,
+        idempotencyKey,
+        deadline: "1800000000",
+        participants
+      },
+      nonce: "71",
+      deadline: "1800000300"
+    });
+    assert.equal(plan.action, "joint.child_order");
+    assert.equal(plan.bodyHash, hashAppWritePayload(plan.payload));
+    assert.deepEqual(plan.payload, {
+      parent: { planId: PLAN_ID, orderId: ORDER_ID, stageKey: "acquisition" },
+      child: {
+        planId: childPlanId,
+        creator: account.address,
+        payloadHash: TERMS_HASH,
+        idempotencyKey,
+        deadline: "1800000000",
+        participants
+      }
+    });
+    assert.equal(plan.typedData.domain.name, "UVPAppBackend");
+    assert.equal(plan.typedData.domain.chainId, CHAIN_ID);
+    assert.equal(plan.typedData.primaryType, UVP_APP_WRITE_PRIMARY_TYPES["joint.child_order"]);
+    const message = plan.typedData.message as Readonly<Record<string, string>>;
+    assert.equal(message["parentPlanId"], PLAN_ID);
+    assert.equal(message["parentOrderId"], ORDER_ID);
+    assert.equal(message["parentStageKey"], "acquisition");
+    assert.equal(message["childPlanId"], childPlanId);
+    assert.equal(message["creator"]?.toLowerCase(), account.address.toLowerCase());
+    assert.equal(message["bodyHash"], plan.bodyHash);
+    assert.equal(message["nonce"], "71");
+    assert.equal(message["deadline"], "1800000300");
+
+    const signature = await signWithAccount(plan.typedData);
+    assert.equal(
+      (await recoverWriteSigner(plan, signature)).toLowerCase(),
+      account.address.toLowerCase()
+    );
+    const signed = completeSignedWrite(plan, signature);
+    assert.equal(signed.writeSignature.scheme, "eip712");
+    assert.equal(signed.writeSignature.bodyHash, plan.bodyHash);
+
+    const changed = planJointChildOrder({
+      chainId: CHAIN_ID,
+      parent: { planId: PLAN_ID, orderId: ORDER_ID, stageKey: "acquisition" },
+      child: {
+        planId: childPlanId,
+        creator: account.address,
+        payloadHash: `0x${"0e".repeat(32)}`,
+        idempotencyKey,
+        deadline: "1800000000",
+        participants
+      },
+      nonce: "72",
+      deadline: "1800000300"
+    });
+    assert.notEqual(changed.bodyHash, plan.bodyHash);
+    assert.equal(changed.typedData.message.bodyHash, changed.bodyHash);
   });
 });

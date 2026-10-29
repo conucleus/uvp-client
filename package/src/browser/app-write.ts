@@ -1,4 +1,4 @@
-// D4b 写动作签名面：8 个链下写动作的 typed data 计划、bodyHash、writeSignature
+// D4b 写动作签名面：9 个链下写动作的 typed data 计划、bodyHash、writeSignature
 // envelope 与 body 组装。域/字段/typehash/构造单源是 @uvp-eth/protocol-bindings
 // （经 product-dto re-export），bodyHash/contentHash 单源是 @uvp-eth/canonical-json；
 // 本模块不重写域/字段表，也不持有哈希实现，只按动作组合参数与签名 envelope。
@@ -71,7 +71,7 @@ export type WritePlanAction = UvpAppWriteAction | "invite.create" | "invite.acce
 
 export type BodyHashWriteAction = Extract<
   UvpAppWriteAction,
-  "draft.create" | "draft.update" | "order.attach" | "evidence.upload"
+  "draft.create" | "draft.update" | "order.attach" | "evidence.upload" | "joint.child_order"
 >;
 
 export type NoBodyHashWriteAction = Exclude<WritePlanAction, BodyHashWriteAction>;
@@ -598,6 +598,99 @@ export function planEvidenceUpload(
   };
 }
 
+export interface JointChildOrderParent {
+  readonly planId: string;
+  readonly orderId: string;
+  readonly stageKey: string;
+}
+
+export interface JointChildOrderParticipant {
+  readonly stageKey: string;
+  readonly signalName: string;
+  readonly submitter: Address | string;
+}
+
+export interface JointChildOrderChild {
+  readonly planId: string;
+  readonly creator: Address | string;
+  readonly payloadHash: string;
+  readonly idempotencyKey: string;
+  /** child order 自身的 deadline（进转发 body，不是签名窗口）。 */
+  readonly deadline: BigUint;
+  readonly participants: readonly JointChildOrderParticipant[];
+}
+
+/** 转发给 relayer /dock/child-order 的 body：parent + child 两层，字段形状是 app wire。 */
+export interface JointChildOrderPayload {
+  readonly parent: {
+    readonly planId: Hex;
+    readonly orderId: Hex;
+    readonly stageKey: string;
+  };
+  readonly child: {
+    readonly planId: Hex;
+    readonly creator: Address;
+    readonly payloadHash: Hex;
+    readonly idempotencyKey: Hex;
+    readonly deadline: string;
+    readonly participants: readonly JointChildOrderParticipant[];
+  };
+}
+
+export function planJointChildOrder(
+  input: {
+    readonly chainId: number;
+    readonly parent: JointChildOrderParent;
+    readonly child: JointChildOrderChild;
+  } & WriteTimingInput
+): BodyHashWritePlan<JointChildOrderPayload> {
+  const chainId = chainIdOf(input.chainId);
+  const parentPlanId = hash32Of(input.parent.planId, "parent.planId");
+  const parentOrderId = hash32Of(input.parent.orderId, "parent.orderId");
+  const parentStageKey = fieldText(input.parent.stageKey, "parent.stageKey", 36);
+  const childPlanId = hash32Of(input.child.planId, "child.planId");
+  const creator = addressOf(input.child.creator, "child.creator");
+  const payloadHash = hash32Of(input.child.payloadHash, "child.payloadHash");
+  const idempotencyKey = hash32Of(input.child.idempotencyKey, "child.idempotencyKey");
+  const childDeadline = decimalOf(input.child.deadline, "deadline");
+  const participants = input.child.participants.map((participant, index) => ({
+    stageKey: fieldText(participant.stageKey, `child.participants[${index}].stageKey`, 36),
+    signalName: fieldText(participant.signalName, `child.participants[${index}].signalName`, 64),
+    submitter: addressOf(participant.submitter, `child.participants[${index}].submitter`)
+  }));
+  const payload: JointChildOrderPayload = {
+    parent: { planId: parentPlanId, orderId: parentOrderId, stageKey: parentStageKey },
+    child: {
+      planId: childPlanId,
+      creator,
+      payloadHash,
+      idempotencyKey,
+      deadline: childDeadline,
+      participants
+    }
+  };
+  const nonce = nonceOf(input.nonce);
+  const deadline = deadlineOf(input.deadline);
+  const bodyHash = hashAppWritePayload(payload);
+  return {
+    action: "joint.child_order",
+    payload,
+    typedData: appTypedData("joint.child_order", chainId, {
+      parentPlanId,
+      parentOrderId,
+      parentStageKey,
+      childPlanId,
+      creator,
+      bodyHash,
+      nonce,
+      deadline
+    }),
+    bodyHash,
+    nonce,
+    deadline
+  };
+}
+
 export async function signDraftCreate(
   input: Parameters<typeof planDraftCreate>[0] & {
     readonly provider: Eip1193Provider;
@@ -854,6 +947,25 @@ function hash32Of(value: string, field: string): Hex {
     throw new WritePlanError("invalid_write_message", `${field} 必须是 0x 32 字节 hex。`);
   }
   return text.toLowerCase() as Hex;
+}
+
+function addressOf(value: Address | string, field: string): Address {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!ADDRESS_PATTERN.test(text)) {
+    throw new WritePlanError("invalid_write_message", `${field} 必须是 0x 20 字节地址。`);
+  }
+  return text as Address;
+}
+
+function fieldText(value: string, field: string, maxLength: number): string {
+  const text = value.trim();
+  if (text === "" || text.length > maxLength) {
+    throw new WritePlanError(
+      "invalid_write_message",
+      `${field} 必须非空且不超过 ${maxLength} 个字符。`
+    );
+  }
+  return text;
 }
 
 function errorMessage(error: unknown): string {
