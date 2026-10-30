@@ -2,8 +2,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { encodeAbiParameters, keccak256, stringToBytes, type Hex } from 'viem';
+import { encodeAbiParameters, type Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
+import { HOOK_READY_TOPIC } from '@uvp-eth/protocol-bindings';
 import { main } from '../../src/cli/index.js';
 import { chainPollExecutionFailed } from '../../src/cli/output.js';
 import {
@@ -26,7 +27,6 @@ const RETRY_HOOK_ID = `0x${'22'.repeat(32)}` as Hex;
 const RETRY_STAGE_ID = `0x${'55'.repeat(32)}` as Hex;
 const RETRY_HOOK_NAME_ID = `0x${'66'.repeat(32)}` as Hex;
 const RETRY_TX_HASH = `0x${'33'.repeat(32)}` as Hex;
-const HOOK_READY_TOPIC = keccak256(stringToBytes('HookReady(bytes32,bytes32,bytes32,bytes32,bytes32)'));
 
 describe('executor CLI', () => {
   it('accepts the pnpm argument separator before wallet commands', async () => {

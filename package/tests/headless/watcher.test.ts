@@ -3,8 +3,10 @@ import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promi
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { encodeAbiParameters, keccak256, stringToBytes, stringToHex, type Hex } from 'viem';
+import { encodeAbiParameters, type Hex } from 'viem';
 import { describe, expect, it, vi } from 'vitest';
+import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler';
+import { HOOK_READY_TOPIC } from '@uvp-eth/protocol-bindings';
 import { classifyExecutorKitError, CodedExecutorKitError } from '../../src/core/errors.js';
 import {
   buildSubmitStateMachineSignalCall,
@@ -44,8 +46,8 @@ const HOOK_NAME_ID = `0x${'66'.repeat(32)}` as Hex;
 const TX_HASH = `0x${'33'.repeat(32)}` as Hex;
 const TX_HASH_2 = `0x${'35'.repeat(32)}` as Hex;
 const PAYLOAD_HASH = `0x${'44'.repeat(32)}` as Hex;
-const SLOT_A_SOURCE_ID = keccak256(stringToBytes('slot-a'));
-const EXEC_MAIN_CMP_ID = keccak256(stringToBytes('exec.main.cmp'));
+const SLOT_A_SOURCE_ID = onchainSourceId('slot-a');
+const EXEC_MAIN_CMP_ID = onchainSignalId('exec.main.cmp');
 const ZERO_BYTES32_WORD = `0x${'00'.repeat(32)}` as Hex;
 const KEY_ENV = 'UVP_RECEIPT_TEST_PRIVATE_KEY';
 const TEST_PRIVATE_KEY = `0x${'ab'.repeat(32)}`;
@@ -3554,8 +3556,8 @@ describe('state machine callback tx helper', () => {
     expect(result.request.args.slice(0, 5)).toEqual([
       PLAN_ID,
       ORDER_ID,
-      keccak256(stringToBytes('slot-b')),
-      keccak256(stringToBytes('ship.pickup.done')),
+      onchainSourceId('slot-b'),
+      onchainSignalId('ship.pickup.done'),
       PAYLOAD_HASH,
     ]);
     expect(result.request.data).toMatch(/^0x[0-9a-f]+$/);
@@ -4490,7 +4492,7 @@ function hookReadyLog(address = STATE_MACHINE, planId: Hex = PLAN_ID): StateMach
       [STAGE_ID, HOOK_NAME_ID],
     ),
     topics: [
-      keccak256(stringToHex(STATE_MACHINE_FIXTURE.events.HookReady.signature)),
+      HOOK_READY_TOPIC,
       planId,
       ORDER_ID,
       HOOK_ID,
@@ -4513,8 +4515,8 @@ function artifactIndex() {
 }
 
 function capabilityArtifact() {
-  const otherSourceId = keccak256(stringToBytes('someone-else'));
-  const otherSignalId = keccak256(stringToBytes('exec.other.done'));
+  const otherSourceId = onchainSourceId('someone-else');
+  const otherSignalId = onchainSignalId('exec.other.done');
   return {
     ...artifactIndex(),
     selectorBindings: [

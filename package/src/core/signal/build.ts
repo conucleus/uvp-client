@@ -1,4 +1,5 @@
 import { encodeFunctionData, keccak256, stringToBytes, type Address, type Hex } from 'viem';
+import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler/browser';
 import {
   factAttribution,
   STATE_MACHINE_ABI,
@@ -235,13 +236,13 @@ export function normalizeSignalSubmission(signal: StateMachineSignal): StateMach
   }
   const sourceId = signal.sourceId
     ? normalizeBytes32(signal.sourceId, 'sourceId')
-    : hashText(signal.source!, 'source');
+    : onchainSourceId(signal.source!);
   const signalName = signal.signalName && signal.stageIdentifier && !signal.signalName.includes('.')
     ? `${signal.stageIdentifier}.${signal.signalName}`
     : signal.signalName;
   const signalId = signal.signalId
     ? normalizeBytes32(signal.signalId, 'signalId')
-    : hashText(asNonEmptyString(signalName, 'signalName'), 'signalName');
+    : onchainSignalId(asNonEmptyString(signalName, 'signalName'));
 
   return {
     planId,

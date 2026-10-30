@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decodeFunctionData, keccak256, stringToBytes, type Hex } from 'viem';
+import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler';
 import {
   capabilitiesRootOf,
   factAttribution,
@@ -18,8 +19,8 @@ const STATE_MACHINE = '0x0000000000000000000000000000000000000001';
 const WALLET_ADDRESS = '0x0000000000000000000000000000000000000002';
 const PLAN_ID = `0x${'77'.repeat(32)}` as Hex;
 const ORDER_ID = `0x${'11'.repeat(32)}` as Hex;
-const SOURCE_ID = keccak256(stringToBytes('slot-a'));
-const SIGNAL_ID = keccak256(stringToBytes('exec.main.cmp'));
+const SOURCE_ID = onchainSourceId('slot-a');
+const SIGNAL_ID = onchainSignalId('exec.main.cmp');
 const PAYLOAD_HASH = `0x${'44'.repeat(32)}` as Hex;
 const OWNER_STAGE_ID = `0x${'55'.repeat(32)}` as Hex;
 const SELECTOR_STAGE_ID = `0x${'66'.repeat(32)}` as Hex;
@@ -139,7 +140,7 @@ describe('submitSignal calldata proof shape', () => {
 
     const foreign = withCapabilityProofs({
       ...BASE_SIGNAL,
-      sourceId: keccak256(stringToBytes('someone-else')),
+      sourceId: onchainSourceId('someone-else'),
     }, TABLES);
     expect(foreign.attribution).toBeUndefined();
     expect(buildSubmitStateMachineSignalCall(CONFIG, foreign).args[6]).toEqual(ZERO_FACT_ATTRIBUTION);

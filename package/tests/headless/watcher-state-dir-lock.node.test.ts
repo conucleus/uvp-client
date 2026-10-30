@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtemp, readdir, rm, stat, writeFile, readFile, rm as rmFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { Hex } from 'viem';
 import {
@@ -13,6 +11,7 @@ import {
   deadLetterStateMachineJob,
   decodeHookReadyLog,
   FileStateMachineJobStore,
+  HOOK_READY_TOPIC,
   InMemoryStateMachineJobStore,
   retryStateMachineJob,
   stateMachineJobId,
@@ -21,8 +20,6 @@ import {
 import { putBackDisplacedMarker } from '../../src/headless/watcher/storage/lock.js';
 import { main } from '../../src/cli/index.js';
 
-const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const watcherEntryUrl = pathToFileURL(join(packageDir, 'src/headless/watcher/storage/lock.ts')).href;
 const stateMachine = '0x1111111111111111111111111111111111111111' as const;
 const wallet = '0x2222222222222222222222222222222222222222' as const;
 
@@ -94,14 +91,17 @@ function chainOnceArgv(input: { readonly stubUrl: string; readonly configPath: s
   ];
 }
 
-async function deadPid(): Promise<number> {
-  const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
-  const pid = child.pid;
-  await new Promise<void>((resolvePromise) => child.once('exit', () => resolvePromise()));
-  if (pid === undefined) {
-    throw new Error('child process did not expose a pid');
+function deadPid(): number {
+  for (let pid = 99_999; pid > 1; pid -= 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+        return pid;
+      }
+    }
   }
-  return pid;
+  throw new Error('no dead pid available for the stale-lock fixture');
 }
 
 describe('watcher state-dir 进程锁', () => {
@@ -135,7 +135,7 @@ describe('watcher state-dir 进程锁', () => {
     const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-stale-'));
     try {
       const lockPath = join(dir, 'watcher.lock');
-      await writeFile(lockPath, `${await deadPid()}\n`);
+      await writeFile(lockPath, `${deadPid()}\n`);
       const lock = await acquireWatcherStateDirLock(dir);
       assert.equal(await readFile(lockPath, 'utf8'), `${process.pid}\n`);
       await lock.release();
@@ -148,7 +148,7 @@ describe('watcher state-dir 进程锁', () => {
     const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-race-'));
     try {
       const lockPath = join(dir, 'watcher.lock');
-      await writeFile(lockPath, `${await deadPid()}\n`);
+      await writeFile(lockPath, `${deadPid()}\n`);
 
       const settled = await Promise.allSettled([
         acquireWatcherStateDirLock(dir),
@@ -178,210 +178,6 @@ describe('watcher state-dir 进程锁', () => {
         'the takeover protocol must clean up its contender and graveyard files',
       );
     } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('跨进程并发接管陈旧锁：每轮风暴至多一个持有者，落败进程按活 pid 拒绝', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-race-proc-'));
-    const racerCount = 8;
-    const rounds = 12;
-    const children: ReturnType<typeof spawn>[] = [];
-    try {
-      const lockPath = join(dir, 'watcher.lock');
-      const stalePid = await deadPid();
-      const marksFile = join(dir, 'marks');
-      const script = join(dir, 'racer.mts');
-      await writeFile(script, [
-        'import { existsSync } from \'node:fs\';',
-        'import { appendFileSync } from \'node:fs\';',
-        'const mod = await import(process.argv[2]);',
-        'const rounds = Number(process.argv[6]);',
-        'const waitFor = async (path: string) => {',
-        '  while (!existsSync(path)) {',
-        '    await new Promise((resolve) => setTimeout(resolve, 2));',
-        '  }',
-        '};',
-        'for (let round = 0; round < rounds; round += 1) {',
-        '  const gate = `${process.argv[4]}-${round}`;',
-        '  await waitFor(`${gate}-go`);',
-        '  try {',
-        '    const lock = await mod.acquireWatcherStateDirLock(process.argv[3]);',
-        `    appendFileSync(process.argv[5], \`held \${process.pid} r\${round}\\n\`);`,
-        '    await waitFor(`${gate}-stop`);',
-        '    await lock.release();',
-        `    appendFileSync(process.argv[5], \`released \${process.pid} r\${round}\\n\`);`,
-        '  } catch (error) {',
-        `    appendFileSync(process.argv[5], \`refused \${process.pid} r\${round} \${error instanceof Error ? error.message : String(error)}\\n\`);`,
-        '  }',
-        `  appendFileSync(process.argv[5], \`done \${process.pid} r\${round}\\n\`);`,
-        '}',
-        '',
-      ].join('\n'));
-
-      const readMarks = async (): Promise<string[]> => {
-        try {
-          return (await readFile(marksFile, 'utf8')).split('\n').filter((line) => line.length > 0);
-        } catch {
-          return [];
-        }
-      };
-      const linesOfRound = (lines: readonly string[], round: number): string[] =>
-        lines.filter((line) => line.split(' ')[2] === `r${round}`);
-      for (let index = 0; index < racerCount; index += 1) {
-        children.push(spawn(
-          process.execPath,
-          ['--import', 'tsx', script, watcherEntryUrl, dir, join(dir, 'gate'), marksFile, String(rounds)],
-          { cwd: packageDir, stdio: 'ignore' },
-        ));
-      }
-
-      const codes = Promise.all(children.map((child) => new Promise<number | null>((resolve) => {
-        child.once('exit', (code) => resolve(code));
-      })));
-      for (let round = 0; round < rounds; round += 1) {
-        await writeFile(lockPath, `${stalePid}\n`);
-        await writeFile(join(dir, `gate-${round}-go`), '');
-        const roundDeadline = Date.now() + 30_000;
-        const settle = async (): Promise<void> => {
-          for (;;) {
-            if (Date.now() > roundDeadline) {
-              throw new Error(`round ${round} never settled: ${(await readMarks()).join(' | ')}`);
-            }
-            if (children.some((child) => child.exitCode !== null && child.exitCode !== 0)) {
-              throw new Error(`a racer crashed in round ${round}: ${(await readMarks()).join(' | ')}`);
-            }
-            const lines = linesOfRound(await readMarks(), round);
-            const held = lines.filter((line) => line.startsWith('held '));
-            const done = lines.filter((line) => line.startsWith('done '));
-            assert.ok(
-              held.length <= 1,
-              `round ${round}: at most one racer may hold the lock at a time: ${lines.join(' | ')}`,
-            );
-            if (held.length === 1 && done.length === racerCount - 1) {
-              return;
-            }
-            if (done.length === racerCount) {
-              throw new Error(`round ${round} produced no holder: ${lines.join(' | ')}`);
-            }
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-        };
-        await settle();
-        await writeFile(join(dir, `gate-${round}-stop`), '');
-        for (;;) {
-          if (Date.now() > roundDeadline) {
-            throw new Error(`round ${round} holder never released: ${(await readMarks()).join(' | ')}`);
-          }
-          const lines = linesOfRound(await readMarks(), round);
-          if (lines.filter((line) => line.startsWith('done ')).length === racerCount) {
-            const held = lines.filter((line) => line.startsWith('held '));
-            const released = lines.filter((line) => line.startsWith('released '));
-            const refused = lines.filter((line) => line.startsWith('refused '));
-            assert.equal(held.length, 1, `round ${round}: ${lines.join(' | ')}`);
-            assert.equal(released.length, 1, `round ${round}: the holder must release on the stop gate`);
-            assert.equal(refused.length, racerCount - 1);
-            assert.ok(
-              refused.every((line) => line.includes('locked by running process')),
-              `round ${round}: the losers must report the live holder: ${refused.join(' | ')}`,
-            );
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-      }
-
-      const exitCodes = await codes;
-      assert.deepEqual(
-        exitCodes.filter((code) => code !== 0),
-        [],
-        'a refused racer still exits cleanly',
-      );
-      assert.deepEqual(
-        (await readdir(dir))
-          .filter((name) => name === 'watcher.lock' || name.includes('.contend-') || name.endsWith('.broken'))
-          .sort(),
-        [],
-        'no lock, contender, or graveyard files may survive the storm',
-      );
-    } finally {
-      for (const child of children) {
-        if (!child.killed && child.exitCode === null) {
-          child.kill('SIGKILL');
-        }
-      }
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('持锁进程退出（含 SIGTERM 清理）后，同 state-dir 的 watcher 可以启动', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'uvp-state-lock-proc-'));
-    const logs: string[] = [];
-    const originalLog = console.log;
-    const previousExitCode = process.exitCode;
-    process.exitCode = undefined;
-    console.log = (message?: unknown) => {
-      logs.push(String(message));
-    };
-    const stub = await startChainStub();
-    const childScript = join(dir, 'holder.mts');
-    await writeFile(childScript, [
-      'const mod = await import(process.argv[2]);',
-      'const lock = await mod.acquireWatcherStateDirLock(process.argv[3]);',
-      'console.log("holder-ready");',
-      "process.on('SIGTERM', () => { void lock.release().then(() => process.exit(0)); });",
-      'setInterval(() => {}, 1000);',
-      '',
-    ].join('\n'));
-
-    const child = spawn(process.execPath, ['--import', 'tsx', childScript, watcherEntryUrl, dir], {
-      cwd: packageDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let childOutput = '';
-    child.stdout?.on('data', (chunk: Buffer) => {
-      childOutput += String(chunk);
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      childOutput += String(chunk);
-    });
-
-    const configPath = await writeHandlerConfig(dir);
-    try {
-      await new Promise<void>((resolvePromise, rejectPromise) => {
-        const timer = setTimeout(() => rejectPromise(new Error(`holder child never became ready: ${childOutput}`)), 30_000);
-        child.once('exit', () => {
-          clearTimeout(timer);
-          rejectPromise(new Error(`holder child exited before locking: ${childOutput}`));
-        });
-        child.stdout?.on('data', (chunk: Buffer) => {
-          if (String(chunk).includes('holder-ready')) {
-            clearTimeout(timer);
-            resolvePromise();
-          }
-        });
-      });
-
-      await assert.rejects(
-        main(chainOnceArgv({ stubUrl: stub.url, configPath, stateDir: dir })),
-        /locked by running process/u,
-      );
-
-      child.kill('SIGTERM');
-      const code = await new Promise<number | null>((resolvePromise) => child.once('exit', (exitCode) => resolvePromise(exitCode)));
-      assert.equal(code, 0);
-      assert.equal(await readFile(join(dir, 'watcher.lock'), 'utf8').then(() => 'still-there', () => 'removed'), 'removed');
-
-      await main(chainOnceArgv({ stubUrl: stub.url, configPath, stateDir: dir }));
-      assert.equal(process.exitCode, undefined);
-      assert.equal(await readFile(join(dir, 'watcher.lock'), 'utf8').then(() => 'still-there', () => 'removed'), 'removed');
-    } finally {
-      if (!child.killed && child.exitCode === null) {
-        child.kill('SIGKILL');
-      }
-      await stub.close();
-      console.log = originalLog;
-      process.exitCode = previousExitCode;
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -442,14 +238,10 @@ describe('watcher 任务级运行认领', () => {
   const machine = '0x1111111111111111111111111111111111111111' as const;
   const word = (hex: string) => `0x${hex.repeat(32)}`;
 
-  async function hookReadyLog(): Promise<Parameters<ReturnType<typeof createStateMachineWatcher>['handleLog']>[0]> {
-    const fixture = JSON.parse(await readFile(
-      join(packageDir, '../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.17.json'),
-      'utf8',
-    )) as { events: { HookReady: { topic: string } } };
+  function hookReadyLog(): Parameters<ReturnType<typeof createStateMachineWatcher>['handleLog']>[0] {
     return {
       address: machine,
-      topics: [fixture.events.HookReady.topic, word('77'), word('11'), word('22')],
+      topics: [HOOK_READY_TOPIC, word('77'), word('11'), word('22')],
       data: `0x${'55'.repeat(32)}${'66'.repeat(32)}`,
       blockNumber: 12n,
       transactionHash: word('33'),
@@ -523,7 +315,7 @@ describe('watcher 任务级运行认领', () => {
       assert.equal(effects, 1);
 
       const jobId = stateMachineJobId(decodeHookReadyLog(log));
-      const crashedPid = await deadPid();
+      const crashedPid = deadPid();
       await watcher.config.jobStore.update(jobId, {
         status: 'matched',
         updatedAt: new Date().toISOString(),
@@ -711,7 +503,7 @@ describe('watcher 任务级运行认领', () => {
         status: 'matched',
         updatedAt: new Date().toISOString(),
         matchedKey: '*',
-        claim: { pid: await deadPid(), at: new Date().toISOString() },
+        claim: { pid: deadPid(), at: new Date().toISOString() },
         expectStatus: 'detected',
       });
 

@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   decodeFunctionData,
-  keccak256,
   recoverTypedDataAddress,
-  stringToBytes,
   type Address,
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler';
 import {
   PLAN_COMMIT_PRIMARY_TYPE,
   PRODUCT_SUBMIT_PRIMARY_TYPE,
@@ -338,8 +337,8 @@ describe('operation matrix', () => {
     const signed = await signOperation(prepareOperation(signalInput(account.address)), account);
     const submit = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: signed.calls[0]!.data });
     const args = submit.args as readonly unknown[];
-    expect(args[2]).toBe(keccak256(stringToBytes('slot-a')));
-    expect(args[3]).toBe(keccak256(stringToBytes('exec.main.cmp')));
+    expect(args[2]).toBe(onchainSourceId('slot-a'));
+    expect(args[3]).toBe(onchainSignalId('exec.main.cmp'));
   });
 
   it('keeps buyer intent and birth authorization as disjoint signed payloads', async () => {
