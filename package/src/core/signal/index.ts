@@ -5,4 +5,5 @@
  */
 export * from './build.js';
 export * from './decode.js';
+export * from './files.js';
 export * from './submit.js';

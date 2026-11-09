@@ -63,7 +63,7 @@ const ORDER: ChainOrderProjection = {
   derivedSignals: {},
   stageMaterializations: {},
   stageExecutorOverlays: {},
-  stageResourceOverlays: {},
+  stageFiles: {},
   hooks: {},
   tasks: {},
   timeline: [],

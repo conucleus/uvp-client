@@ -39,8 +39,9 @@ import {
   type ChainSignalTargetRelation,
   type ChainStageExecutorOverlay,
   type ChainStageExecutorPatchMode,
+  type ChainStageFileEntry,
+  type ChainStageFileMap,
   type ChainStageMaterialization,
-  type ChainStageResourceOverlay,
   type ChainStageSelectorBinding,
   type ChainSubmitSignal,
   type ChainSyncDiagnosticsCounts,
@@ -72,7 +73,8 @@ export type StateMachineSignalProjection = RevivedWire<ChainSignal>;
 export type StateMachineDerivedSignalProjection = RevivedWire<ChainDerivedSignal>;
 export type StateMachineStageMaterializationProjection = RevivedWire<ChainStageMaterialization>;
 export type StateMachineStageExecutorOverlayProjection = RevivedWire<ChainStageExecutorOverlay>;
-export type StateMachineStageResourceOverlayProjection = RevivedWire<ChainStageResourceOverlay>;
+export type StateMachineStageFileEntryProjection = RevivedWire<ChainStageFileEntry>;
+export type StateMachineStageFileMapProjection = RevivedWire<ChainStageFileMap>;
 export type StateMachineHookProjection = RevivedWire<ChainHook>;
 export type StateMachineTaskSubmitSignalProjection = RevivedWire<ChainSubmitSignal>;
 export type StateMachineTaskProjection = RevivedWire<ChainTaskProjection>;

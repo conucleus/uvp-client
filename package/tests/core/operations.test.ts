@@ -10,7 +10,6 @@ import {
   PLAN_COMMIT_PRIMARY_TYPE,
   PRODUCT_SUBMIT_PRIMARY_TYPE,
   STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
-  STAGE_RESOURCE_PATCH_PRIMARY_TYPE,
   UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
   TRIGGER_ORDER_FROM_OUTSIDE_PRIMARY_TYPE,
@@ -74,7 +73,6 @@ function signalInput(signer: Address): OperationInput {
 function stageExecutorPatchInput(signer: Address): OperationInput {
   return {
     operation: 'stagePatch.submit',
-    kind: 'executor',
     chainId: 31337,
     stagePatchModuleAddress: STAGE_PATCH_MODULE,
     signer,
@@ -98,30 +96,6 @@ function stageExecutorPatchInput(signer: Address): OperationInput {
     bindingProof: { selectorStageId: bytes32('09'), proof: [] },
     candidateProof: [],
     executorAuthorizations: [],
-  };
-}
-
-function stageResourcePatchInput(signer: Address): OperationInput {
-  return {
-    operation: 'stagePatch.submit',
-    kind: 'resource',
-    chainId: 31337,
-    stagePatchModuleAddress: STAGE_PATCH_MODULE,
-    signer,
-    planId: bytes32('01'),
-    orderId: bytes32('02'),
-    deadline: 1_700_000_000n,
-    patch: {
-      selectorStageId: bytes32('04'),
-      targetStageId: bytes32('05'),
-      resourceKey: bytes32('06'),
-      manifestHash: bytes32('07'),
-      policyHash: bytes32('08'),
-      patchNonce: 3,
-      manifestURI: 'ipfs://manifest',
-      patchHash: bytes32('09'),
-    },
-    bindingProof: { selectorStageId: bytes32('09'), proof: [] },
   };
 }
 
@@ -277,16 +251,10 @@ describe('operation matrix', () => {
         calls: ['submitSignalFor'],
       },
       {
-        label: 'stagePatch.submit executor',
+        label: 'stagePatch.submit',
         input: stageExecutorPatchInput(signerAccount.address),
         primaryType: STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
         calls: ['applyStageExecutorPatchFor'],
-      },
-      {
-        label: 'stagePatch.submit resource',
-        input: stageResourcePatchInput(signerAccount.address),
-        primaryType: STAGE_RESOURCE_PATCH_PRIMARY_TYPE,
-        calls: ['applyStageResourcePatchFor'],
       },
       {
         label: 'registry.write',

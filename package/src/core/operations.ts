@@ -9,19 +9,18 @@
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 import {
   buildApplyStageExecutorPatchForCall,
-  buildApplyStageResourcePatchForCall,
   buildProductSubmitTypedData,
   buildStageExecutorPatchTypedData,
-  buildStageResourcePatchTypedData,
   buildSubmitSignalForCall,
   buildUVPStageInviteCreateTypedData,
+  filePatchDigest,
   validateUVPOrderFinalizeTypedData,
   validateUVPStageInviteAcceptTypedData,
+  type FilePatch,
   type SelectorBindingPayload,
   type SignalAttributionPayload,
   type SignalAuthorizationPayload,
   type StageExecutorPatchCallPatch,
-  type StageResourcePatchCallPatch,
   type TriggerOrderFromOutsidePayload,
   type UVPOrderFinalizeTypedData,
   type UVPStageInviteAcceptTypedData,
@@ -32,17 +31,24 @@ import {
   buildOrderBirthIntent,
   orderBirthAuthorizationCall,
 } from './birth.js';
+import { ZERO_BYTES32 } from './constants.js';
 import {
   buildPlanCommitCall,
   buildPlanCommitTypedDataFor,
   buildPlanFinalizeCall,
   type PlanRegistrationArgs,
 } from './registration.js';
-import { normalizeSignalSubmission, type StateMachineSignal } from './signal/build.js';
+import {
+  normalizeSignalPlanId,
+  normalizeSignalSubmission,
+  ZERO_FACT_ATTRIBUTION,
+  type StateMachineSignal,
+} from './signal/build.js';
 import type { OperationTransport } from './transport.js';
 import {
   ExecutorKitError,
   normalizeAddressChecksummed,
+  normalizeBytes32,
   parseBigNumberish,
   parsePositiveInteger,
   ValidationError,
@@ -277,18 +283,28 @@ export interface InviteCreateOperationInput {
   readonly deadline: bigint | number | string;
 }
 
-export interface SignalSubmitOperationInput {
+interface SignalSubmitOperationBase {
   readonly operation: 'signal.submit';
   readonly chainId: number;
   readonly stateMachineAddress: Address | string;
   readonly signer: Address | string;
   readonly deadline: bigint | number | string;
+}
+
+export interface SignalSubmitOperationInput extends SignalSubmitOperationBase {
   readonly signal: StateMachineSignal;
+  readonly filePatch?: FilePatch;
+}
+
+export interface PureFilePatchOperationInput extends SignalSubmitOperationBase {
+  readonly signal?: undefined;
+  readonly planId: Hex | string;
+  readonly orderId: Hex | string;
+  readonly filePatch: FilePatch;
 }
 
 export interface StageExecutorPatchOperationInput {
   readonly operation: 'stagePatch.submit';
-  readonly kind: 'executor';
   readonly chainId: number;
   readonly stagePatchModuleAddress: Address | string;
   /** Selector wallet; signs the patch typed data. */
@@ -301,19 +317,6 @@ export interface StageExecutorPatchOperationInput {
   readonly bindingProof: SelectorBindingPayload;
   readonly candidateProof: readonly (Hex | string)[];
   readonly executorAuthorizations: readonly SignalAuthorizationPayload[];
-}
-
-export interface StageResourcePatchOperationInput {
-  readonly operation: 'stagePatch.submit';
-  readonly kind: 'resource';
-  readonly chainId: number;
-  readonly stagePatchModuleAddress: Address | string;
-  readonly signer: Address | string;
-  readonly planId: Hex | string;
-  readonly orderId: Hex | string;
-  readonly deadline: bigint | number | string;
-  readonly patch: StageResourcePatchCallPatch;
-  readonly bindingProof: SelectorBindingPayload;
 }
 
 export interface RegistryWriteOperationInput {
@@ -331,8 +334,8 @@ export type OperationInput =
   | InviteAcceptOperationInput
   | InviteCreateOperationInput
   | SignalSubmitOperationInput
+  | PureFilePatchOperationInput
   | StageExecutorPatchOperationInput
-  | StageResourcePatchOperationInput
   | RegistryWriteOperationInput;
 
 export function prepareOperation(input: OperationInput): PreparedOperation {
@@ -498,7 +501,61 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         'stateMachineAddress',
       );
       const deadline = parseBigNumberish(input.deadline, 'deadline');
+      if (input.signal === undefined) {
+        if (input.filePatch === undefined) {
+          throw new ValidationError(
+            'signal.submit requires either a business signal or a pure file patch; neither was provided',
+          );
+        }
+        const planId = normalizeSignalPlanId(input.planId);
+        const orderId = normalizeBytes32(input.orderId, 'orderId');
+        const filesDigest = filePatchDigest(planId, orderId, input.filePatch);
+        const typedData = buildProductSubmitTypedData({
+          chainId,
+          verifyingContract: stateMachineAddress,
+          planId,
+          orderId,
+          sourceId: ZERO_BYTES32,
+          signalId: ZERO_BYTES32,
+          payloadHash: ZERO_BYTES32,
+          idempotencyKey: ZERO_BYTES32,
+          submitter: signer,
+          deadline: deadline.toString(10),
+          filesDigest,
+        });
+        return {
+          operation: 'signal.submit',
+          chainId,
+          signer,
+          typedData,
+          buildCalls: (signature) => [callOf(buildSubmitSignalForCall(
+            { stateMachineAddress, chainId },
+            {
+              planId,
+              orderId,
+              sourceId: ZERO_BYTES32,
+              signalId: ZERO_BYTES32,
+              payloadHash: ZERO_BYTES32,
+              idempotencyKey: ZERO_BYTES32,
+              attribution: ZERO_FACT_ATTRIBUTION,
+              submitter: signer,
+              deadline,
+              signature,
+              filesDigest,
+              filePatch: input.filePatch,
+            },
+          ))],
+        };
+      }
       const submission = normalizeSignalSubmission(input.signal);
+      if (input.filePatch !== undefined && submission.signalId === ZERO_BYTES32) {
+        throw new ValidationError(
+          'signal.submit cannot attach a filePatch to a zero signalId: a standalone file patch must use the pure file patch shape, which signs sourceId/signalId/payloadHash as zero instead of naming a business signal',
+        );
+      }
+      const filesDigest = input.filePatch === undefined
+        ? undefined
+        : filePatchDigest(submission.planId, submission.orderId, input.filePatch);
       const typedData = buildProductSubmitTypedData({
         chainId,
         verifyingContract: stateMachineAddress,
@@ -510,6 +567,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         idempotencyKey: submission.idempotencyKey,
         submitter: signer,
         deadline: deadline.toString(10),
+        ...(filesDigest !== undefined ? { filesDigest } : {}),
       });
       return {
         operation: 'signal.submit',
@@ -523,6 +581,9 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
             submitter: signer,
             deadline,
             signature,
+            ...(filesDigest !== undefined && input.filePatch !== undefined
+              ? { filesDigest, filePatch: input.filePatch }
+              : {}),
           },
         ))],
       };
@@ -532,39 +593,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
       const signer = normalizeAddressChecksummed(input.signer, 'signer');
       const chainId = parsePositiveInteger(input.chainId, 'chainId');
       const deadline = parseBigNumberish(input.deadline, 'deadline');
-      if (input.kind === 'executor') {
-        const typedData = buildStageExecutorPatchTypedData({
-          ...input.patch,
-          chainId,
-          verifyingContract: input.stagePatchModuleAddress,
-          planId: input.planId,
-          orderId: input.orderId,
-          selector: signer,
-          deadline,
-        });
-        return {
-          operation: 'stagePatch.submit',
-          chainId,
-          signer,
-          typedData,
-          buildCalls: (signature) => [callOf(buildApplyStageExecutorPatchForCall(
-            { stagePatchModuleAddress: input.stagePatchModuleAddress, chainId },
-            {
-              planId: input.planId,
-              orderId: input.orderId,
-              patch: input.patch,
-              selector: signer,
-              deadline,
-              selectorSignature: signature,
-              previousExecutorSignature: input.previousExecutorSignature,
-              bindingProof: input.bindingProof,
-              candidateProof: input.candidateProof,
-              executorAuthorizations: input.executorAuthorizations,
-            },
-          ))],
-        };
-      }
-      const typedData = buildStageResourcePatchTypedData({
+      const typedData = buildStageExecutorPatchTypedData({
         ...input.patch,
         chainId,
         verifyingContract: input.stagePatchModuleAddress,
@@ -578,7 +607,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         chainId,
         signer,
         typedData,
-        buildCalls: (signature) => [callOf(buildApplyStageResourcePatchForCall(
+        buildCalls: (signature) => [callOf(buildApplyStageExecutorPatchForCall(
           { stagePatchModuleAddress: input.stagePatchModuleAddress, chainId },
           {
             planId: input.planId,
@@ -586,8 +615,11 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
             patch: input.patch,
             selector: signer,
             deadline,
-            signature,
+            selectorSignature: signature,
+            previousExecutorSignature: input.previousExecutorSignature,
             bindingProof: input.bindingProof,
+            candidateProof: input.candidateProof,
+            executorAuthorizations: input.executorAuthorizations,
           },
         ))],
       };

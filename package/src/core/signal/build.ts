@@ -215,9 +215,7 @@ export function normalizeSubmitConfig(config: SubmitStateMachineSignalConfig): N
   };
 }
 
-/** Normalized submitSignal keys shared by the direct call builders and the signed relay operation. */
-export function normalizeSignalSubmission(signal: StateMachineSignal): StateMachineSignalCallArgs {
-  const rawPlanId = signal.planId ?? undefined;
+export function normalizeSignalPlanId(rawPlanId: Hex | string | undefined): Hex {
   if (rawPlanId === undefined || (typeof rawPlanId === 'string' && rawPlanId.trim().length === 0)) {
     throw new ValidationError(
       'planId is required to submit a state machine signal: the plan-scoped submitSignal(orderId, ...) ABI now takes the order planId as its first argument and rejects the zero placeholder on chain',
@@ -227,6 +225,12 @@ export function normalizeSignalSubmission(signal: StateMachineSignal): StateMach
   if (planId === ZERO_BYTES32) {
     throw new ValidationError('planId must be a non-zero bytes32: the zero placeholder cannot satisfy the on-chain (planId, orderId) existence check');
   }
+  return planId;
+}
+
+/** Normalized submitSignal keys shared by the direct call builders and the signed relay operation. */
+export function normalizeSignalSubmission(signal: StateMachineSignal): StateMachineSignalCallArgs {
+  const planId = normalizeSignalPlanId(signal.planId);
   const orderId = normalizeBytes32(signal.orderId, 'orderId');
   const payloadHash = signal.payloadHash ? normalizeBytes32(signal.payloadHash, 'payloadHash') : ZERO_BYTES32;
   if (signal.sourceId === undefined && (signal.source ?? '').trim().length === 0) {

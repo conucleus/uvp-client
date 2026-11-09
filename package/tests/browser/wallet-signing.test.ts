@@ -60,6 +60,7 @@ describe('participant entrypoint', () => {
           { name: 'idempotencyKey', type: 'bytes32' },
           { name: 'submitter', type: 'address' },
           { name: 'deadline', type: 'uint256' },
+          { name: 'filesDigest', type: 'bytes32' },
         ],
       },
       primaryType: 'UVPStateMachineSignal',
@@ -72,6 +73,7 @@ describe('participant entrypoint', () => {
         idempotencyKey,
         submitter,
         deadline,
+        filesDigest: bytes32('00'),
       },
     });
   });
@@ -155,6 +157,14 @@ describe('participant entrypoint', () => {
         signalId,
         stageId: `0x${'00'.repeat(32)}`,
         capabilityProof: [],
+      },
+      bytes32('00'),
+      {
+        targetStageId: bytes32('00'),
+        baseHash: bytes32('00'),
+        writerStageId: bytes32('00'),
+        writerProof: [],
+        ops: [],
       },
     ]);
     expect(call.data).toMatch(/^0x[0-9a-f]+$/);

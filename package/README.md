@@ -11,7 +11,7 @@ package produces and reads signals, it never owns orders, sessions, or keys.
 
 | Entry | Responsibility (one sentence) |
 |---|---|
-| `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, buyer-intent vs birthAuthorizer split, re-exported plan-registration and HookReady surfaces, signal build/decode/submit, validation, signing helpers, evidence hashing, and re-exported protocol typed data. No Node builtins. |
+| `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, buyer-intent vs birthAuthorizer split, re-exported plan-registration and HookReady surfaces, signal build/decode/submit with optional stage file patches, stage file read helpers (`getStageFile`/`stageFilesHash`), validation, signing helpers, evidence hashing, and re-exported protocol typed data. No Node builtins. |
 | `@uvp-eth/uvp-client/chain-read` | Typed HTTP client for chain-services' generic `/chain/*` projection reads plus the bigint projection decoders; wire DTOs/structural decoders are single-sourced in `@uvp-eth/chain-read-contract`, failures stay typed (`invalid_config`/`timeout`/`transport`/`http`/`not_found`/`invalid_response`). |
 | `@uvp-eth/uvp-client/server` | Node-only server tooling: the `@uvp-eth/compiler` primitives a dock relayer orchestrates plus file-based evidence hashing. Never imported by `/browser` or `/core`. |
 | `@uvp-eth/uvp-client/browser` | Browser-host client: `createBrowserClient` exposes the same operation set through the injected EIP-1193 wallet (direct or relay); wallet signing primitives, deadline/format derivations, and the stage executor change typed-data surface — no compiler/env/localStorage/private keys. |
@@ -81,8 +81,8 @@ All signed writes belong to the client, not to chain-services:
 | `order.birth` | `core` / `browser` / `headless` / `cli` | buyer intent (relay) or birthAuthorizer `triggerOrderFromOutsideFor` (direct) |
 | `order.finalize` / `invite.accept` | `browser` / `headless` / `cli` | protocol-bindings UVPOrderFinalize / UVPStageInviteAccept typed data, validated before signing |
 | `invite.create` | `core` / `browser` / `headless` / `cli` | buyer-signed UVPStageInviteCreate terms (`UVPOrderBook/1`, single-sourced in protocol-bindings) |
-| `signal.submit` | `core` / `browser` / `headless` / `cli` | `UVPStateMachineSignal` typed data + `submitSignalFor` calldata |
-| `stagePatch.submit` | `core` / `browser` / `headless` | stage executor/resource patch typed data + `applyStage*PatchFor` calldata |
+| `signal.submit` | `core` / `browser` / `headless` / `cli` | `UVPStateMachineSignal` 0.16 typed data + `submitSignalFor` calldata; optional `filePatch` on a business signal or a standalone pure file patch (`signalId = 0`) |
+| `stagePatch.submit` | `core` / `browser` / `headless` | stage executor patch typed data + `applyStageExecutorPatchFor` calldata |
 | `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/protocol-bindings` (`UVPZhixuRegistry/1`); headless exposes `publishZhixuRecord`/`publishIdentityClaim` default builders |
 
 The browser path never imports the compiler or reads private keys. The headless
@@ -90,6 +90,25 @@ path signs with a local private key. Registry storage/HTTP is not a client
 transport: headless `publishZhixuRecord`/`publishIdentityClaim` build the
 registry's own typed data (no local copy), sign it through `registry.write`, and
 hand the signed operation to the caller's submitter.
+
+### Stage file patches
+
+`signal.submit` is the single write path for stage file patches. `FileOp`/`FilePatch`
+types, `filePatchDigest`, and the `submitSignalFor` ABI are single-sourced in
+`@uvp-eth/protocol-bindings`; this package passes them through and never redefines
+the patch shape or canonical digest.
+
+- `SignalSubmitOperationInput` carries an optional `filePatch` beside the business
+  `signal`: one 0.16 signature covers the signal fields and `filesDigest`, and the
+  calldata appends `(filesDigest, filePatch)` after the attribution.
+- `PureFilePatchOperationInput` uses the same operation without a business signal:
+  `planId`, `orderId`, and a required `filePatch`; `sourceId`, `signalId`,
+  `payloadHash`, and `idempotencyKey` are signed as zero and the attribution is
+  empty, so the patch cannot count as a business signal.
+- `getStageFile` and `stageFilesHash` read the file resource module through the
+  `FILE_RESOURCE_MODULE_ABI` exported by protocol-bindings. A failed or malformed
+  read throws `StageFileReadError` (`invalid_config`/`read_failed`/`invalid_response`)
+  instead of being reported as an empty file map entry.
 
 ## Wallet Sessions
 
@@ -277,9 +296,9 @@ than parse messages.
 
 ## ABI Boundary
 
-`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.15` compact-hook
+`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.16` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.17.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.18.json`:
 `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId,
 bytes32 hookName)` and `submitSignal(planId, orderId, sourceId, signalId,
 payloadHash, idempotencyKey, attribution)`. The kit consumes that surface only
