@@ -9,7 +9,6 @@ export {
   PLAN_COMMIT_PRIMARY_TYPE,
   PLAN_COMMIT_TYPED_DATA_FIELDS,
   buildPlanCommitTypedData,
-  buildProductSubmitTypedData,
   buildDerivedSignalTypedData,
   buildStageExecutorPatchTypedData,
   buildUVPOrderFinalizeTypedData,
@@ -24,7 +23,6 @@ export {
 
 export type {
   BuildPlanCommitTypedDataInput,
-  BuildProductSubmitTypedDataInput,
   FileOp,
   FileOpKind,
   FilePatch,
