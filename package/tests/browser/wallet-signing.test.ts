@@ -4,7 +4,6 @@ import {
   PRODUCT_SUBMIT_DOMAIN_VERSION,
   STATE_MACHINE_ABI,
   buildProductSubmitTypedData,
-  buildSubmitSignalForCall,
   recoverProductSubmitSigner,
   type SignalAttributionPayload,
 } from '@uvp-eth/protocol-bindings';
@@ -15,6 +14,7 @@ import {
   type Eip1193Provider,
 } from '../../src/browser/wallet/index.js';
 import { requestSolanaProductSubmitSignature } from '../../src/browser/wallet/solana.js';
+import { buildSubmitStateMachineSignalCall } from '../../src/headless/watcher/index.js';
 
 const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111' as const;
 const account = privateKeyToAccount(privateKey);
@@ -112,61 +112,50 @@ describe('participant entrypoint', () => {
     await expect(recoverProductSubmitSigner(typedData, signature)).resolves.toBe(submitter);
   });
 
-  it('builds submitSignalFor contract calls from the shared ABI', () => {
-    const signature = `0x${'aa'.repeat(65)}` as const;
-    const attribution: SignalAttributionPayload = {
-      sourceId,
-      signalId,
-      stageId: `0x${'00'.repeat(32)}`,
-      capabilityProof: [],
-    };
-    const call = buildSubmitSignalForCall({
-      stateMachineAddress: verifyingContract,
-      chainId: 31337,
-    }, {
-      planId,
-      orderId,
-      sourceId,
-      signalId,
-      payloadHash,
-      idempotencyKey,
-      submitter,
-      deadline,
-      signature,
-      attribution,
-    });
+  it('builds direct submitSignal calls with empty file args', () => {
+    const call = buildSubmitStateMachineSignalCall(
+      {
+        stateMachineAddress: verifyingContract,
+        rpcUrl: 'http://127.0.0.1:8545',
+        chainId: 31337,
+      },
+      {
+        planId,
+        orderId,
+        sourceId,
+        signalId,
+        payloadHash,
+        idempotencyKey,
+        attribution: {
+          sourceId,
+          signalId,
+          stageId: bytes32('00'),
+          capabilityProof: [],
+        },
+      },
+    );
 
     expect(call).toMatchObject({
       address: verifyingContract,
       abi: STATE_MACHINE_ABI,
-      functionName: 'submitSignalFor',
+      functionName: 'submitSignal',
       chainId: 31337,
     });
-    expect(call.args).toEqual([
-      planId,
-      orderId,
+    expect(call.args).toHaveLength(9);
+    expect(call.args[6]).toEqual({
       sourceId,
       signalId,
-      payloadHash,
-      idempotencyKey,
-      submitter,
-      BigInt(deadline),
-      signature,
-      {
-        sourceId,
-        signalId,
-        stageId: `0x${'00'.repeat(32)}`,
-        capabilityProof: [],
-      },
-      bytes32('00'),
-      {
-        targetStageId: bytes32('00'),
-        baseHash: bytes32('00'),
-        writerStageId: bytes32('00'),
-        writerProof: [],
-        ops: [],
-      },
-    ]);
+      stageId: bytes32('00'),
+      capabilityProof: [],
+    });
+    expect(call.args[7]).toBe(bytes32('00'));
+    expect(call.args[8]).toEqual({
+      targetStageId: bytes32('00'),
+      baseHash: bytes32('00'),
+      writerStageId: bytes32('00'),
+      writerProof: [],
+      ops: [],
+    });
     expect(call.data).toMatch(/^0x[0-9a-f]+$/);
   });
 

@@ -44,24 +44,6 @@ function planInput(signer: Address): OperationInput {
   };
 }
 
-function signalInput(signer: Address): OperationInput {
-  return {
-    operation: 'signal.submit',
-    chainId: 31337,
-    stateMachineAddress: STATE_MACHINE,
-    signer,
-    deadline: 1_700_000_000n,
-    signal: {
-      planId: bytes32('01'),
-      orderId: bytes32('02'),
-      source: 'slot-a',
-      stageIdentifier: 'exec.main',
-      signalName: 'cmp',
-      payloadHash: bytes32('03'),
-      idempotencyKey: 'key-1',
-    },
-  };
-}
 
 function birthIntentInput(signer: Address): OperationInput {
   return {
@@ -107,7 +89,7 @@ describe('browser and headless operation clients', () => {
       rpcUrl: 'http://127.0.0.1:8545',
     });
 
-    for (const input of [planInput(account.address), signalInput(account.address), birthIntentInput(account.address)]) {
+    for (const input of [planInput(account.address), birthIntentInput(account.address)]) {
       const browserSigned = await browser.sign(input);
       const headlessSigned = await headless.sign(input);
       expect(browserSigned.typedData).toEqual(headlessSigned.typedData);

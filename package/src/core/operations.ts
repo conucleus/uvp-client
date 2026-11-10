@@ -9,9 +9,7 @@
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 import {
   buildApplyStageExecutorPatchForCall,
-  buildProductSubmitTypedData,
   buildStageExecutorPatchTypedData,
-  buildSubmitSignalForCall,
   buildUVPStageInviteCreateTypedData,
   filePatchDigest,
   validateUVPOrderFinalizeTypedData,
@@ -60,7 +58,6 @@ export const OPERATION_NAMES = [
   'order.finalize',
   'invite.accept',
   'invite.create',
-  'signal.submit',
   'stagePatch.submit',
   'registry.write',
 ] as const;
@@ -283,26 +280,6 @@ export interface InviteCreateOperationInput {
   readonly deadline: bigint | number | string;
 }
 
-interface SignalSubmitOperationBase {
-  readonly operation: 'signal.submit';
-  readonly chainId: number;
-  readonly stateMachineAddress: Address | string;
-  readonly signer: Address | string;
-  readonly deadline: bigint | number | string;
-}
-
-export interface SignalSubmitOperationInput extends SignalSubmitOperationBase {
-  readonly signal: StateMachineSignal;
-  readonly filePatch?: FilePatch;
-}
-
-export interface PureFilePatchOperationInput extends SignalSubmitOperationBase {
-  readonly signal?: undefined;
-  readonly planId: Hex | string;
-  readonly orderId: Hex | string;
-  readonly filePatch: FilePatch;
-}
-
 export interface StageExecutorPatchOperationInput {
   readonly operation: 'stagePatch.submit';
   readonly chainId: number;
@@ -333,8 +310,6 @@ export type OperationInput =
   | OrderFinalizeOperationInput
   | InviteAcceptOperationInput
   | InviteCreateOperationInput
-  | SignalSubmitOperationInput
-  | PureFilePatchOperationInput
   | StageExecutorPatchOperationInput
   | RegistryWriteOperationInput;
 
@@ -490,102 +465,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         signer,
         typedData,
         buildCalls: () => [],
-      };
-    }
-
-    case 'signal.submit': {
-      const signer = normalizeAddressChecksummed(input.signer, 'signer');
-      const chainId = parsePositiveInteger(input.chainId, 'chainId');
-      const stateMachineAddress = normalizeAddressChecksummed(
-        input.stateMachineAddress,
-        'stateMachineAddress',
-      );
-      const deadline = parseBigNumberish(input.deadline, 'deadline');
-      if (input.signal === undefined) {
-        if (input.filePatch === undefined) {
-          throw new ValidationError(
-            'signal.submit requires either a business signal or a pure file patch; neither was provided',
-          );
-        }
-        const planId = normalizeSignalPlanId(input.planId);
-        const orderId = normalizeBytes32(input.orderId, 'orderId');
-        const filesDigest = filePatchDigest(planId, orderId, input.filePatch);
-        const typedData = buildProductSubmitTypedData({
-          chainId,
-          verifyingContract: stateMachineAddress,
-          planId,
-          orderId,
-          sourceId: ZERO_BYTES32,
-          signalId: ZERO_BYTES32,
-          payloadHash: ZERO_BYTES32,
-          idempotencyKey: ZERO_BYTES32,
-          submitter: signer,
-          deadline: deadline.toString(10),
-          filesDigest,
-        });
-        return {
-          operation: 'signal.submit',
-          chainId,
-          signer,
-          typedData,
-          buildCalls: (signature) => [callOf(buildSubmitSignalForCall(
-            { stateMachineAddress, chainId },
-            {
-              planId,
-              orderId,
-              sourceId: ZERO_BYTES32,
-              signalId: ZERO_BYTES32,
-              payloadHash: ZERO_BYTES32,
-              idempotencyKey: ZERO_BYTES32,
-              attribution: ZERO_FACT_ATTRIBUTION,
-              submitter: signer,
-              deadline,
-              signature,
-              filesDigest,
-              filePatch: input.filePatch,
-            },
-          ))],
-        };
-      }
-      const submission = normalizeSignalSubmission(input.signal);
-      if (input.filePatch !== undefined && submission.signalId === ZERO_BYTES32) {
-        throw new ValidationError(
-          'signal.submit cannot attach a filePatch to a zero signalId: a standalone file patch must use the pure file patch shape, which signs sourceId/signalId/payloadHash as zero instead of naming a business signal',
-        );
-      }
-      const filesDigest = input.filePatch === undefined
-        ? undefined
-        : filePatchDigest(submission.planId, submission.orderId, input.filePatch);
-      const typedData = buildProductSubmitTypedData({
-        chainId,
-        verifyingContract: stateMachineAddress,
-        planId: submission.planId,
-        orderId: submission.orderId,
-        sourceId: submission.sourceId,
-        signalId: submission.signalId,
-        payloadHash: submission.payloadHash,
-        idempotencyKey: submission.idempotencyKey,
-        submitter: signer,
-        deadline: deadline.toString(10),
-        ...(filesDigest !== undefined ? { filesDigest } : {}),
-      });
-      return {
-        operation: 'signal.submit',
-        chainId,
-        signer,
-        typedData,
-        buildCalls: (signature) => [callOf(buildSubmitSignalForCall(
-          { stateMachineAddress, chainId },
-          {
-            ...submission,
-            submitter: signer,
-            deadline,
-            signature,
-            ...(filesDigest !== undefined && input.filePatch !== undefined
-              ? { filesDigest, filePatch: input.filePatch }
-              : {}),
-          },
-        ))],
       };
     }
 

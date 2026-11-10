@@ -81,7 +81,6 @@ All signed writes belong to the client, not to chain-services:
 | `order.birth` | `core` / `browser` / `headless` / `cli` | buyer intent (relay) or birthAuthorizer `triggerOrderFromOutsideFor` (direct) |
 | `order.finalize` / `invite.accept` | `browser` / `headless` / `cli` | protocol-bindings UVPOrderFinalize / UVPStageInviteAccept typed data, validated before signing |
 | `invite.create` | `core` / `browser` / `headless` / `cli` | buyer-signed UVPStageInviteCreate terms (`UVPOrderBook/1`, single-sourced in protocol-bindings) |
-| `signal.submit` | `core` / `browser` / `headless` / `cli` | `UVPStateMachineSignal` 0.16 typed data + `submitSignalFor` calldata; optional `filePatch` on a business signal or a standalone pure file patch (`signalId = 0`) |
 | `stagePatch.submit` | `core` / `browser` / `headless` | stage executor patch typed data + `applyStageExecutorPatchFor` calldata |
 | `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/protocol-bindings` (`UVPZhixuRegistry/1`); headless exposes `publishZhixuRecord`/`publishIdentityClaim` default builders |
 
@@ -93,18 +92,12 @@ hand the signed operation to the caller's submitter.
 
 ### Stage file patches
 
-`signal.submit` is the single write path for stage file patches. `FileOp`/`FilePatch`
-types, `filePatchDigest`, and the `submitSignalFor` ABI are single-sourced in
-`@uvp-eth/protocol-bindings`; this package passes them through and never redefines
-the patch shape or canonical digest.
+Stage file patches are written through direct `submitSignal` (identity `msg.sender`);
+there is no signed relay lane. `FileOp`/`FilePatch` types and `filePatchDigest`
+are single-sourced in `@uvp-eth/protocol-bindings`; this package passes them
+through and never redefines the patch shape or canonical digest.
 
-- `SignalSubmitOperationInput` carries an optional `filePatch` beside the business
-  `signal`: one 0.16 signature covers the signal fields and `filesDigest`, and the
-  calldata appends `(filesDigest, filePatch)` after the attribution.
-- `PureFilePatchOperationInput` uses the same operation without a business signal:
-  `planId`, `orderId`, and a required `filePatch`; `sourceId`, `signalId`,
-  `payloadHash`, and `idempotencyKey` are signed as zero and the attribution is
-  empty, so the patch cannot count as a business signal.
+- Direct `submitSignal` builders accept an optional `filePatch`; `filesDigest` is derived with `filePatchDigest` and appended with the patch after the attribution. A standalone pure patch uses `signalId = 0`; no signature/typed-data path exists.
 - `getStageFile` and `stageFilesHash` read the file resource module through the
   `FILE_RESOURCE_MODULE_ABI` exported by protocol-bindings. A failed or malformed
   read throws `StageFileReadError` (`invalid_config`/`read_failed`/`invalid_response`)
@@ -199,7 +192,6 @@ Operation commands accept `--mode direct|relay`, `--relay-url <url>`,
   UVPStageInviteAccept typed data; delivery stays with the order service.
 - `invite create --payload <json>`: buyer signs `UVPStageInviteCreate` terms;
   delivery (minting the invite) stays with the app backend.
-- `signal submit`: sign `submitSignalFor` (relayable executor signal).
 - `registry sign`: sign a registry EIP-712 record; registry HTTP stays in the
   registry package.
 

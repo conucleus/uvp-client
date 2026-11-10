@@ -8,7 +8,6 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler';
 import {
   PLAN_COMMIT_PRIMARY_TYPE,
-  PRODUCT_SUBMIT_PRIMARY_TYPE,
   STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
   UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
@@ -51,24 +50,6 @@ function registrationInput(signer: Address): OperationInput {
   };
 }
 
-function signalInput(signer: Address): OperationInput {
-  return {
-    operation: 'signal.submit',
-    chainId: 31337,
-    stateMachineAddress: STATE_MACHINE,
-    signer,
-    deadline: 1_700_000_000n,
-    signal: {
-      planId: bytes32('01'),
-      orderId: bytes32('02'),
-      source: 'slot-a',
-      stageIdentifier: 'exec.main',
-      signalName: 'cmp',
-      payloadHash: bytes32('03'),
-      idempotencyKey: 'signal-key-1',
-    },
-  };
-}
 
 function stageExecutorPatchInput(signer: Address): OperationInput {
   return {
@@ -245,12 +226,6 @@ describe('operation matrix', () => {
         calls: [],
       },
       {
-        label: 'signal.submit',
-        input: signalInput(signerAccount.address),
-        primaryType: PRODUCT_SUBMIT_PRIMARY_TYPE,
-        calls: ['submitSignalFor'],
-      },
-      {
         label: 'stagePatch.submit',
         input: stageExecutorPatchInput(signerAccount.address),
         primaryType: STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
@@ -283,30 +258,6 @@ describe('operation matrix', () => {
     const finalize = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: plan.calls[1]!.data });
     expect(finalize.functionName).toBe('finalizePlan');
     expect(finalize.args[0]).toBe(planRegistrationFixture().planId);
-
-    const signal = await signOperation(prepareOperation(signalInput(account.address)), account);
-    const submit = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: signal.calls[0]!.data });
-    expect(submit.functionName).toBe('submitSignalFor');
-    const args = submit.args as readonly unknown[];
-    expect(args[6]).toBe(account.address);
-    expect(args[7]).toBe(1_700_000_000n);
-    expect(args[8]).toBe(signal.signature);
-    expect(await recoverTypedDataAddress({
-      domain: signal.typedData.domain,
-      types: signal.typedData.types,
-      primaryType: signal.typedData.primaryType,
-      message: signal.typedData.message,
-      signature: signal.signature,
-    } as never)).toBe(account.address);
-  });
-
-  it('derives the signal fact keys from source and stage/name', async () => {
-    const account = privateKeyToAccount(generatePrivateKey());
-    const signed = await signOperation(prepareOperation(signalInput(account.address)), account);
-    const submit = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: signed.calls[0]!.data });
-    const args = submit.args as readonly unknown[];
-    expect(args[2]).toBe(onchainSourceId('slot-a'));
-    expect(args[3]).toBe(onchainSignalId('exec.main.cmp'));
   });
 
   it('keeps buyer intent and birth authorization as disjoint signed payloads', async () => {

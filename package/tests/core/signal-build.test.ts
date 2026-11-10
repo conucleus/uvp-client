@@ -56,10 +56,18 @@ describe('submitSignal calldata proof shape', () => {
     const call = buildSubmitStateMachineSignalCall(CONFIG, BASE_SIGNAL, WALLET_ADDRESS);
 
     expect(call.data.slice(0, 10)).toBe(keccak256(
-      stringToBytes('submitSignal(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,(bytes32,bytes32,bytes32,bytes32[]))'),
+      stringToBytes('submitSignal(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,(bytes32,bytes32,bytes32,bytes32[]),bytes32,(bytes32,bytes32,bytes32,bytes32[],(uint8,bytes32,bytes32,string)[]))'),
     ).slice(0, 10));
-    expect(call.args).toHaveLength(7);
+    expect(call.args).toHaveLength(9);
     expect(call.args[6]).toEqual(ZERO_FACT_ATTRIBUTION);
+    expect(call.args[7]).toBe(`0x${'00'.repeat(32)}`);
+    expect(call.args[8]).toEqual({
+      targetStageId: `0x${'00'.repeat(32)}`,
+      baseHash: `0x${'00'.repeat(32)}`,
+      writerStageId: `0x${'00'.repeat(32)}`,
+      writerProof: [],
+      ops: [],
+    });
     const decoded = decodeFunctionData({
       abi: STATE_MACHINE_ABI,
       functionName: 'submitSignal',

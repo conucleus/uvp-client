@@ -118,6 +118,14 @@ describe('state machine chain watcher', () => {
       PAYLOAD_HASH,
       expect.any(String),
       { sourceId: ZERO_BYTES32_WORD, signalId: ZERO_BYTES32_WORD, stageId: ZERO_BYTES32_WORD, capabilityProof: [] },
+      ZERO_BYTES32_WORD,
+      {
+        targetStageId: ZERO_BYTES32_WORD,
+        baseHash: ZERO_BYTES32_WORD,
+        writerStageId: ZERO_BYTES32_WORD,
+        writerProof: [],
+        ops: [],
+      },
     ]);
   });
 

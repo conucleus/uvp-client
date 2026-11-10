@@ -6,7 +6,10 @@ import {
   type SignalAttributionCallStruct,
   type SignalAttributionPayload,
   type SignalCapabilityTableEntry,
+  type FilePatchCallStruct,
   type StageSelectorBindingTableEntry,
+  filePatchDigest,
+  type FilePatch,
 } from '@uvp-eth/protocol-bindings';
 import { DEFAULT_SIGNING_KEY_ENV } from '../signing.js';
 import {
@@ -34,6 +37,7 @@ export interface StateMachineSignal {
   readonly payloadRef?: string;
   readonly idempotencyKey?: string;
   readonly attribution?: SignalAttributionPayload;
+  readonly filePatch?: FilePatch;
 }
 
 export interface StateMachineSignalCallArgs {
@@ -122,6 +126,8 @@ export interface SubmitStateMachineSignalCall {
     Hex,
     Hex,
     SignalAttributionCallStruct,
+    Hex,
+    FilePatchCallStruct,
   ];
   readonly data: Hex;
   readonly chainId: number;
@@ -165,6 +171,16 @@ export function buildSubmitStateMachineSignalCall(
 ): SubmitStateMachineSignalCall {
   const normalizedConfig = normalizeSubmitConfig(config);
   const args = normalizeSignalSubmission(signal);
+  const filePatch = signal.filePatch ?? {
+    targetStageId: ZERO_BYTES32,
+    baseHash: ZERO_BYTES32,
+    writerStageId: ZERO_BYTES32,
+    writerProof: [],
+    ops: [],
+  };
+  const filesDigest = signal.filePatch === undefined
+    ? ZERO_BYTES32
+    : filePatchDigest(args.planId, args.orderId, signal.filePatch);
   const callArgs = [
     args.planId,
     args.orderId,
@@ -173,6 +189,8 @@ export function buildSubmitStateMachineSignalCall(
     args.payloadHash,
     args.idempotencyKey,
     args.attribution,
+    filesDigest,
+    filePatch,
   ] as const;
   const request = {
     address: normalizedConfig.stateMachineAddress,
