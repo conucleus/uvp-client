@@ -31,7 +31,6 @@ const HOOK_ID = bytes32('c');
 const STAGE_ID = bytes32('d');
 const TX_HASH = bytes32('e');
 const DEPLOYMENT_ID = bytes32('1');
-const DOCK_ID = bytes32('2');
 const WALLET = address('2');
 const BASE_URL = 'http://chain.test:8787';
 
@@ -156,48 +155,12 @@ const SNAPSHOT: ChainProjectionSnapshot = {
     },
   },
   stateMachineOrders: { [ORDER_ID]: ORDER },
-  stateMachineDocks: {
-    [DOCK_ID]: {
-      dockInstanceId: DOCK_ID,
-      chainId: CHAIN_ID,
-      stateMachineAddress: STATE_MACHINE,
-      mode: 'new',
-      localPlanId: PLAN_ID,
-      localOrderId: ORDER_ID,
-      routeId: `0x${'6'.repeat(64)}`,
-      routeHash: `0x${'7'.repeat(64)}`,
-      interfaceNameId: `0x${'8'.repeat(64)}`,
-      targetPlanId: PLAN_ID,
-      linkedOrderId: ORDER_ID,
-      depth: 1,
-      inputDeliveries: {
-        delivery: {
-          inputBindingHash: `0x${'9'.repeat(64)}`,
-          localPlanId: PLAN_ID,
-          localOrderId: ORDER_ID,
-          targetPlanId: PLAN_ID,
-          linkedOrderId: ORDER_ID,
-          targetSignalId: HOOK_ID,
-          payloadHash: `0x${'a'.repeat(64)}`,
-          submitter: WALLET,
-          deliveredAt: provenanceAt(14),
-          proof: proofAt(14),
-        },
-      },
-      outputDeliveries: {},
-      openedAt: provenanceAt(14),
-      updatedAt: provenanceAt(14),
-      proof: proofAt(14),
-    },
-  },
-  stateMachineDocksByTargetOrder: {},
-  stateMachineOrderDockChainDepth: {},
+  stateMachineDocks: {},
+  stateMachineDockBindings: {},
   stateMachineTasks: { [TASK.taskId]: TASK },
   lastEvent: provenanceAt(15),
   unresolvedModuleOrderEventCount: 0,
-  unresolvedDockEventCount: 2,
   unresolvedStageActivationEventCount: 0,
-  unresolvedDockTargetDeploymentCount: 0,
   capabilityEnrichmentMismatchCount: 0,
   unknownEventCount: 0,
 };
@@ -433,9 +396,6 @@ describe('chain read client', () => {
     expect(snapshot.stateMachineDeployments[DEPLOYMENT_ID]?.registeredAt.blockNumber).toBe(4n);
     expect(snapshot.stateMachinePlans[PLAN_ID]?.commitProof?.blockNumber).toBe(8n);
     expect(snapshot.stateMachineOrders[ORDER_ID]?.registeredAt?.blockNumber).toBe(10n);
-    expect(
-      snapshot.stateMachineDocks[DOCK_ID]?.inputDeliveries['delivery']?.proof.blockNumber,
-    ).toBe(14n);
     expect(snapshot.lastEvent?.blockNumber).toBe(15n);
   });
 

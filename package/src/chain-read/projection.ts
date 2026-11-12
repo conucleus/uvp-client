@@ -7,6 +7,7 @@ import {
   ChainReadContractError,
   decodeContractGovernanceWire,
   decodeDeploymentWire,
+  decodeDockBindingWire,
   decodeDockWire,
   decodeModuleWire,
   decodeOrderWire,
@@ -18,8 +19,8 @@ import {
   type ChainDeploymentProjection,
   type ChainDeploymentStatus,
   type ChainDerivedSignal,
-  type ChainDockMode,
-  type ChainDockProjection,
+  type ChainDock,
+  type ChainDockBinding,
   type ChainHook,
   type ChainHookStatus,
   type ChainModuleProjection,
@@ -75,6 +76,8 @@ export type StateMachineStageMaterializationProjection = RevivedWire<ChainStageM
 export type StateMachineStageExecutorOverlayProjection = RevivedWire<ChainStageExecutorOverlay>;
 export type StateMachineStageFileEntryProjection = RevivedWire<ChainStageFileEntry>;
 export type StateMachineStageFileMapProjection = RevivedWire<ChainStageFileMap>;
+export type StateMachineDockProjection = RevivedWire<ChainDock>;
+export type StateMachineDockBindingProjection = RevivedWire<ChainDockBinding>;
 export type StateMachineHookProjection = RevivedWire<ChainHook>;
 export type StateMachineTaskSubmitSignalProjection = RevivedWire<ChainSubmitSignal>;
 export type StateMachineTaskProjection = RevivedWire<ChainTaskProjection>;
@@ -85,7 +88,6 @@ export type StateMachineSignalCapabilityProjection = RevivedWire<ChainSignalCapa
 export type StateMachineModuleProjection = RevivedWire<ChainModuleProjection>;
 export type StateMachineDeploymentProjection = RevivedWire<ChainDeploymentProjection>;
 export type ContractGovernanceProjection = RevivedWire<ChainContractGovernanceProjection>;
-export type StateMachineDockProjection = RevivedWire<ChainDockProjection>;
 export type ProjectionSnapshot = RevivedWire<ChainProjectionSnapshot>;
 
 export type ProjectionSyncStatus = ChainSyncStatus;
@@ -111,7 +113,6 @@ export type StateMachineStageExecutorPatchMode = ChainStageExecutorPatchMode;
 export type StateMachineSignalTargetRelation = ChainSignalTargetRelation;
 export type PlanCapabilityEnrichmentStatus = ChainPlanCapabilityEnrichmentStatus;
 export type StateMachineDeploymentStatus = ChainDeploymentStatus;
-export type StateMachineDockMode = ChainDockMode;
 
 export function decodeOrderProjection(raw: unknown): StateMachineOrderProjection {
   return reviveChainProvenance(decodeContract(decodeOrderWire, raw, "order"));
@@ -155,6 +156,11 @@ export function decodeSnapshotProjection(raw: ChainProjectionSnapshot): Projecti
         snapshot.stateMachineDocks,
         "snapshot.stateMachineDocks",
         decodeDockWire,
+      ),
+      stateMachineDockBindings: decodeRecord(
+        snapshot.stateMachineDockBindings,
+        "snapshot.stateMachineDockBindings",
+        decodeDockBindingWire,
       ),
       stateMachineTasks: decodeRecord(
         snapshot.stateMachineTasks,

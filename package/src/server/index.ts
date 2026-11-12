@@ -1,41 +1,29 @@
 /**
- * Node-only server entry: the compiler surface the used-car dock relayer
- * orchestrates (single source @uvp-eth/compiler) plus file-based evidence
- * hashing. Browser/core entries must never import this module: it deliberately
- * reaches Node fs and the DSL compiler.
+ * Node-only server entry: server-side compiler primitives (single source
+ * @uvp-eth/compiler) plus file-based evidence hashing. Browser/core entries
+ * must never import this module: it deliberately reaches Node fs and the DSL
+ * compiler.
  */
 import { readFile } from "node:fs/promises";
 import { keccak256, toHex, type Hex } from "viem";
 import {
   capabilityTablesOf,
-  dockInstanceId,
-  evmRuntimeDomain,
   factAttribution,
-  interfaceNameKey,
   keccak256Hex,
-  localOrderKey,
   merkleProof,
   onchainSignalId,
   onchainSourceId,
   onchainStageId,
-  orderModesWord,
-  portKey,
 } from "@uvp-eth/compiler";
 
 export {
   capabilityTablesOf,
-  dockInstanceId,
-  evmRuntimeDomain,
   factAttribution,
-  interfaceNameKey,
   keccak256Hex,
-  localOrderKey,
   merkleProof,
   onchainSignalId,
   onchainSourceId,
   onchainStageId,
-  orderModesWord,
-  portKey,
 };
 
 export interface EvidenceFileHashResult {
