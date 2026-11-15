@@ -14,7 +14,7 @@ import {
   type DirectCall,
   type OperationFetcher,
 } from '../../src/core/transport.js';
-import { STATE_MACHINE, bytes32, planRegistrationFixture } from './fixtures.js';
+import { STATE_MACHINE, bytes32, planRegistrationFixture, stateMachineSignalFixture } from './fixtures.js';
 
 function planOperation(signer: Address) {
   return {
@@ -109,6 +109,37 @@ describe('direct transport', () => {
       retryable: false,
     });
     expect(String((error as Error).message)).toContain(`already broadcast: ${txHash('b1')}`);
+  });
+
+  it('sends a business-signed submitSignalFor envelope from the relayer, not the signer', async () => {
+    const executor = privateKeyToAccount(generatePrivateKey());
+    const relayer = privateKeyToAccount(generatePrivateKey());
+    const signed = await signOperation(prepareOperation({
+      operation: 'signal.submitFor',
+      chainId: 31337,
+      stateMachineAddress: STATE_MACHINE,
+      signer: executor.address,
+      signal: stateMachineSignalFixture(),
+      deadline: 1_700_000_000n,
+    }), executor);
+    const sent: DirectCall[] = [];
+    const transport = createDirectTransport({
+      relayer: relayer.address,
+      submitter: {
+        sendCall: async (call) => {
+          sent.push(call);
+          return txHash('d1');
+        },
+      },
+    });
+
+    const result = await transport.submit(signed);
+
+    expect(result.signer).toBe(executor.address);
+    expect(sent.map((call) => call.from)).toEqual([relayer.address]);
+    const decoded = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: sent[0]!.data });
+    expect(decoded.functionName).toBe('submitSignalFor');
+    expect((decoded.args as readonly unknown[])[9]).toBe(executor.address);
   });
 });
 

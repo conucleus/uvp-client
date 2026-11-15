@@ -14,11 +14,13 @@ export {
 } from '@uvp-eth/protocol-bindings';
 
 export type {
+  ExecutorBinding,
+  ExecutorBindingKind,
   PlanCommitCallArgs,
   PlanInstructionOp,
   PlanRegistrationArgs,
   PlanRegistrationBuild,
-  PlanRegistrationExecutorCandidate,
+  PlanRegistrationExecutorBinding,
   PlanRegistrationHook,
   PlanRegistrationInstruction,
   PlanRegistrationSource,

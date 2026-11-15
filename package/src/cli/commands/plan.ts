@@ -41,7 +41,7 @@ export function registerPlanCommands(program: Command): void {
         planId: compiled.planId,
         planHash: compiled.registerArgs.planHash,
         hooks: compiled.registerArgs.hooks.length,
-        executorCandidates: compiled.registerArgs.executorCandidates.length,
+        executorBindings: compiled.registerArgs.executorBindings.length,
       };
       if (options.out) {
         await writeFile(resolve(options.out), `${stringifyForTransport({

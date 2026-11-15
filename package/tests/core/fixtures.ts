@@ -1,10 +1,10 @@
 import type { Address, Hex } from 'viem';
 import type {
   SignalAttributionPayload,
-  SignalAuthorizationPayload,
   TriggerOrderFromOutsidePayload,
 } from '@uvp-eth/protocol-bindings';
 import type { PlanRegistrationArgs } from '../../src/core/registration.js';
+import type { StateMachineSignal } from '../../src/core/signal/build.js';
 
 export const STATE_MACHINE = '0x0000000000000000000000000000000000000001' as Address;
 export const STAGE_PATCH_MODULE = '0x0000000000000000000000000000000000000003' as Address;
@@ -20,7 +20,7 @@ export function planRegistrationFixture(): PlanRegistrationArgs {
     planHash: bytes32('02'),
     hooksHash: bytes32('03'),
     capabilitiesRoot: bytes32('04'),
-    executorCandidatesRoot: bytes32('07'),
+    executorBindingsRoot: bytes32('07'),
     hooks: [{
       hookId: bytes32('0a'),
       stageId: bytes32('0b'),
@@ -29,7 +29,11 @@ export function planRegistrationFixture(): PlanRegistrationArgs {
       instructions: [{ op: 'SIGNAL', sourceId: bytes32('0d'), signalId: bytes32('0e') }],
       dependencyKeys: [bytes32('0f')],
     }],
-    executorCandidates: [],
+    executorBindings: [{
+      stageId: bytes32('0b'),
+      supplierId: bytes32('19'),
+      kind: 0,
+    }],
   };
 }
 
@@ -48,21 +52,22 @@ export function triggerFixture(submitter: Address): TriggerOrderFromOutsidePaylo
   };
 }
 
-export function authorizationsFixture(submitter: Address): readonly SignalAuthorizationPayload[] {
-  return [{
-    sourceId: bytes32('17'),
-    signalId: bytes32('18'),
-    submitter,
-    role: bytes32('00'),
-    metadataHash: bytes32('00'),
-  }];
-}
-
 export function birthAttributionFixture(trigger: TriggerOrderFromOutsidePayload): SignalAttributionPayload {
   return {
     sourceId: trigger.sourceId,
     signalId: trigger.signalId,
     stageId: bytes32('00'),
     capabilityProof: [],
+  };
+}
+
+export function stateMachineSignalFixture(): StateMachineSignal {
+  return {
+    planId: bytes32('01'),
+    orderId: bytes32('02'),
+    sourceId: bytes32('0d'),
+    signalId: bytes32('0e'),
+    payloadHash: bytes32('15'),
+    idempotencyKey: bytes32('16'),
   };
 }

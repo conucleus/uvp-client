@@ -46,6 +46,7 @@ describe('headless plan compilation', () => {
     const registration = planRegistrationArgs(compiled.registerArgs, compiled.planId);
     expect(registration.planId).toBe(compiled.planId);
     expect(registration.hooks.length).toBe(compiled.registerArgs.hooks.length);
-    expect(registration.executorCandidatesRoot).toBe(compiled.registerArgs.executorCandidatesRoot);
+    expect(registration.executorBindings).toEqual(compiled.registerArgs.executorBindings);
+    expect(registration.executorBindingsRoot).toBe(compiled.registerArgs.executorBindingsRoot);
   });
 });

@@ -15,6 +15,7 @@ import {
   type ChainProjectionSnapshot,
   type ChainProvenance,
   type ChainReadFetcher,
+  type ChainStageExecutorOverlay,
   type ChainSyncState,
   type ChainTaskProjection,
 } from '../../src/chain-read/index.js';
@@ -32,6 +33,8 @@ const STAGE_ID = bytes32('d');
 const TX_HASH = bytes32('e');
 const DEPLOYMENT_ID = bytes32('1');
 const WALLET = address('2');
+const EXECUTOR = address('3');
+const SUPPLIER_ID = bytes32('9');
 const BASE_URL = 'http://chain.test:8787';
 
 const PROVENANCE: ChainProvenance = {
@@ -49,6 +52,18 @@ const PROOF: ChainProof = {
   args: { hookId: HOOK_ID },
 };
 
+const OVERLAY: ChainStageExecutorOverlay = {
+  orderId: ORDER_ID,
+  selectorStageId: STAGE_ID,
+  targetStageId: STAGE_ID,
+  selector: WALLET,
+  supplierId: SUPPLIER_ID,
+  patchNonce: '3',
+  effectiveExecutor: EXECUTOR,
+  updatedAt: PROVENANCE,
+  proof: PROOF,
+};
+
 const ORDER: ChainOrderProjection = {
   orderId: ORDER_ID,
   chainId: CHAIN_ID,
@@ -56,12 +71,12 @@ const ORDER: ChainOrderProjection = {
   planId: PLAN_ID,
   status: 'registered',
   currentStage: STAGE_ID,
+  relayer: WALLET,
   creator: WALLET,
-  authorizations: {},
   signals: {},
   derivedSignals: {},
   stageMaterializations: {},
-  stageExecutorOverlays: {},
+  stageExecutorOverlays: { [STAGE_ID]: OVERLAY },
   stageFiles: {},
   hooks: {},
   tasks: {},
@@ -79,10 +94,10 @@ const TASK: ChainTaskProjection = {
   hookId: HOOK_ID,
   stageIdentifier: STAGE_ID,
   hookName: HOOK_ID,
-  assigneeRole: 'performer',
-  assigneeWallet: WALLET,
+  assigneeSupplierId: SUPPLIER_ID,
+  assigneeExecutor: EXECUTOR,
   status: 'ready',
-  submitSignals: [{ sourceId: STAGE_ID, signalId: HOOK_ID, source: 'authorization' }],
+  submitSignals: [{ sourceId: STAGE_ID, signalId: HOOK_ID }],
   createdAt: PROVENANCE,
   updatedAt: PROVENANCE,
   proof: PROOF,
@@ -147,7 +162,9 @@ const SNAPSHOT: ChainProjectionSnapshot = {
       hookCount: '0',
       selectorBindings: [],
       signalCapabilities: [],
-      executorCandidates: [],
+      executorBindingsRoot: bytes32('6'),
+      executorBindings: [{ stageId: STAGE_ID, supplierId: SUPPLIER_ID, kind: 'default' }],
+      dynamicExecutorStages: [],
       registeredAt: provenanceAt(8),
       updatedAt: provenanceAt(8),
       proof: proofAt(8),
@@ -158,6 +175,15 @@ const SNAPSHOT: ChainProjectionSnapshot = {
   stateMachineDocks: {},
   stateMachineDockBindings: {},
   stateMachineTasks: { [TASK.taskId]: TASK },
+  stateMachineSuppliers: {
+    [SUPPLIER_ID]: {
+      supplierId: SUPPLIER_ID,
+      executor: EXECUTOR,
+      registeredAt: provenanceAt(9),
+      updatedAt: provenanceAt(9),
+      proof: proofAt(9),
+    },
+  },
   lastEvent: provenanceAt(15),
   unresolvedModuleOrderEventCount: 0,
   unresolvedStageActivationEventCount: 0,
@@ -395,15 +421,31 @@ describe('chain read client', () => {
     const snapshot = decodeSnapshotProjection(SNAPSHOT);
     expect(snapshot.stateMachineDeployments[DEPLOYMENT_ID]?.registeredAt.blockNumber).toBe(4n);
     expect(snapshot.stateMachinePlans[PLAN_ID]?.commitProof?.blockNumber).toBe(8n);
+    expect(snapshot.stateMachinePlans[PLAN_ID]?.executorBindings).toEqual([
+      { stageId: STAGE_ID, supplierId: SUPPLIER_ID, kind: 'default' },
+    ]);
     expect(snapshot.stateMachineOrders[ORDER_ID]?.registeredAt?.blockNumber).toBe(10n);
+    expect(snapshot.stateMachineOrders[ORDER_ID]?.stageExecutorOverlays[STAGE_ID]?.patchNonce).toBe('3');
+    expect(snapshot.stateMachineSuppliers[SUPPLIER_ID]?.registeredAt.blockNumber).toBe(9n);
     expect(snapshot.lastEvent?.blockNumber).toBe(15n);
   });
 
   it('decodes order, task, and sync-state wire payloads with bigint provenance', () => {
-    expect(decodeOrderProjection(ORDER).registeredAt?.blockNumber).toBe(10n);
-    expect(decodeOrderProjection(ORDER).proof[0]?.blockNumber).toBe(10n);
-    expect(decodeTaskProjection(TASK).createdAt.blockNumber).toBe(10n);
-    expect(decodeTaskProjection(TASK).proof.blockNumber).toBe(10n);
+    const order = decodeOrderProjection(ORDER);
+    expect(order.registeredAt?.blockNumber).toBe(10n);
+    expect(order.proof[0]?.blockNumber).toBe(10n);
+    expect(order.relayer).toBe(WALLET);
+    expect(order.stageExecutorOverlays[STAGE_ID]).toMatchObject({
+      supplierId: SUPPLIER_ID,
+      patchNonce: '3',
+      effectiveExecutor: EXECUTOR,
+    });
+    expect(order.stageExecutorOverlays[STAGE_ID]?.updatedAt.blockNumber).toBe(10n);
+    const task = decodeTaskProjection(TASK);
+    expect(task.createdAt.blockNumber).toBe(10n);
+    expect(task.proof.blockNumber).toBe(10n);
+    expect(task.assigneeSupplierId).toBe(SUPPLIER_ID);
+    expect(task.assigneeExecutor).toBe(EXECUTOR);
     const syncState = decodeSyncStateProjection({
       chainId: CHAIN_ID,
       contractAddress: STATE_MACHINE,

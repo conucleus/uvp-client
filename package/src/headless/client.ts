@@ -46,6 +46,7 @@ export function createHeadlessClient(options: HeadlessClientOptions): HeadlessCl
       },
       mode,
       transport: createDirectTransport({
+        relayer: account.address,
         submitter: {
           sendCall: async (call): Promise<Hex> => wallet.sendTransaction({
             account,

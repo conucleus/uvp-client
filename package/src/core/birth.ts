@@ -11,7 +11,6 @@ import {
   buildTriggerOrderFromOutsideForCall,
   buildTriggerOrderFromOutsideTypedData,
   type SignalAttributionPayload,
-  type SignalAuthorizationPayload,
   type TriggerOrderFromOutsidePayload,
   type TriggerOrderFromOutsideTypedData,
 } from '@uvp-eth/protocol-bindings';
@@ -106,7 +105,6 @@ export interface BuildOrderBirthAuthorizationInput {
   readonly chainId: number;
   readonly stateMachineAddress: Address | string;
   readonly trigger: TriggerOrderFromOutsidePayload;
-  readonly authorizations: readonly SignalAuthorizationPayload[];
 }
 
 export type OrderBirthAuthorization = TriggerOrderFromOutsideTypedData;
@@ -118,7 +116,6 @@ export function buildOrderBirthAuthorization(
     ...input.trigger,
     chainId: parsePositiveInteger(input.chainId, 'chainId'),
     verifyingContract: normalizeAddressChecksummed(input.stateMachineAddress, 'stateMachineAddress'),
-    authorizations: input.authorizations,
   });
 }
 
@@ -135,7 +132,6 @@ export function orderBirthAuthorizationCall(input: OrderBirthAuthorizationCallIn
     },
     {
       ...input.trigger,
-      authorizations: input.authorizations,
       signature: input.signature,
       birthFactAttribution: input.birthFactAttribution,
     },

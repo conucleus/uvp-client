@@ -7,7 +7,6 @@ import { readFile } from 'node:fs/promises';
 import type { Command } from 'commander';
 import type {
   SignalAttributionPayload,
-  SignalAuthorizationPayload,
   TriggerOrderFromOutsidePayload,
   UVPOrderFinalizeTypedData,
 } from '@uvp-eth/protocol-bindings';
@@ -66,7 +65,7 @@ export function registerOrderCommands(program: Command): void {
   order
     .command('birth-authorize')
     .description('birthAuthorizer signs the birth authorization and delivers triggerOrderFromOutsideFor')
-    .requiredOption('--birth <path>', 'JSON file with trigger, authorizations, birthFactAttribution')
+    .requiredOption('--birth <path>', 'JSON file with trigger and birthFactAttribution')
     .requiredOption('--chain-id <id>', 'chain id of the birth state machine')
     .requiredOption('--state-machine <address>', 'UVPStateMachine contract address')
     .option('--private-key-env <name>', 'env var containing the birthAuthorizer private key', ORDER_PRIVATE_KEY_ENV)
@@ -85,7 +84,6 @@ export function registerOrderCommands(program: Command): void {
         stateMachineAddress: options.stateMachine,
         signer: context.signer.address,
         trigger: birth.trigger,
-        authorizations: birth.authorizations,
         birthFactAttribution: birth.birthFactAttribution,
       };
       const result = await executeCliOperation(input, options, ORDER_PRIVATE_KEY_ENV);
@@ -116,14 +114,12 @@ export function registerOrderCommands(program: Command): void {
 
 interface BirthSubmissionFile {
   readonly trigger: TriggerOrderFromOutsidePayload;
-  readonly authorizations: readonly SignalAuthorizationPayload[];
   readonly birthFactAttribution: SignalAttributionPayload;
 }
 
 async function readBirthSubmission(path: string): Promise<BirthSubmissionFile> {
   const parsed = await readTypedData<{
     readonly trigger?: TriggerOrderFromOutsidePayload;
-    readonly authorizations?: readonly SignalAuthorizationPayload[];
     readonly birthFactAttribution?: SignalAttributionPayload;
   }>(path);
   if (typeof parsed.trigger !== 'object' || parsed.trigger === null) {
@@ -131,7 +127,6 @@ async function readBirthSubmission(path: string): Promise<BirthSubmissionFile> {
   }
   return {
     trigger: parsed.trigger,
-    authorizations: parsed.authorizations ?? [],
     birthFactAttribution: parsed.birthFactAttribution ?? {
       sourceId: parsed.trigger.sourceId,
       signalId: parsed.trigger.signalId,

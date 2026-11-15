@@ -1,28 +1,42 @@
 /**
- * Typed-data single source: re-exports the plan/order/invite/finalize/signal
- * EIP-712 builders and validators owned by @uvp-eth/protocol-bindings. No
- * type or digest is redefined here.
+ * Typed-data single source: re-exports the plan/order/invite/finalize/signal/
+ * patch/dock EIP-712 builders and validators owned by
+ * @uvp-eth/protocol-bindings. No type or digest is redefined here.
  */
 export {
-  PRODUCT_SUBMIT_DOMAIN_NAME,
-  PRODUCT_SUBMIT_DOMAIN_VERSION,
   PLAN_COMMIT_PRIMARY_TYPE,
   PLAN_COMMIT_TYPED_DATA_FIELDS,
-  buildPlanCommitTypedData,
+  PRODUCT_SUBMIT_DOMAIN_NAME,
+  PRODUCT_SUBMIT_DOMAIN_VERSION,
+  SIGNAL_SUBMISSION_PRIMARY_TYPE,
+  SIGNAL_SUBMISSION_TYPED_DATA_FIELDS,
+  STAGE_DOCK_EXECUTOR_SELECTION_PRIMARY_TYPE,
+  STAGE_DOCK_EXECUTOR_SELECTION_TYPED_DATA_FIELDS,
+  STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
+  STAGE_EXECUTOR_PATCH_TYPED_DATA_FIELDS,
   buildDerivedSignalTypedData,
+  buildPlanCommitTypedData,
+  buildSignalSubmissionTypedData,
+  buildStageDockExecutorSelectionTypedData,
   buildStageExecutorPatchTypedData,
   buildUVPOrderFinalizeTypedData,
   buildUVPStageInviteAcceptTypedData,
   buildUVPStageInviteCreateTypedData,
+  factAttributionHash,
   filePatchDigest,
+  recoverSignalSubmissionSigner,
+  recoverStageDockExecutorSelectionSigner,
+  validateTypedDataForSigning,
   validateUVPOrderFinalizeTypedData,
   validateUVPStageInviteAcceptTypedData,
   validateUVPStageInviteCreateTypedData,
-  validateTypedDataForSigning,
 } from '@uvp-eth/protocol-bindings';
 
 export type {
   BuildPlanCommitTypedDataInput,
+  BuildSignalSubmissionTypedDataInput,
+  BuildStageDockExecutorSelectionTypedDataInput,
+  BuildStageExecutorPatchTypedDataInput,
   FileOp,
   FileOpKind,
   FilePatch,
@@ -30,7 +44,12 @@ export type {
   PlanCommitTypedData,
   ProductSubmitTypedData,
   ProductSubmitTypedDataField,
-  SignalAuthorizationPayload,
+  SignalAttributionPayload,
+  SignalSubmissionTypedData,
+  StageDockExecutorSelectionPayload,
+  StageDockExecutorSelectionTypedData,
+  StageExecutorPatchPayload,
+  StageExecutorPatchTypedData,
   TypedDataSigningMismatchReason,
   UVPOrderFinalizeTypedData,
   UVPStageInviteAcceptTypedData,

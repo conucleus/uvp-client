@@ -5,7 +5,7 @@ import { createBrowserClient } from '../../src/browser/client.js';
 import { createHeadlessClient } from '../../src/headless/client.js';
 import type { Eip1193Provider } from '../../src/browser/wallet/provider.js';
 import type { OperationInput } from '../../src/core/operations.js';
-import { STATE_MACHINE, bytes32, planRegistrationFixture, triggerFixture, authorizationsFixture, birthAttributionFixture } from '../core/fixtures.js';
+import { STATE_MACHINE, bytes32, planRegistrationFixture, triggerFixture, birthAttributionFixture } from '../core/fixtures.js';
 
 interface ProviderRequest {
   readonly method: string;
@@ -69,7 +69,6 @@ function birthAuthorizationInput(signer: Address): OperationInput {
     stateMachineAddress: STATE_MACHINE,
     signer,
     trigger,
-    authorizations: authorizationsFixture(signer),
     birthFactAttribution: birthAttributionFixture(trigger),
   };
 }

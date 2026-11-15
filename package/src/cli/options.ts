@@ -94,22 +94,6 @@ export interface InviteCreateOptions extends OperationCliOptions {
   privateKeyEnv: string;
 }
 
-export interface SignalSubmitOptions extends OperationCliOptions {
-  rpcUrl: string;
-  chainId: string;
-  stateMachine: string;
-  privateKeyEnv: string;
-  planId: string;
-  orderId: string;
-  source: string;
-  stage: string;
-  signalName: string;
-  payloadHash?: string;
-  idempotencyKey?: string;
-  deadline?: string;
-  deadlineSeconds?: string;
-}
-
 export interface RegistrySignOptions extends OperationCliOptions {
   typedData: string;
   privateKeyEnv: string;

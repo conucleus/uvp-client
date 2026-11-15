@@ -89,6 +89,7 @@ function browserTransport(
     });
   }
   return createDirectTransport({
+    relayer: signer,
     submitter: {
       sendCall: async (call): Promise<Hex> => sendProviderTransaction(options.provider, {
         from: signer,

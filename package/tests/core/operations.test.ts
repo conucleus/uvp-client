@@ -3,15 +3,18 @@ import {
   decodeFunctionData,
   recoverTypedDataAddress,
   type Address,
+  type Hex,
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler';
 import {
   PLAN_COMMIT_PRIMARY_TYPE,
+  SIGNAL_SUBMISSION_PRIMARY_TYPE,
+  STAGE_DOCK_EXECUTOR_SELECTION_PRIMARY_TYPE,
   STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
-  UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
+  STAGE_PATCH_MODULE_ABI,
   TRIGGER_ORDER_FROM_OUTSIDE_PRIMARY_TYPE,
+  UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
   buildUVPOrderFinalizeTypedData,
   buildUVPStageInviteAcceptTypedData,
 } from '@uvp-eth/protocol-bindings';
@@ -21,18 +24,18 @@ import {
   ORDER_BIRTH_INTENT_TYPED_DATA_FIELDS,
 } from '../../src/core/birth.js';
 import {
-  OperationError,
   prepareOperation,
   signOperation,
+  signOperationWithSignature,
   type OperationInput,
 } from '../../src/core/operations.js';
 import {
   STATE_MACHINE,
   STAGE_PATCH_MODULE,
-  authorizationsFixture,
   birthAttributionFixture,
   bytes32,
   planRegistrationFixture,
+  stateMachineSignalFixture,
   triggerFixture,
 } from './fixtures.js';
 
@@ -63,20 +66,44 @@ function stageExecutorPatchInput(signer: Address): OperationInput {
     patch: {
       selectorStageId: bytes32('04'),
       targetStageId: bytes32('05'),
-      executor: signer,
-      role: bytes32('00'),
-      executorMetadataHash: bytes32('06'),
-      mode: 'assign',
-      previousExecutor: '0x0000000000000000000000000000000000000021',
-      authorizationsHash: bytes32('07'),
+      supplierId: bytes32('06'),
+      previousSupplierId: bytes32('00'),
       patchNonce: 3,
-      metadataURI: 'ipfs://patch',
-      patchHash: bytes32('08'),
     },
     previousExecutorSignature: `0x${'22'.repeat(65)}`,
     bindingProof: { selectorStageId: bytes32('09'), proof: [] },
     candidateProof: [],
-    executorAuthorizations: [],
+  };
+}
+
+function stageDockSelectInput(signer: Address): OperationInput {
+  return {
+    operation: 'stageDock.select',
+    chainId: 31337,
+    stagePatchModuleAddress: STAGE_PATCH_MODULE,
+    signer,
+    planId: bytes32('01'),
+    orderId: bytes32('02'),
+    deadline: 1_700_000_000n,
+    selection: {
+      selectorStageId: bytes32('04'),
+      targetStageId: bytes32('05'),
+      dockId: bytes32('06'),
+      supplierId: bytes32('07'),
+      patchNonce: 1,
+    },
+    bindingProof: { selectorStageId: bytes32('04'), proof: [] },
+  };
+}
+
+function signalSubmitForInput(signer: Address): OperationInput {
+  return {
+    operation: 'signal.submitFor',
+    chainId: 31337,
+    stateMachineAddress: STATE_MACHINE,
+    signer,
+    signal: stateMachineSignalFixture(),
+    deadline: 1_700_000_000n,
   };
 }
 
@@ -201,7 +228,6 @@ describe('operation matrix', () => {
           stateMachineAddress: STATE_MACHINE,
           signer: authorizer.address,
           trigger,
-          authorizations: authorizationsFixture(authorizer.address),
           birthFactAttribution: birthAttributionFixture(trigger),
         },
         primaryType: TRIGGER_ORDER_FROM_OUTSIDE_PRIMARY_TYPE,
@@ -226,10 +252,22 @@ describe('operation matrix', () => {
         calls: [],
       },
       {
+        label: 'signal.submitFor',
+        input: signalSubmitForInput(signerAccount.address),
+        primaryType: SIGNAL_SUBMISSION_PRIMARY_TYPE,
+        calls: ['submitSignalFor'],
+      },
+      {
         label: 'stagePatch.submit',
         input: stageExecutorPatchInput(signerAccount.address),
         primaryType: STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
         calls: ['applyStageExecutorPatchFor'],
+      },
+      {
+        label: 'stageDock.select',
+        input: stageDockSelectInput(signerAccount.address),
+        primaryType: STAGE_DOCK_EXECUTOR_SELECTION_PRIMARY_TYPE,
+        calls: ['selectStageDockExecutorFor'],
       },
       {
         label: 'registry.write',
@@ -257,7 +295,49 @@ describe('operation matrix', () => {
     expect((commit.args as readonly unknown[])[3]).toBe(plan.signature);
     const finalize = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: plan.calls[1]!.data });
     expect(finalize.functionName).toBe('finalizePlan');
-    expect(finalize.args[0]).toBe(planRegistrationFixture().planId);
+    expect((finalize.args as readonly unknown[])[0]).toBe(planRegistrationFixture().planId);
+  });
+
+  it('binds the selector signature to the supplier-scoped patch and dock calldata', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const patch = await signOperation(prepareOperation(stageExecutorPatchInput(account.address)), account);
+    const patchCall = decodeFunctionData({ abi: STAGE_PATCH_MODULE_ABI, data: patch.calls[0]!.data });
+    expect(patchCall.functionName).toBe('applyStageExecutorPatchFor');
+    expect((patchCall.args as readonly unknown[])[2]).toEqual({
+      selectorStageId: bytes32('04'),
+      targetStageId: bytes32('05'),
+      supplierId: bytes32('06'),
+      previousSupplierId: bytes32('00'),
+      patchNonce: 3n,
+    });
+    expect((patchCall.args as readonly unknown[])[5]).toBe(patch.signature);
+
+    const dock = await signOperation(prepareOperation(stageDockSelectInput(account.address)), account);
+    const dockCall = decodeFunctionData({ abi: STAGE_PATCH_MODULE_ABI, data: dock.calls[0]!.data });
+    expect(dockCall.functionName).toBe('selectStageDockExecutorFor');
+    expect((dockCall.args as readonly unknown[])[2]).toEqual({
+      selectorStageId: bytes32('04'),
+      targetStageId: bytes32('05'),
+      dockId: bytes32('06'),
+      supplierId: bytes32('07'),
+      patchNonce: 1n,
+    });
+    expect((dockCall.args as readonly unknown[])[5]).toBe(dock.signature);
+  });
+
+  it('attaches an EIP-1271 contract signature to a submitSignalFor envelope', () => {
+    const contractExecutor = '0x00000000000000000000000000000000000000c1' as Address;
+    const prepared = prepareOperation(signalSubmitForInput(contractExecutor));
+    expect(prepared.signer.toLowerCase()).toBe(contractExecutor.toLowerCase());
+
+    const signature = `0x${'a1'.repeat(80)}` as Hex;
+    const signed = signOperationWithSignature(prepared, signature);
+    expect(signed.signer.toLowerCase()).toBe(contractExecutor.toLowerCase());
+    expect(signed.signature).toBe(signature);
+    const call = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: signed.calls[0]!.data });
+    expect(call.functionName).toBe('submitSignalFor');
+    expect((call.args as readonly unknown[])[9]).toBe(signed.signer);
+    expect((call.args as readonly unknown[])[11]).toBe(signature);
   });
 
   it('keeps buyer intent and birth authorization as disjoint signed payloads', async () => {
@@ -299,12 +379,12 @@ describe('operation matrix', () => {
       stateMachineAddress: STATE_MACHINE,
       signer: authorizer.address,
       trigger,
-      authorizations: authorizationsFixture(authorizer.address),
       birthFactAttribution: birthAttributionFixture(trigger),
     });
     const signedAuthorization = await signOperation(authorization, authorizer);
     expect(authorization.typedData.primaryType).toBe(TRIGGER_ORDER_FROM_OUTSIDE_PRIMARY_TYPE);
-    expect(authorization.typedData.message.submitter.toLowerCase()).toBe(authorizer.address.toLowerCase());
+    expect((authorization.typedData.message as { readonly submitter: string }).submitter.toLowerCase())
+      .toBe(authorizer.address.toLowerCase());
     expect(signedAuthorization.typedData).not.toEqual(signedIntent.typedData);
     expect(await recoverTypedDataAddress({
       domain: signedAuthorization.typedData.domain,
@@ -315,7 +395,8 @@ describe('operation matrix', () => {
     } as never)).toBe(authorizer.address);
     const call = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: signedAuthorization.calls[0]!.data });
     expect(call.functionName).toBe('triggerOrderFromOutsideFor');
-    expect((call.args as readonly unknown[])[2]).toBe(signedAuthorization.signature);
+    expect((call.args as readonly unknown[])[1]).toBe(signedAuthorization.signature);
+    expect((call.args as readonly unknown[])[2]).toEqual(birthAttributionFixture(trigger));
 
     const mismatched = (): unknown => prepareOperation({
       operation: 'order.birth',
@@ -324,7 +405,6 @@ describe('operation matrix', () => {
       stateMachineAddress: STATE_MACHINE,
       signer: buyer.address,
       trigger,
-      authorizations: authorizationsFixture(authorizer.address),
       birthFactAttribution: birthAttributionFixture(trigger),
     });
     expect(captureError(mismatched)).toMatchObject({

@@ -9,7 +9,11 @@
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 import {
   buildApplyStageExecutorPatchForCall,
+  buildSelectStageDockExecutorForCall,
+  buildSignalSubmissionTypedData,
+  buildStageDockExecutorSelectionTypedData,
   buildStageExecutorPatchTypedData,
+  buildSubmitSignalForCall,
   buildUVPStageInviteCreateTypedData,
   filePatchDigest,
   validateUVPOrderFinalizeTypedData,
@@ -17,7 +21,7 @@ import {
   type FilePatch,
   type SelectorBindingPayload,
   type SignalAttributionPayload,
-  type SignalAuthorizationPayload,
+  type StageDockExecutorSelectionPayload,
   type StageExecutorPatchCallPatch,
   type TriggerOrderFromOutsidePayload,
   type UVPOrderFinalizeTypedData,
@@ -37,16 +41,13 @@ import {
   type PlanRegistrationArgs,
 } from './registration.js';
 import {
-  normalizeSignalPlanId,
   normalizeSignalSubmission,
-  ZERO_FACT_ATTRIBUTION,
   type StateMachineSignal,
 } from './signal/build.js';
 import type { OperationTransport } from './transport.js';
 import {
   ExecutorKitError,
   normalizeAddressChecksummed,
-  normalizeBytes32,
   parseBigNumberish,
   parsePositiveInteger,
   ValidationError,
@@ -58,7 +59,9 @@ export const OPERATION_NAMES = [
   'order.finalize',
   'invite.accept',
   'invite.create',
+  'signal.submitFor',
   'stagePatch.submit',
+  'stageDock.select',
   'registry.write',
 ] as const;
 
@@ -199,13 +202,36 @@ export async function signOperation(
       message: `signer returned a non-65-byte signature for ${prepared.operation}`,
     });
   }
+  return signedOperationOf(prepared, signature);
+}
+
+/**
+ * Attaches a contract-wallet signature (EIP-1271) to a prepared operation: an
+ * EIP-1271 signature is contract-defined bytes, not the 65-byte ECDSA envelope
+ * `signOperation` enforces, and only `submitSignalFor` accepts it on chain.
+ */
+export function signOperationWithSignature(
+  prepared: PreparedOperation,
+  signature: Hex | string,
+): SignedOperation {
+  if (typeof signature !== 'string' || !/^0x(?:[0-9a-fA-F]{2})+$/.test(signature)) {
+    throw new OperationError({
+      operation: prepared.operation,
+      code: 'invalid_signature',
+      message: `${prepared.operation} contract signature must be non-empty 0x-prefixed bytes`,
+    });
+  }
+  return signedOperationOf(prepared, signature);
+}
+
+function signedOperationOf(prepared: PreparedOperation, signature: Hex | string): SignedOperation {
   return {
     operation: prepared.operation,
     chainId: prepared.chainId,
     signer: prepared.signer,
     typedData: prepared.typedData,
-    signature,
-    calls: prepared.buildCalls(signature),
+    signature: signature as Hex,
+    calls: prepared.buildCalls(signature as Hex),
   };
 }
 
@@ -243,7 +269,6 @@ export interface OrderBirthAuthorizationOperationInput {
   /** Must equal trigger.submitter: the plan's birthAuthorizer. */
   readonly signer: Address | string;
   readonly trigger: TriggerOrderFromOutsidePayload;
-  readonly authorizations: readonly SignalAuthorizationPayload[];
   readonly birthFactAttribution: SignalAttributionPayload;
 }
 
@@ -280,6 +305,16 @@ export interface InviteCreateOperationInput {
   readonly deadline: bigint | number | string;
 }
 
+export interface SignalSubmitForOperationInput {
+  readonly operation: 'signal.submitFor';
+  readonly chainId: number;
+  readonly stateMachineAddress: Address | string;
+  /** Effective stage executor the EIP-712 submitter binds to; the relayer only pays for the tx. */
+  readonly signer: Address | string;
+  readonly signal: StateMachineSignal;
+  readonly deadline: bigint | number | string;
+}
+
 export interface StageExecutorPatchOperationInput {
   readonly operation: 'stagePatch.submit';
   readonly chainId: number;
@@ -293,7 +328,19 @@ export interface StageExecutorPatchOperationInput {
   readonly previousExecutorSignature: Hex | string;
   readonly bindingProof: SelectorBindingPayload;
   readonly candidateProof: readonly (Hex | string)[];
-  readonly executorAuthorizations: readonly SignalAuthorizationPayload[];
+}
+
+export interface StageDockSelectOperationInput {
+  readonly operation: 'stageDock.select';
+  readonly chainId: number;
+  readonly stagePatchModuleAddress: Address | string;
+  /** Selector wallet; signs the dock selection typed data. */
+  readonly signer: Address | string;
+  readonly planId: Hex | string;
+  readonly orderId: Hex | string;
+  readonly deadline: bigint | number | string;
+  readonly selection: StageDockExecutorSelectionPayload;
+  readonly bindingProof: SelectorBindingPayload;
 }
 
 export interface RegistryWriteOperationInput {
@@ -310,7 +357,9 @@ export type OperationInput =
   | OrderFinalizeOperationInput
   | InviteAcceptOperationInput
   | InviteCreateOperationInput
+  | SignalSubmitForOperationInput
   | StageExecutorPatchOperationInput
+  | StageDockSelectOperationInput
   | RegistryWriteOperationInput;
 
 export function prepareOperation(input: OperationInput): PreparedOperation {
@@ -400,7 +449,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         chainId: input.chainId,
         stateMachineAddress: input.stateMachineAddress,
         trigger: input.trigger,
-        authorizations: input.authorizations,
       });
       return {
         operation: 'order.birth',
@@ -411,7 +459,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
           chainId: input.chainId,
           stateMachineAddress: input.stateMachineAddress,
           trigger: input.trigger,
-          authorizations: input.authorizations,
           signature,
           birthFactAttribution: input.birthFactAttribution,
         })],
@@ -468,6 +515,54 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
       };
     }
 
+    case 'signal.submitFor': {
+      const signer = normalizeAddressChecksummed(input.signer, 'signer');
+      const chainId = parsePositiveInteger(input.chainId, 'chainId');
+      const stateMachineAddress = normalizeAddressChecksummed(input.stateMachineAddress, 'stateMachineAddress');
+      const deadline = parseBigNumberish(input.deadline, 'deadline');
+      const signal = normalizeSignalSubmission(input.signal);
+      const filesDigest = input.signal.filePatch === undefined
+        ? ZERO_BYTES32
+        : filePatchDigest(signal.planId, signal.orderId, input.signal.filePatch);
+      const typedData = buildSignalSubmissionTypedData({
+        chainId,
+        verifyingContract: stateMachineAddress,
+        planId: signal.planId,
+        orderId: signal.orderId,
+        sourceId: signal.sourceId,
+        signalId: signal.signalId,
+        payloadHash: signal.payloadHash,
+        idempotencyKey: signal.idempotencyKey,
+        filesDigest,
+        attribution: signal.attribution,
+        submitter: signer,
+        deadline,
+      });
+      return {
+        operation: 'signal.submitFor',
+        chainId,
+        signer,
+        typedData,
+        buildCalls: (signature) => [callOf(buildSubmitSignalForCall(
+          { stateMachineAddress, chainId },
+          {
+            planId: signal.planId,
+            orderId: signal.orderId,
+            sourceId: signal.sourceId,
+            signalId: signal.signalId,
+            payloadHash: signal.payloadHash,
+            idempotencyKey: signal.idempotencyKey,
+            attribution: signal.attribution,
+            filesDigest,
+            ...(input.signal.filePatch !== undefined ? { filePatch: input.signal.filePatch } : {}),
+            submitter: signer,
+            deadline,
+            signature,
+          },
+        ))],
+      };
+    }
+
     case 'stagePatch.submit': {
       const signer = normalizeAddressChecksummed(input.signer, 'signer');
       const chainId = parsePositiveInteger(input.chainId, 'chainId');
@@ -498,7 +593,39 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
             previousExecutorSignature: input.previousExecutorSignature,
             bindingProof: input.bindingProof,
             candidateProof: input.candidateProof,
-            executorAuthorizations: input.executorAuthorizations,
+          },
+        ))],
+      };
+    }
+
+    case 'stageDock.select': {
+      const signer = normalizeAddressChecksummed(input.signer, 'signer');
+      const chainId = parsePositiveInteger(input.chainId, 'chainId');
+      const deadline = parseBigNumberish(input.deadline, 'deadline');
+      const typedData = buildStageDockExecutorSelectionTypedData({
+        chainId,
+        verifyingContract: input.stagePatchModuleAddress,
+        planId: input.planId,
+        orderId: input.orderId,
+        selector: signer,
+        deadline,
+        selection: input.selection,
+      });
+      return {
+        operation: 'stageDock.select',
+        chainId,
+        signer,
+        typedData,
+        buildCalls: (signature) => [callOf(buildSelectStageDockExecutorForCall(
+          { stagePatchModuleAddress: input.stagePatchModuleAddress, chainId },
+          {
+            planId: input.planId,
+            orderId: input.orderId,
+            selection: input.selection,
+            bindingProof: input.bindingProof,
+            selector: signer,
+            deadline,
+            signature,
           },
         ))],
       };

@@ -1,10 +1,11 @@
 /**
  * Operation delivery: one transport interface for signed operations, two
- * implementations — direct (broadcast the authorized calls through the signer's
- * own RPC/provider seam) and relay (POST the signed envelope to a relay that
- * forwards it). Nonce/broadcast mechanics belong to the injected submitter or
- * the relay; this module owns only the envelope, receipt parsing and the
- * operation/ code/ retryable error model.
+ * implementations — direct (broadcast the authorized calls through the
+ * submitting account's own RPC/provider seam: the signer itself, or a relayer
+ * forwarding a business-signed envelope) and relay (POST the signed envelope to
+ * a relay that forwards it). Nonce/broadcast mechanics belong to the injected
+ * submitter or the relay; this module owns only the envelope, receipt parsing
+ * and the operation/ code/ retryable error model.
  */
 import type { Address, Hex } from 'viem';
 import {
@@ -37,6 +38,12 @@ export interface DirectCallSubmitter {
 
 export interface DirectTransportConfig {
   readonly submitter: DirectCallSubmitter;
+  /**
+   * Account that pays for the tx. It differs from `SignedOperation.signer` when
+   * a relayer forwards a business-signed envelope (`submitSignalFor`): the
+   * signature inside the call still belongs to the executor, never the relayer.
+   */
+  readonly relayer?: Address;
 }
 
 export function createDirectTransport(config: DirectTransportConfig): OperationTransport {
@@ -53,7 +60,7 @@ export function createDirectTransport(config: DirectTransportConfig): OperationT
       const txHashes: Hex[] = [];
       for (const [index, call] of signed.calls.entries()) {
         try {
-          txHashes.push(await sendCall(config.submitter, signed, call));
+          txHashes.push(await sendCall(config, signed, call));
         } catch (error) {
           if (error instanceof OperationError) {
             throw error;
@@ -222,12 +229,12 @@ function invalidRelayResponse(signed: SignedOperation, endpoint: string, detail:
 }
 
 async function sendCall(
-  submitter: DirectCallSubmitter,
+  config: DirectTransportConfig,
   signed: SignedOperation,
   call: OperationCall,
 ): Promise<Hex> {
-  const txHash = await submitter.sendCall({
-    from: signed.signer,
+  const txHash = await config.submitter.sendCall({
+    from: config.relayer ?? signed.signer,
     to: call.to,
     data: call.data,
     chainId: signed.chainId,
