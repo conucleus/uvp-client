@@ -8,11 +8,11 @@
  */
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 import {
-  buildApplyStageExecutorPatchForCall,
-  buildSelectStageDockExecutorForCall,
+  buildApplyStageSupplierPatchForCall,
+  buildSelectStageDockSupplierForCall,
   buildSignalSubmissionTypedData,
-  buildStageDockExecutorSelectionTypedData,
-  buildStageExecutorPatchTypedData,
+  buildStageDockSupplierSelectionTypedData,
+  buildStageSupplierPatchTypedData,
   buildSubmitSignalForCall,
   buildUVPStageInviteCreateTypedData,
   filePatchDigest,
@@ -21,8 +21,8 @@ import {
   type FilePatch,
   type SelectorBindingPayload,
   type SignalAttributionPayload,
-  type StageDockExecutorSelectionPayload,
-  type StageExecutorPatchCallPatch,
+  type StageDockSupplierSelectionPayload,
+  type StageSupplierPatchCallPatch,
   type TriggerOrderFromOutsidePayload,
   type UVPOrderFinalizeTypedData,
   type UVPStageInviteAcceptTypedData,
@@ -309,13 +309,13 @@ export interface SignalSubmitForOperationInput {
   readonly operation: 'signal.submitFor';
   readonly chainId: number;
   readonly stateMachineAddress: Address | string;
-  /** Effective stage executor the EIP-712 submitter binds to; the relayer only pays for the tx. */
+  /** Effective stage supplier account the EIP-712 submitter binds to; the relayer only pays for the tx. */
   readonly signer: Address | string;
   readonly signal: StateMachineSignal;
   readonly deadline: bigint | number | string;
 }
 
-export interface StageExecutorPatchOperationInput {
+export interface StageSupplierPatchOperationInput {
   readonly operation: 'stagePatch.submit';
   readonly chainId: number;
   readonly stagePatchModuleAddress: Address | string;
@@ -324,8 +324,8 @@ export interface StageExecutorPatchOperationInput {
   readonly planId: Hex | string;
   readonly orderId: Hex | string;
   readonly deadline: bigint | number | string;
-  readonly patch: StageExecutorPatchCallPatch;
-  readonly previousExecutorSignature: Hex | string;
+  readonly patch: StageSupplierPatchCallPatch;
+  readonly previousSupplierSignature: Hex | string;
   readonly bindingProof: SelectorBindingPayload;
   readonly candidateProof: readonly (Hex | string)[];
 }
@@ -339,7 +339,7 @@ export interface StageDockSelectOperationInput {
   readonly planId: Hex | string;
   readonly orderId: Hex | string;
   readonly deadline: bigint | number | string;
-  readonly selection: StageDockExecutorSelectionPayload;
+  readonly selection: StageDockSupplierSelectionPayload;
   readonly bindingProof: SelectorBindingPayload;
 }
 
@@ -358,7 +358,7 @@ export type OperationInput =
   | InviteAcceptOperationInput
   | InviteCreateOperationInput
   | SignalSubmitForOperationInput
-  | StageExecutorPatchOperationInput
+  | StageSupplierPatchOperationInput
   | StageDockSelectOperationInput
   | RegistryWriteOperationInput;
 
@@ -567,7 +567,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
       const signer = normalizeAddressChecksummed(input.signer, 'signer');
       const chainId = parsePositiveInteger(input.chainId, 'chainId');
       const deadline = parseBigNumberish(input.deadline, 'deadline');
-      const typedData = buildStageExecutorPatchTypedData({
+      const typedData = buildStageSupplierPatchTypedData({
         ...input.patch,
         chainId,
         verifyingContract: input.stagePatchModuleAddress,
@@ -581,7 +581,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         chainId,
         signer,
         typedData,
-        buildCalls: (signature) => [callOf(buildApplyStageExecutorPatchForCall(
+        buildCalls: (signature) => [callOf(buildApplyStageSupplierPatchForCall(
           { stagePatchModuleAddress: input.stagePatchModuleAddress, chainId },
           {
             planId: input.planId,
@@ -590,7 +590,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
             selector: signer,
             deadline,
             selectorSignature: signature,
-            previousExecutorSignature: input.previousExecutorSignature,
+            previousSupplierSignature: input.previousSupplierSignature,
             bindingProof: input.bindingProof,
             candidateProof: input.candidateProof,
           },
@@ -602,7 +602,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
       const signer = normalizeAddressChecksummed(input.signer, 'signer');
       const chainId = parsePositiveInteger(input.chainId, 'chainId');
       const deadline = parseBigNumberish(input.deadline, 'deadline');
-      const typedData = buildStageDockExecutorSelectionTypedData({
+      const typedData = buildStageDockSupplierSelectionTypedData({
         chainId,
         verifyingContract: input.stagePatchModuleAddress,
         planId: input.planId,
@@ -616,7 +616,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         chainId,
         signer,
         typedData,
-        buildCalls: (signature) => [callOf(buildSelectStageDockExecutorForCall(
+        buildCalls: (signature) => [callOf(buildSelectStageDockSupplierForCall(
           { stagePatchModuleAddress: input.stagePatchModuleAddress, chainId },
           {
             planId: input.planId,

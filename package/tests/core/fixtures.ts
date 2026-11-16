@@ -1,7 +1,8 @@
 import type { Address, Hex } from 'viem';
-import type {
-  SignalAttributionPayload,
-  TriggerOrderFromOutsidePayload,
+import {
+  supplierIdFromUuid,
+  type SignalAttributionPayload,
+  type TriggerOrderFromOutsidePayload,
 } from '@uvp-eth/protocol-bindings';
 import type { PlanRegistrationArgs } from '../../src/core/registration.js';
 import type { StateMachineSignal } from '../../src/core/signal/build.js';
@@ -20,7 +21,7 @@ export function planRegistrationFixture(): PlanRegistrationArgs {
     planHash: bytes32('02'),
     hooksHash: bytes32('03'),
     capabilitiesRoot: bytes32('04'),
-    executorBindingsRoot: bytes32('07'),
+    supplierBindingsRoot: bytes32('07'),
     hooks: [{
       hookId: bytes32('0a'),
       stageId: bytes32('0b'),
@@ -29,9 +30,9 @@ export function planRegistrationFixture(): PlanRegistrationArgs {
       instructions: [{ op: 'SIGNAL', sourceId: bytes32('0d'), signalId: bytes32('0e') }],
       dependencyKeys: [bytes32('0f')],
     }],
-    executorBindings: [{
+    supplierBindings: [{
       stageId: bytes32('0b'),
-      supplierId: bytes32('19'),
+      supplierId: supplierIdFromUuid('11111111-1111-4111-8111-111111111111'),
       kind: 0,
     }],
   };

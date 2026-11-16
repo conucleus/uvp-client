@@ -3,6 +3,7 @@
 // wire block numbers revive to bigint. Fake fetcher only — no network.
 import { describe, expect, it } from 'vitest';
 import type { Address, Hex } from 'viem';
+import { supplierIdFromUuid } from '@uvp-eth/protocol-bindings';
 import {
   ChainReadError,
   createChainReadClient,
@@ -15,7 +16,7 @@ import {
   type ChainProjectionSnapshot,
   type ChainProvenance,
   type ChainReadFetcher,
-  type ChainStageExecutorOverlay,
+  type ChainStageSupplierAssignment,
   type ChainSyncState,
   type ChainTaskProjection,
 } from '../../src/chain-read/index.js';
@@ -33,8 +34,8 @@ const STAGE_ID = bytes32('d');
 const TX_HASH = bytes32('e');
 const DEPLOYMENT_ID = bytes32('1');
 const WALLET = address('2');
-const EXECUTOR = address('3');
-const SUPPLIER_ID = bytes32('9');
+const SUPPLIER_ACCOUNT = address('3');
+const SUPPLIER_ID = supplierIdFromUuid('99999999-9999-4999-8999-999999999999');
 const BASE_URL = 'http://chain.test:8787';
 
 const PROVENANCE: ChainProvenance = {
@@ -52,14 +53,14 @@ const PROOF: ChainProof = {
   args: { hookId: HOOK_ID },
 };
 
-const OVERLAY: ChainStageExecutorOverlay = {
+const ASSIGNMENT: ChainStageSupplierAssignment = {
   orderId: ORDER_ID,
   selectorStageId: STAGE_ID,
   targetStageId: STAGE_ID,
   selector: WALLET,
   supplierId: SUPPLIER_ID,
   patchNonce: '3',
-  effectiveExecutor: EXECUTOR,
+  supplierAccount: SUPPLIER_ACCOUNT,
   updatedAt: PROVENANCE,
   proof: PROOF,
 };
@@ -76,7 +77,7 @@ const ORDER: ChainOrderProjection = {
   signals: {},
   derivedSignals: {},
   stageMaterializations: {},
-  stageExecutorOverlays: { [STAGE_ID]: OVERLAY },
+  stageSupplierAssignments: { [STAGE_ID]: ASSIGNMENT },
   stageFiles: {},
   hooks: {},
   tasks: {},
@@ -95,7 +96,7 @@ const TASK: ChainTaskProjection = {
   stageIdentifier: STAGE_ID,
   hookName: HOOK_ID,
   assigneeSupplierId: SUPPLIER_ID,
-  assigneeExecutor: EXECUTOR,
+  assigneeSupplierAccount: SUPPLIER_ACCOUNT,
   status: 'ready',
   submitSignals: [{ sourceId: STAGE_ID, signalId: HOOK_ID }],
   createdAt: PROVENANCE,
@@ -162,9 +163,9 @@ const SNAPSHOT: ChainProjectionSnapshot = {
       hookCount: '0',
       selectorBindings: [],
       signalCapabilities: [],
-      executorBindingsRoot: bytes32('6'),
-      executorBindings: [{ stageId: STAGE_ID, supplierId: SUPPLIER_ID, kind: 'default' }],
-      dynamicExecutorStages: [],
+      supplierBindingsRoot: bytes32('6'),
+      supplierBindings: [{ stageId: STAGE_ID, supplierId: SUPPLIER_ID, kind: 'default' }],
+      dynamicSupplierStages: [],
       registeredAt: provenanceAt(8),
       updatedAt: provenanceAt(8),
       proof: proofAt(8),
@@ -178,7 +179,8 @@ const SNAPSHOT: ChainProjectionSnapshot = {
   stateMachineSuppliers: {
     [SUPPLIER_ID]: {
       supplierId: SUPPLIER_ID,
-      executor: EXECUTOR,
+      account: SUPPLIER_ACCOUNT,
+      status: 'active',
       registeredAt: provenanceAt(9),
       updatedAt: provenanceAt(9),
       proof: proofAt(9),
@@ -421,11 +423,11 @@ describe('chain read client', () => {
     const snapshot = decodeSnapshotProjection(SNAPSHOT);
     expect(snapshot.stateMachineDeployments[DEPLOYMENT_ID]?.registeredAt.blockNumber).toBe(4n);
     expect(snapshot.stateMachinePlans[PLAN_ID]?.commitProof?.blockNumber).toBe(8n);
-    expect(snapshot.stateMachinePlans[PLAN_ID]?.executorBindings).toEqual([
+    expect(snapshot.stateMachinePlans[PLAN_ID]?.supplierBindings).toEqual([
       { stageId: STAGE_ID, supplierId: SUPPLIER_ID, kind: 'default' },
     ]);
     expect(snapshot.stateMachineOrders[ORDER_ID]?.registeredAt?.blockNumber).toBe(10n);
-    expect(snapshot.stateMachineOrders[ORDER_ID]?.stageExecutorOverlays[STAGE_ID]?.patchNonce).toBe('3');
+    expect(snapshot.stateMachineOrders[ORDER_ID]?.stageSupplierAssignments[STAGE_ID]?.patchNonce).toBe('3');
     expect(snapshot.stateMachineSuppliers[SUPPLIER_ID]?.registeredAt.blockNumber).toBe(9n);
     expect(snapshot.lastEvent?.blockNumber).toBe(15n);
   });
@@ -435,17 +437,17 @@ describe('chain read client', () => {
     expect(order.registeredAt?.blockNumber).toBe(10n);
     expect(order.proof[0]?.blockNumber).toBe(10n);
     expect(order.relayer).toBe(WALLET);
-    expect(order.stageExecutorOverlays[STAGE_ID]).toMatchObject({
+    expect(order.stageSupplierAssignments[STAGE_ID]).toMatchObject({
       supplierId: SUPPLIER_ID,
       patchNonce: '3',
-      effectiveExecutor: EXECUTOR,
+      supplierAccount: SUPPLIER_ACCOUNT,
     });
-    expect(order.stageExecutorOverlays[STAGE_ID]?.updatedAt.blockNumber).toBe(10n);
+    expect(order.stageSupplierAssignments[STAGE_ID]?.updatedAt.blockNumber).toBe(10n);
     const task = decodeTaskProjection(TASK);
     expect(task.createdAt.blockNumber).toBe(10n);
     expect(task.proof.blockNumber).toBe(10n);
     expect(task.assigneeSupplierId).toBe(SUPPLIER_ID);
-    expect(task.assigneeExecutor).toBe(EXECUTOR);
+    expect(task.assigneeSupplierAccount).toBe(SUPPLIER_ACCOUNT);
     const syncState = decodeSyncStateProjection({
       chainId: CHAIN_ID,
       contractAddress: STATE_MACHINE,

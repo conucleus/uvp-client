@@ -41,7 +41,8 @@ export interface DirectTransportConfig {
   /**
    * Account that pays for the tx. It differs from `SignedOperation.signer` when
    * a relayer forwards a business-signed envelope (`submitSignalFor`): the
-   * signature inside the call still belongs to the executor, never the relayer.
+   * signature inside the call still belongs to the assigned supplier account,
+   * never the relayer.
    */
   readonly relayer?: Address;
 }

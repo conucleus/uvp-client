@@ -3719,7 +3719,6 @@ describe('state machine executor config', () => {
     try {
       await writeFile(configPath, JSON.stringify({
         supplierId: 'role-a',
-        executorId: 'role-a',
         walletAddress: WALLET_ADDRESS,
         chainId: 84_532,
         stateMachineAddress: STATE_MACHINE,
@@ -3749,7 +3748,6 @@ describe('state machine executor config', () => {
 
       expect(config).toMatchObject({
         supplierId: 'role-a',
-        executorId: 'role-a',
         walletAddress: WALLET_ADDRESS,
         chainId: 84_532,
         stateMachineAddress: STATE_MACHINE,

@@ -1,6 +1,5 @@
 {
   "supplierId": "role-a",
-  "executorId": "role-a",
   "walletAddress": "0x0000000000000000000000000000000000000002",
   "chainId": 84532,
   "stateMachineAddress": "0x0000000000000000000000000000000000000001",

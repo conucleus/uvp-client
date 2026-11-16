@@ -11,19 +11,20 @@ export {
   buildPlanRegistration,
   encodePlanRegistrationHooks,
   planRegistrationArgs,
+  supplierIdFromUuid,
+  uuidFromSupplierId,
 } from '@uvp-eth/protocol-bindings';
 
 export type {
-  ExecutorBinding,
-  ExecutorBindingKind,
   PlanCommitCallArgs,
   PlanInstructionOp,
   PlanRegistrationArgs,
   PlanRegistrationBuild,
-  PlanRegistrationExecutorBinding,
   PlanRegistrationHook,
   PlanRegistrationInstruction,
   PlanRegistrationSource,
   PlanTransactionCall,
+  StageSupplierBinding,
   StateMachineCallConfig,
+  SupplierBindingKind,
 } from '@uvp-eth/protocol-bindings';

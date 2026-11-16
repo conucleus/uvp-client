@@ -112,16 +112,16 @@ describe('direct transport', () => {
   });
 
   it('sends a business-signed submitSignalFor envelope from the relayer, not the signer', async () => {
-    const executor = privateKeyToAccount(generatePrivateKey());
+    const supplierAccount = privateKeyToAccount(generatePrivateKey());
     const relayer = privateKeyToAccount(generatePrivateKey());
     const signed = await signOperation(prepareOperation({
       operation: 'signal.submitFor',
       chainId: 31337,
       stateMachineAddress: STATE_MACHINE,
-      signer: executor.address,
+      signer: supplierAccount.address,
       signal: stateMachineSignalFixture(),
       deadline: 1_700_000_000n,
-    }), executor);
+    }), supplierAccount);
     const sent: DirectCall[] = [];
     const transport = createDirectTransport({
       relayer: relayer.address,
@@ -135,11 +135,11 @@ describe('direct transport', () => {
 
     const result = await transport.submit(signed);
 
-    expect(result.signer).toBe(executor.address);
+    expect(result.signer).toBe(supplierAccount.address);
     expect(sent.map((call) => call.from)).toEqual([relayer.address]);
     const decoded = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: sent[0]!.data });
     expect(decoded.functionName).toBe('submitSignalFor');
-    expect((decoded.args as readonly unknown[])[9]).toBe(executor.address);
+    expect((decoded.args as readonly unknown[])[9]).toBe(supplierAccount.address);
   });
 });
 

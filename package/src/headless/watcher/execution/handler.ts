@@ -55,7 +55,6 @@ export interface StateMachineStaticSignalDefinition {
 
 export interface StateMachineHandlerConfig {
   readonly supplierId?: string;
-  readonly executorId?: string;
   readonly walletAddress?: Address;
   readonly chainId?: number;
   readonly stateMachineAddress?: Address;
@@ -128,7 +127,6 @@ function normalizeStateMachineHandlerConfig(value: unknown): StateMachineHandler
 
   return {
     ...(typeof value.supplierId === 'string' ? { supplierId: asNonEmptyString(value.supplierId, 'supplierId') } : {}),
-    ...(typeof value.executorId === 'string' ? { executorId: asNonEmptyString(value.executorId, 'executorId') } : {}),
     ...(typeof value.walletAddress === 'string' ? { walletAddress: normalizeAddressChecksummed(value.walletAddress, 'walletAddress') } : {}),
     ...(value.chainId !== undefined ? { chainId: parsePositiveInteger(asNumberOrString(value.chainId, 'chainId'), 'chainId') } : {}),
     ...(typeof value.stateMachineAddress === 'string'

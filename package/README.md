@@ -14,7 +14,7 @@ package produces and reads signals, it never owns orders, sessions, or keys.
 | `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, buyer-intent vs birthAuthorizer split, re-exported plan-registration and HookReady surfaces, signal build/decode/submit (`submitSignal` direct and `submitSignalFor` relayer-signed) with optional stage file patches, stage file read helpers (`getStageFile`/`stageFilesHash`), validation, signing helpers, evidence hashing, and re-exported protocol typed data. No Node builtins. |
 | `@uvp-eth/uvp-client/chain-read` | Typed HTTP client for chain-services' generic `/chain/*` projection reads plus the bigint projection decoders; wire DTOs/structural decoders are single-sourced in `@uvp-eth/chain-read-contract`, failures stay typed (`invalid_config`/`timeout`/`transport`/`http`/`not_found`/`invalid_response`). |
 | `@uvp-eth/uvp-client/server` | Node-only server tooling: server-side `@uvp-eth/compiler` primitives plus file-based evidence hashing. Never imported by `/browser` or `/core`. |
-| `@uvp-eth/uvp-client/browser` | Browser-host client: `createBrowserClient` exposes the same operation set through the injected EIP-1193 wallet (direct or relay); wallet signing primitives, deadline/format derivations, and the stage executor patch plus dock executor selection typed-data surfaces — no compiler/env/localStorage/private keys. |
+| `@uvp-eth/uvp-client/browser` | Browser-host client: `createBrowserClient` exposes the same operation set through the injected EIP-1193 wallet (direct or relay); wallet signing primitives, deadline/format derivations, and the stage supplier patch plus dock supplier selection typed-data surfaces — no compiler/env/localStorage/private keys. |
 | `@uvp-eth/uvp-client/headless` | Script/bot client: `createHeadlessClient` exposes the same operation set signed by a local private key (direct RPC or relay); Node plan compilation and the HookReady watcher remain extras, plus wallet handling and the non-spending doctor. |
 | `@uvp-eth/uvp-client/cli` | Executor CLI: `plan compile/register`, `order birth-intent|birth-authorize|finalize`, `invite accept`, `registry sign`, `wallet`, `doctor`, and the watcher commands (`chain-once`/`chain-watch`/`chain-signal`). |
 
@@ -77,21 +77,23 @@ All signed writes belong to the client, not to chain-services:
 
 | Operation | Entry | Shape |
 |---|---|---|
-| `plan.register` | `browser` / `headless` / `cli` | `commitPlan` typed data + calldata (with `executorBindings`/`executorBindingsRoot`), then `finalizePlan` |
+| `plan.register` | `browser` / `headless` / `cli` | `commitPlan` typed data + calldata (with `supplierBindings`/`supplierBindingsRoot`), then `finalizePlan` |
 | `order.birth` | `core` / `browser` / `headless` / `cli` | buyer intent (relay) or birthAuthorizer `triggerOrderFromOutsideFor` (direct) |
 | `order.finalize` / `invite.accept` | `browser` / `headless` / `cli` | protocol-bindings UVPOrderFinalize / UVPStageInviteAccept typed data, validated before signing |
 | `invite.create` | `core` / `browser` / `headless` / `cli` | buyer-signed UVPStageInviteCreate terms (`UVPOrderBook/1`, single-sourced in protocol-bindings) |
-| `signal.submitFor` | `core` / `browser` / `headless` | EIP-712 `UVPStateMachineSignalSubmission` + `submitSignalFor` calldata: the signer is the stage's effective executor and the delivering account is only the relayer (EOA ECDSA / contract EIP-1271) |
-| `stagePatch.submit` | `core` / `browser` / `headless` | stage executor patch typed data (supplierId/previousSupplierId/patchNonce) + `applyStageExecutorPatchFor` calldata |
-| `stageDock.select` | `core` / `browser` / `headless` | dock executor selection typed data (dockId/supplierId/patchNonce) + `selectStageDockExecutorFor` calldata |
+| `signal.submitFor` | `core` / `browser` / `headless` | EIP-712 `UVPStateMachineSignalSubmission` + `submitSignalFor` calldata: the signer is the source stage's assigned supplier account (SID active) and the delivering account is only the relayer (EOA ECDSA / contract EIP-1271) |
+| `stagePatch.submit` | `core` / `browser` / `headless` | stage supplier patch typed data (supplierId/previousSupplierId/patchNonce) + `applyStageSupplierPatchFor` calldata |
+| `stageDock.select` | `core` / `browser` / `headless` | dock supplier selection typed data (dockId/supplierId/patchNonce) + `selectStageDockSupplierFor` calldata |
 | `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/protocol-bindings` (`UVPZhixuRegistry/1`); headless exposes `publishZhixuRecord`/`publishIdentityClaim` default builders |
 
-Signal submission authority is the stage's **effective executor** (plan default
-supplier, active stage-patch supplier, or the per-order dynamic assignment),
-resolved on chain from `UVPSupplierRegistry`; there is no order-level
-authorization array in the client operation inputs or calldata. Direct
-`submitSignal` (identity `msg.sender`) stays available for executor-owned
-wallets through the watcher/`chain-signal` path.
+Signal submission authority is the source stage's **assigned supplier
+account** (plan default supplier, active stage-patch supplier, or the per-order
+dynamic assignment; the SID must be active), resolved on chain from
+`UVPSupplierRegistry.accountOf`; there is no order-level authorization array in
+the client operation inputs or calldata. The selected supplier account is
+permanently bound to its SID — there is no account rotation to track. Direct
+`submitSignal` (identity `msg.sender`) stays available for wallets that are
+the stage's assigned supplier account through the watcher/`chain-signal` path.
 
 The browser path never imports the compiler or reads private keys. The headless
 path signs with a local private key. Registry storage/HTTP is not a client
@@ -108,7 +110,7 @@ Stage file patches ride `submitSignal` (identity `msg.sender`) or the signed
 `@uvp-eth/protocol-bindings`; this package passes them through and never
 redefines the patch shape or canonical digest.
 
-- Both submit builders accept an optional `filePatch`; `filesDigest` is derived with `filePatchDigest` and appended with the patch after the attribution. A standalone pure patch uses `signalId = 0`. Write authority is the writer stage's effective executor plus, for a cross-stage target, its `fileWriters` capability proof.
+- Both submit builders accept an optional `filePatch`; `filesDigest` is derived with `filePatchDigest` and appended with the patch after the attribution. A standalone pure patch uses `signalId = 0`. Write authority is the writer stage's assigned supplier account plus, for a cross-stage target, its `fileWriters` capability proof.
 - `getStageFile` and `stageFilesHash` read the file resource module through the
   `FILE_RESOURCE_MODULE_ABI` exported by protocol-bindings. A failed or malformed
   read throws `StageFileReadError` (`invalid_config`/`read_failed`/`invalid_response`)
@@ -217,7 +219,7 @@ non-benign error or a job ends `failed`/`dead_letter`.
 
 ```json
 {
-  "supplierId": "role-a",
+  "supplierId": "6f1a3c2d-8e4b-4a57-9c3d-1b2e4f6078a9",
   "walletAddress": "0x0000000000000000000000000000000000000002",
   "chainId": 31337,
   "stateMachineAddress": "0x0000000000000000000000000000000000000001",
@@ -236,8 +238,10 @@ non-benign error or a job ends `failed`/`dead_letter`.
 }
 ```
 
-Handlers route by `stageIdentifier#hookName`, then `stageIdentifier`, hook id,
-stage id, and finally `*`. A static signal may carry hashed `sourceId`/`signalId`
+`supplierId` here is optional watcher/job audit metadata (a SID UUID string);
+on-chain submission authority still comes from the wallet key being the stage's
+assigned supplier account. Handlers route by `stageIdentifier#hookName`, then
+`stageIdentifier`, hook id, stage id, and finally `*`. A static signal may carry hashed `sourceId`/`signalId`
 pairs instead of text names, and may pin its own `planId`.
 
 ## Browser Client
@@ -313,9 +317,12 @@ and typed-data field tables — never hand-copied here.
 - No HTTP server, no callback/job runtime process, and no database.
 - No registry storage or compiler in the browser entry; registry typed-data/record shape stays single-sourced in `@uvp-eth/protocol-bindings` (the client never depends on the registry storage package).
 - No order creation or order-level authorization: signal submission authority is
-  the stage's effective executor, resolved on chain from `UVPSupplierRegistry`.
-- No supplier registration: `UVPSupplierRegistry` is written by the platform
-  store's registrar key, never by this client.
+  the stage's assigned supplier account, resolved on chain from
+  `UVPSupplierRegistry` (SID must be active).
+- No supplier registration or status writes: `UVPSupplierRegistry` SIDs are
+  self-registered by the supplier account itself and activated/suspended/
+  revoked by the platform store's registrar — this client has no such
+  operation.
 - No key custody: CLI/wallet helpers read only explicit env vars and never
   print secrets.
 - No escrow, release, refund, exchange, or payment-provider flows.

@@ -20,7 +20,7 @@ const definition: ZhixuDefinition = {
         selectedStages: ['main'],
         receiveSignals: { PLACE: 'buyer::assign.seed' },
         sendSignals: [{ name: 'executor_selected' }, { name: 'seed' }],
-        executor: { supplierType: 'organization', supplierID: 'selector-org' },
+        executor: { supplierType: 'organization', supplierID: '11111111-1111-4111-8111-111111111111' },
       },
       {
         name: 'main',
@@ -30,7 +30,7 @@ const definition: ZhixuDefinition = {
           TIMEOUT: 'buyer::(assign.executor_selected +5s) & ~main.cmp',
         },
         sendSignals: [{ name: 'str' }, { name: 'cmp' }, { name: 'err' }],
-        executor: { supplierType: 'organization', supplierID: 'org-1' },
+        executor: { supplierType: 'organization', supplierID: '22222222-2222-4222-8222-222222222222' },
       },
     ],
   },
@@ -46,7 +46,7 @@ describe('headless plan compilation', () => {
     const registration = planRegistrationArgs(compiled.registerArgs, compiled.planId);
     expect(registration.planId).toBe(compiled.planId);
     expect(registration.hooks.length).toBe(compiled.registerArgs.hooks.length);
-    expect(registration.executorBindings).toEqual(compiled.registerArgs.executorBindings);
-    expect(registration.executorBindingsRoot).toBe(compiled.registerArgs.executorBindingsRoot);
+    expect(registration.supplierBindings).toEqual(compiled.registerArgs.supplierBindings);
+    expect(registration.supplierBindingsRoot).toBe(compiled.registerArgs.supplierBindingsRoot);
   });
 });

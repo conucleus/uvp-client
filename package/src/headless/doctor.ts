@@ -256,7 +256,7 @@ function summarizeConfig(path: string, config: StateMachineHandlerConfig): Execu
     handlerCount: Object.keys(config.handlers).length,
     signalCount,
     stateMachineAddresses,
-    ...(config.supplierId ?? config.executorId ? { supplierId: config.supplierId ?? config.executorId } : {}),
+    ...(config.supplierId ? { supplierId: config.supplierId } : {}),
     ...(config.walletAddress ? { walletAddress: config.walletAddress } : {}),
     ...(config.chainId !== undefined ? { chainId: config.chainId } : {}),
     dryRun: config.dryRun ?? false,

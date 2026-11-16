@@ -22,7 +22,6 @@ import {
   type ChainDerivedSignal,
   type ChainDock,
   type ChainDockBinding,
-  type ChainExecutorBinding,
   type ChainHook,
   type ChainHookStatus,
   type ChainModuleProjection,
@@ -39,13 +38,15 @@ import {
   type ChainSignal,
   type ChainSignalCapability,
   type ChainSignalTargetRelation,
-  type ChainStageExecutorOverlay,
   type ChainStageFileEntry,
   type ChainStageFileMap,
   type ChainStageMaterialization,
   type ChainStageSelectorBinding,
+  type ChainStageSupplierAssignment,
   type ChainSubmitSignal,
   type ChainSupplier,
+  type ChainSupplierBinding,
+  type ChainSupplierStatus,
   type ChainSyncDiagnosticsCounts,
   type ChainSyncState,
   type ChainSyncStatus,
@@ -73,7 +74,7 @@ export type StateMachineTimelineEventProjection = RevivedWire<ChainTimelineEvent
 export type StateMachineSignalProjection = RevivedWire<ChainSignal>;
 export type StateMachineDerivedSignalProjection = RevivedWire<ChainDerivedSignal>;
 export type StateMachineStageMaterializationProjection = RevivedWire<ChainStageMaterialization>;
-export type StateMachineStageExecutorOverlayProjection = RevivedWire<ChainStageExecutorOverlay>;
+export type StateMachineStageSupplierAssignmentProjection = RevivedWire<ChainStageSupplierAssignment>;
 export type StateMachineStageFileEntryProjection = RevivedWire<ChainStageFileEntry>;
 export type StateMachineStageFileMapProjection = RevivedWire<ChainStageFileMap>;
 export type StateMachineDockProjection = RevivedWire<ChainDock>;
@@ -84,9 +85,10 @@ export type StateMachineTaskProjection = RevivedWire<ChainTaskProjection>;
 export type StateMachineOrderProjection = RevivedWire<ChainOrderProjection>;
 export type StateMachinePlanProjection = RevivedWire<ChainPlanProjection>;
 export type StateMachineStageSelectorBindingProjection = RevivedWire<ChainStageSelectorBinding>;
-export type StateMachineExecutorBindingProjection = RevivedWire<ChainExecutorBinding>;
+export type StateMachineSupplierBindingProjection = RevivedWire<ChainSupplierBinding>;
 export type StateMachineSignalCapabilityProjection = RevivedWire<ChainSignalCapability>;
 export type StateMachineSupplierProjection = RevivedWire<ChainSupplier>;
+export type StateMachineSupplierStatus = ChainSupplierStatus;
 export type StateMachineModuleProjection = RevivedWire<ChainModuleProjection>;
 export type StateMachineDeploymentProjection = RevivedWire<ChainDeploymentProjection>;
 export type ContractGovernanceProjection = RevivedWire<ChainContractGovernanceProjection>;

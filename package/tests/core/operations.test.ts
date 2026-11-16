@@ -9,8 +9,8 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   PLAN_COMMIT_PRIMARY_TYPE,
   SIGNAL_SUBMISSION_PRIMARY_TYPE,
-  STAGE_DOCK_EXECUTOR_SELECTION_PRIMARY_TYPE,
-  STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
+  STAGE_DOCK_SUPPLIER_SELECTION_PRIMARY_TYPE,
+  STAGE_SUPPLIER_PATCH_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
   STAGE_PATCH_MODULE_ABI,
   TRIGGER_ORDER_FROM_OUTSIDE_PRIMARY_TYPE,
@@ -54,7 +54,7 @@ function registrationInput(signer: Address): OperationInput {
 }
 
 
-function stageExecutorPatchInput(signer: Address): OperationInput {
+function stageSupplierPatchInput(signer: Address): OperationInput {
   return {
     operation: 'stagePatch.submit',
     chainId: 31337,
@@ -70,7 +70,7 @@ function stageExecutorPatchInput(signer: Address): OperationInput {
       previousSupplierId: bytes32('00'),
       patchNonce: 3,
     },
-    previousExecutorSignature: `0x${'22'.repeat(65)}`,
+    previousSupplierSignature: `0x${'22'.repeat(65)}`,
     bindingProof: { selectorStageId: bytes32('09'), proof: [] },
     candidateProof: [],
   };
@@ -259,15 +259,15 @@ describe('operation matrix', () => {
       },
       {
         label: 'stagePatch.submit',
-        input: stageExecutorPatchInput(signerAccount.address),
-        primaryType: STAGE_EXECUTOR_PATCH_PRIMARY_TYPE,
-        calls: ['applyStageExecutorPatchFor'],
+        input: stageSupplierPatchInput(signerAccount.address),
+        primaryType: STAGE_SUPPLIER_PATCH_PRIMARY_TYPE,
+        calls: ['applyStageSupplierPatchFor'],
       },
       {
         label: 'stageDock.select',
         input: stageDockSelectInput(signerAccount.address),
-        primaryType: STAGE_DOCK_EXECUTOR_SELECTION_PRIMARY_TYPE,
-        calls: ['selectStageDockExecutorFor'],
+        primaryType: STAGE_DOCK_SUPPLIER_SELECTION_PRIMARY_TYPE,
+        calls: ['selectStageDockSupplierFor'],
       },
       {
         label: 'registry.write',
@@ -300,9 +300,9 @@ describe('operation matrix', () => {
 
   it('binds the selector signature to the supplier-scoped patch and dock calldata', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
-    const patch = await signOperation(prepareOperation(stageExecutorPatchInput(account.address)), account);
+    const patch = await signOperation(prepareOperation(stageSupplierPatchInput(account.address)), account);
     const patchCall = decodeFunctionData({ abi: STAGE_PATCH_MODULE_ABI, data: patch.calls[0]!.data });
-    expect(patchCall.functionName).toBe('applyStageExecutorPatchFor');
+    expect(patchCall.functionName).toBe('applyStageSupplierPatchFor');
     expect((patchCall.args as readonly unknown[])[2]).toEqual({
       selectorStageId: bytes32('04'),
       targetStageId: bytes32('05'),
@@ -314,7 +314,7 @@ describe('operation matrix', () => {
 
     const dock = await signOperation(prepareOperation(stageDockSelectInput(account.address)), account);
     const dockCall = decodeFunctionData({ abi: STAGE_PATCH_MODULE_ABI, data: dock.calls[0]!.data });
-    expect(dockCall.functionName).toBe('selectStageDockExecutorFor');
+    expect(dockCall.functionName).toBe('selectStageDockSupplierFor');
     expect((dockCall.args as readonly unknown[])[2]).toEqual({
       selectorStageId: bytes32('04'),
       targetStageId: bytes32('05'),
@@ -326,13 +326,13 @@ describe('operation matrix', () => {
   });
 
   it('attaches an EIP-1271 contract signature to a submitSignalFor envelope', () => {
-    const contractExecutor = '0x00000000000000000000000000000000000000c1' as Address;
-    const prepared = prepareOperation(signalSubmitForInput(contractExecutor));
-    expect(prepared.signer.toLowerCase()).toBe(contractExecutor.toLowerCase());
+    const contractSupplierAccount = '0x00000000000000000000000000000000000000c1' as Address;
+    const prepared = prepareOperation(signalSubmitForInput(contractSupplierAccount));
+    expect(prepared.signer.toLowerCase()).toBe(contractSupplierAccount.toLowerCase());
 
     const signature = `0x${'a1'.repeat(80)}` as Hex;
     const signed = signOperationWithSignature(prepared, signature);
-    expect(signed.signer.toLowerCase()).toBe(contractExecutor.toLowerCase());
+    expect(signed.signer.toLowerCase()).toBe(contractSupplierAccount.toLowerCase());
     expect(signed.signature).toBe(signature);
     const call = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: signed.calls[0]!.data });
     expect(call.functionName).toBe('submitSignalFor');

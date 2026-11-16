@@ -157,7 +157,7 @@ export async function buildStateMachineWatcher(
         ? configuredStateMachines
         : [{ stateMachineAddress }],
       chainId: parsePositiveInteger(options.chainId, 'chainId'),
-      ...(config.supplierId ?? config.executorId ? { supplierId: config.supplierId ?? config.executorId } : {}),
+      ...(config.supplierId ? { supplierId: config.supplierId } : {}),
       ...(options.walletAddress ? { walletAddress: normalizeAddressChecksummed(options.walletAddress, 'walletAddress') } : config.walletAddress ? { walletAddress: config.walletAddress } : {}),
       privateKeyEnv: options.privateKeyEnv,
       handlers: createStateMachineHandlersFromConfig(config),
