@@ -303,9 +303,9 @@ than parse messages.
 
 ## ABI Boundary
 
-`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.20` compact-hook
+`createStateMachineWatcher` uses the fixed `UVPStateMachine v0.21` compact-hook
 ABI recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.20.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.21.json`:
 `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId,
 bytes32 hookName)` and `submitSignal(planId, orderId, sourceId, signalId,
 payloadHash, idempotencyKey, attribution, filesDigest, filePatch)`. The kit
