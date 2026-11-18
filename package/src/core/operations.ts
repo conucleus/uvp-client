@@ -1,10 +1,12 @@
 /**
  * Operation vocabulary and execution engine shared by the browser, headless and
  * CLI shells: one operation set, one prepare/sign path, direct/relay as a
- * transport parameter. Operation-specific construction delegates to the core
- * builders (registration/birth/signal) and protocol-bindings; this module owns
- * only the envelope, the signer contract, the result/error model, and the
- * client interface all three shells implement.
+ * transport parameter. Signal submissions carry an empty signature when sent
+ * directly (submitter == sender) and the participant-signed typed data when
+ * relayed. Operation-specific construction delegates to the core builders
+ * (registration/signal) and protocol-bindings; this module owns only the
+ * envelope, the signer contract, the result/error model, and the client
+ * interface all three shells implement.
  */
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 import {
@@ -13,26 +15,16 @@ import {
   buildSignalSubmissionTypedData,
   buildStageDockSupplierSelectionTypedData,
   buildStageSupplierPatchTypedData,
-  buildSubmitSignalForCall,
+  buildSubmitSignalCall,
   buildUVPStageInviteCreateTypedData,
-  filePatchDigest,
   validateUVPOrderFinalizeTypedData,
   validateUVPStageInviteAcceptTypedData,
-  type FilePatch,
   type SelectorBindingPayload,
-  type SignalAttributionPayload,
   type StageDockSupplierSelectionPayload,
   type StageSupplierPatchCallPatch,
-  type TriggerOrderFromOutsidePayload,
   type UVPOrderFinalizeTypedData,
   type UVPStageInviteAcceptTypedData,
 } from '@uvp-eth/protocol-bindings';
-import {
-  assertBirthAuthorizationSigner,
-  buildOrderBirthAuthorization,
-  buildOrderBirthIntent,
-  orderBirthAuthorizationCall,
-} from './birth.js';
 import { ZERO_BYTES32 } from './constants.js';
 import {
   buildPlanCommitCall,
@@ -42,6 +34,7 @@ import {
 } from './registration.js';
 import {
   normalizeSignalSubmission,
+  parseDeadline,
   type StateMachineSignal,
 } from './signal/build.js';
 import type { OperationTransport } from './transport.js';
@@ -55,11 +48,11 @@ import {
 
 export const OPERATION_NAMES = [
   'plan.register',
-  'order.birth',
+  'order.trigger',
   'order.finalize',
   'invite.accept',
   'invite.create',
-  'signal.submitFor',
+  'signal.submit',
   'stagePatch.submit',
   'stageDock.select',
   'registry.write',
@@ -68,6 +61,13 @@ export const OPERATION_NAMES = [
 export type OperationName = (typeof OPERATION_NAMES)[number];
 
 export type SubmitMode = 'direct' | 'relay';
+
+/**
+ * `direct-empty`: a direct submission is authorized by the sender itself, so
+ * the calldata carries an empty signature (submitSignal direct path); relayed
+ * submissions still sign the typed data. `signed` always signs.
+ */
+export type OperationSignatureDelivery = 'signed' | 'direct-empty';
 
 export interface OperationCall {
   readonly to: Address;
@@ -82,6 +82,7 @@ export interface PreparedOperation {
   readonly signer: Address;
   readonly typedData: TypedDataDefinition;
   readonly buildCalls: (signature: Hex) => readonly OperationCall[];
+  readonly signatureDelivery?: OperationSignatureDelivery;
 }
 
 export interface SignedOperation {
@@ -165,19 +166,22 @@ export interface OperationClient {
 
 export function createOperationClient(input: {
   readonly signer: OperationSigner;
-  readonly mode: SubmitMode;
   readonly transport: OperationTransport;
 }): OperationClient {
   const signer = normalizeAddressChecksummed(input.signer.address, 'signer');
+  const transport = input.transport;
   return {
-    mode: input.mode,
+    mode: input.transport.mode,
     signer,
     prepare: (operationInput) => prepareOperation(operationInput),
     sign: (operationInput) => signOperation(prepareOperation(operationInput), input.signer),
-    submit: (signed) => input.transport.submit(signed),
+    submit: (signed) => transport.submit(signed),
     async execute(operationInput) {
-      const signed = await signOperation(prepareOperation(operationInput), input.signer);
-      return input.transport.submit(signed);
+      const prepared = prepareOperation(operationInput);
+      if (transport.mode === 'direct' && prepared.signatureDelivery === 'direct-empty') {
+        return transport.submit(buildEmptySignatureOperation(prepared));
+      }
+      return transport.submit(await signOperation(prepared, input.signer));
     },
   };
 }
@@ -206,9 +210,18 @@ export async function signOperation(
 }
 
 /**
+ * Direct delivery of a submission whose authorization is the sender itself:
+ * the calldata carries an empty signature, so no typed-data prompt is needed.
+ */
+export function buildEmptySignatureOperation(prepared: PreparedOperation): SignedOperation {
+  return signedOperationOf(prepared, '0x');
+}
+
+/**
  * Attaches a contract-wallet signature (EIP-1271) to a prepared operation: an
  * EIP-1271 signature is contract-defined bytes, not the 65-byte ECDSA envelope
- * `signOperation` enforces, and only `submitSignalFor` accepts it on chain.
+ * `signOperation` enforces. The state machine verifies it when the submission's
+ * submitter is a contract account.
  */
 export function signOperationWithSignature(
   prepared: PreparedOperation,
@@ -242,34 +255,31 @@ export interface PlanRegisterOperationInput {
   readonly signer: Address | string;
   readonly registration: PlanRegistrationArgs;
   readonly deadline: bigint | number | string;
-  readonly birthAuthorizer?: Address | string | undefined;
   /** Registering includes the second step unless the caller explicitly stages only the commit. */
   readonly finalize?: boolean | undefined;
 }
 
-export interface OrderBirthIntentOperationInput {
-  readonly operation: 'order.birth';
-  readonly role: 'buyer-intent';
+/** Signal fields of an operation: the deadline is the operation envelope's signed field. */
+export type OperationSignal = Omit<StateMachineSignal, 'deadline'>;
+
+export interface OrderTriggerOperationInput {
+  readonly operation: 'order.trigger';
   readonly chainId: number;
   readonly stateMachineAddress: Address | string;
-  /** Buyer wallet; signs the intent, never the birth authorization. */
+  /** Trigger submitter: the trigger stage's assigned supplier account; signs a relayed submission. */
   readonly signer: Address | string;
-  readonly planId: Hex | string;
-  readonly orderId: Hex | string;
-  readonly termsHash: Hex | string;
-  readonly nonce: bigint | number | string;
+  readonly signal: OperationSignal;
   readonly deadline: bigint | number | string;
 }
 
-export interface OrderBirthAuthorizationOperationInput {
-  readonly operation: 'order.birth';
-  readonly role: 'birth-authorizer';
+export interface SignalSubmitOperationInput {
+  readonly operation: 'signal.submit';
   readonly chainId: number;
   readonly stateMachineAddress: Address | string;
-  /** Must equal trigger.submitter: the plan's birthAuthorizer. */
+  /** Effective stage supplier account the EIP-712 submitter binds to; the relayer only pays for the tx. */
   readonly signer: Address | string;
-  readonly trigger: TriggerOrderFromOutsidePayload;
-  readonly birthFactAttribution: SignalAttributionPayload;
+  readonly signal: OperationSignal;
+  readonly deadline: bigint | number | string;
 }
 
 export interface OrderFinalizeOperationInput {
@@ -302,16 +312,6 @@ export interface InviteCreateOperationInput {
   readonly workDeadline: bigint | number | string;
   readonly termsHash: Hex | string;
   readonly nonce: bigint | number | string;
-  readonly deadline: bigint | number | string;
-}
-
-export interface SignalSubmitForOperationInput {
-  readonly operation: 'signal.submitFor';
-  readonly chainId: number;
-  readonly stateMachineAddress: Address | string;
-  /** Effective stage supplier account the EIP-712 submitter binds to; the relayer only pays for the tx. */
-  readonly signer: Address | string;
-  readonly signal: StateMachineSignal;
   readonly deadline: bigint | number | string;
 }
 
@@ -352,12 +352,11 @@ export interface RegistryWriteOperationInput {
 
 export type OperationInput =
   | PlanRegisterOperationInput
-  | OrderBirthIntentOperationInput
-  | OrderBirthAuthorizationOperationInput
+  | OrderTriggerOperationInput
+  | SignalSubmitOperationInput
   | OrderFinalizeOperationInput
   | InviteAcceptOperationInput
   | InviteCreateOperationInput
-  | SignalSubmitForOperationInput
   | StageSupplierPatchOperationInput
   | StageDockSelectOperationInput
   | RegistryWriteOperationInput;
@@ -385,7 +384,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
           publisher: signer,
           deadline,
           registration: input.registration,
-          ...(input.birthAuthorizer !== undefined ? { birthAuthorizer: input.birthAuthorizer } : {}),
         },
       );
       return {
@@ -401,7 +399,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
               deadline,
               registration: input.registration,
               signature,
-              ...(input.birthAuthorizer !== undefined ? { birthAuthorizer: input.birthAuthorizer } : {}),
             },
           )),
           ...(input.finalize === false
@@ -414,56 +411,9 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
       };
     }
 
-    case 'order.birth': {
-      if (input.role === 'buyer-intent') {
-        const signer = normalizeAddressChecksummed(input.signer, 'signer');
-        const typedData = buildOrderBirthIntent({
-          chainId: input.chainId,
-          stateMachineAddress: input.stateMachineAddress,
-          planId: input.planId,
-          orderId: input.orderId,
-          buyer: signer,
-          termsHash: input.termsHash,
-          nonce: input.nonce,
-          deadline: input.deadline,
-        });
-        return {
-          operation: 'order.birth',
-          chainId: typedData.domain.chainId,
-          signer,
-          typedData,
-          buildCalls: () => [],
-        };
-      }
-      const signer = normalizeAddressChecksummed(input.signer, 'signer');
-      try {
-        assertBirthAuthorizationSigner({ signer, trigger: input.trigger });
-      } catch (error) {
-        throw new OperationError({
-          operation: 'order.birth',
-          code: 'signer_mismatch',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-      const authorization = buildOrderBirthAuthorization({
-        chainId: input.chainId,
-        stateMachineAddress: input.stateMachineAddress,
-        trigger: input.trigger,
-      });
-      return {
-        operation: 'order.birth',
-        chainId: authorization.domain.chainId,
-        signer,
-        typedData: authorization,
-        buildCalls: (signature) => [orderBirthAuthorizationCall({
-          chainId: input.chainId,
-          stateMachineAddress: input.stateMachineAddress,
-          trigger: input.trigger,
-          signature,
-          birthFactAttribution: input.birthFactAttribution,
-        })],
-      };
-    }
+    case 'order.trigger':
+    case 'signal.submit':
+      return prepareSignalSubmission(input);
 
     case 'order.finalize': {
       const typedData = validateUVPOrderFinalizeTypedData(input.typedData);
@@ -512,54 +462,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         signer,
         typedData,
         buildCalls: () => [],
-      };
-    }
-
-    case 'signal.submitFor': {
-      const signer = normalizeAddressChecksummed(input.signer, 'signer');
-      const chainId = parsePositiveInteger(input.chainId, 'chainId');
-      const stateMachineAddress = normalizeAddressChecksummed(input.stateMachineAddress, 'stateMachineAddress');
-      const deadline = parseBigNumberish(input.deadline, 'deadline');
-      const signal = normalizeSignalSubmission(input.signal);
-      const filesDigest = input.signal.filePatch === undefined
-        ? ZERO_BYTES32
-        : filePatchDigest(signal.planId, signal.orderId, input.signal.filePatch);
-      const typedData = buildSignalSubmissionTypedData({
-        chainId,
-        verifyingContract: stateMachineAddress,
-        planId: signal.planId,
-        orderId: signal.orderId,
-        sourceId: signal.sourceId,
-        signalId: signal.signalId,
-        payloadHash: signal.payloadHash,
-        idempotencyKey: signal.idempotencyKey,
-        filesDigest,
-        attribution: signal.attribution,
-        submitter: signer,
-        deadline,
-      });
-      return {
-        operation: 'signal.submitFor',
-        chainId,
-        signer,
-        typedData,
-        buildCalls: (signature) => [callOf(buildSubmitSignalForCall(
-          { stateMachineAddress, chainId },
-          {
-            planId: signal.planId,
-            orderId: signal.orderId,
-            sourceId: signal.sourceId,
-            signalId: signal.signalId,
-            payloadHash: signal.payloadHash,
-            idempotencyKey: signal.idempotencyKey,
-            attribution: signal.attribution,
-            filesDigest,
-            ...(input.signal.filePatch !== undefined ? { filePatch: input.signal.filePatch } : {}),
-            submitter: signer,
-            deadline,
-            signature,
-          },
-        ))],
       };
     }
 
@@ -644,6 +546,64 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
     }
   }
   throw new ValidationError(`unsupported operation ${String((input as { readonly operation?: unknown }).operation)}`);
+}
+
+function prepareSignalSubmission(
+  input: OrderTriggerOperationInput | SignalSubmitOperationInput,
+): PreparedOperation {
+  const signer = normalizeAddressChecksummed(input.signer, 'signer');
+  const chainId = parsePositiveInteger(input.chainId, 'chainId');
+  const stateMachineAddress = normalizeAddressChecksummed(input.stateMachineAddress, 'stateMachineAddress');
+  const deadline = parseDeadline(input.deadline, 'deadline');
+  const signal = normalizeSignalSubmission(input.signal);
+  if (input.operation === 'order.trigger' && signal.orderId !== ZERO_BYTES32) {
+    throw new ValidationError(
+      'order.trigger creates a new order: signal.orderId must be omitted (0); submit to an existing order with signal.submit',
+    );
+  }
+  if (input.operation === 'signal.submit' && signal.orderId === ZERO_BYTES32) {
+    throw new ValidationError(
+      'signal.submit targets an existing order: signal.orderId is required; create an order with order.trigger',
+    );
+  }
+  const typedData = buildSignalSubmissionTypedData({
+    chainId,
+    verifyingContract: stateMachineAddress,
+    planId: signal.planId,
+    orderId: signal.orderId,
+    sourceId: signal.sourceId,
+    signalId: signal.signalId,
+    payloadHash: signal.payloadHash,
+    idempotencyKey: signal.idempotencyKey,
+    patchHash: signal.patchHash,
+    attribution: signal.attribution,
+    submitter: signer,
+    deadline,
+  });
+  return {
+    operation: input.operation,
+    chainId,
+    signer,
+    typedData,
+    signatureDelivery: 'direct-empty',
+    buildCalls: (signature) => [callOf(buildSubmitSignalCall(
+      { stateMachineAddress, chainId },
+      {
+        planId: signal.planId,
+        orderId: signal.orderId,
+        sourceId: signal.sourceId,
+        signalId: signal.signalId,
+        payloadHash: signal.payloadHash,
+        idempotencyKey: signal.idempotencyKey,
+        attribution: signal.attribution,
+        ...(signal.filePatch !== undefined ? { filePatch: signal.filePatch } : {}),
+        patchHash: signal.patchHash,
+        submitter: signer,
+        deadline,
+        signature,
+      },
+    ))],
+  };
 }
 
 function callOf(call: { readonly address: Address; readonly functionName: string; readonly data: Hex }): OperationCall {

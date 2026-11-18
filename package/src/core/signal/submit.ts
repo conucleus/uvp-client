@@ -1,7 +1,9 @@
 import { createPublicClient, createWalletClient, http, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { loadPrivateKeyFromEnv } from '../signing.js';
+import { ZERO_BYTES32 } from '../constants.js';
 import { ValidationError } from '../validation.js';
+import { triggeredOrderIdFromLogs, type StateMachineRawLog } from './decode.js';
 import {
   buildSubmitStateMachineSignalCall,
   normalizeSubmitConfig,
@@ -22,6 +24,7 @@ export type SubmitStateMachineSignalResult =
     readonly request: SubmitStateMachineSignalCall;
     readonly txHash: Hex;
     readonly confirmed?: boolean;
+    readonly orderId?: Hex;
   };
 
 export class SubmitSignalReceiptError extends Error {
@@ -43,7 +46,7 @@ export async function submitStateMachineSignal(
   const normalizedConfig = normalizeSubmitConfig(config);
 
   if (normalizedConfig.dryRun) {
-    const from = resolveConfiguredWalletAddress(normalizedConfig);
+    const from = submitterAddressOf(normalizedConfig);
     if (!from) {
       throw new ValidationError(
         `dry-run requires walletAddress or a private key env var in ${normalizedConfig.privateKeyEnv} so the from address can be shown`,
@@ -81,6 +84,7 @@ export async function submitStateMachineSignal(
     args: requestWithFrom.args,
   });
   let confirmed: boolean | undefined;
+  let orderId: Hex | undefined;
   if (normalizedConfig.waitForReceipt && client.waitForTransactionReceipt) {
     let receipt: { readonly status?: 'success' | 'reverted' | string };
     try {
@@ -93,6 +97,12 @@ export async function submitStateMachineSignal(
       throw new SubmitSignalReceiptError(txHash, `submitSignal transaction receipt status ${receipt.status}`, { reverted: true });
     }
     confirmed = receipt.status === 'success';
+    if (confirmed && requestWithFrom.args[0].orderId === ZERO_BYTES32) {
+      const fullReceipt = await receiptWithLogs(client, txHash);
+      if (fullReceipt?.logs !== undefined) {
+        orderId = triggeredOrderIdFromLogs(fullReceipt.logs);
+      }
+    }
   }
 
   return {
@@ -100,7 +110,19 @@ export async function submitStateMachineSignal(
     request: requestWithFrom,
     txHash,
     ...(confirmed !== undefined ? { confirmed } : {}),
+    ...(orderId !== undefined ? { orderId } : {}),
   };
+}
+
+async function receiptWithLogs(
+  client: StateMachinePublicClient,
+  txHash: Hex,
+): Promise<{ readonly logs?: readonly StateMachineRawLog[] } | undefined> {
+  if (!client.getTransactionReceipt) {
+    return undefined;
+  }
+  const receipt = await client.getTransactionReceipt({ hash: txHash });
+  return receipt ?? undefined;
 }
 
 export function getPublicClient(config: Pick<NormalizedSubmitConfig, 'chainId' | 'rpcUrl' | 'publicClient'>): StateMachinePublicClient {
@@ -113,7 +135,7 @@ export function getPublicClient(config: Pick<NormalizedSubmitConfig, 'chainId' |
   }) as unknown as StateMachinePublicClient;
 }
 
-function resolveConfiguredWalletAddress(config: Pick<NormalizedSubmitConfig, 'walletAddress' | 'privateKeyEnv'>): Address | undefined {
+export function submitterAddressOf(config: Pick<NormalizedSubmitConfig, 'walletAddress' | 'privateKeyEnv'>): Address | undefined {
   if (config.walletAddress) {
     return config.walletAddress;
   }

@@ -73,7 +73,6 @@ const ORDER: ChainOrderProjection = {
   status: 'registered',
   currentStage: STAGE_ID,
   relayer: WALLET,
-  creator: WALLET,
   signals: {},
   derivedSignals: {},
   stageMaterializations: {},

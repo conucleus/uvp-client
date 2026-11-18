@@ -36,6 +36,7 @@ import {
   getPublicClient,
   submitStateMachineSignal,
   SubmitSignalReceiptError,
+  submitterAddressOf,
   type SubmitStateMachineSignalResult,
 } from '../../core/signal/submit.js';
 import {
@@ -477,6 +478,10 @@ export class StateMachineWatcher {
       stateMachineAddress: event.stateMachineAddress ?? this.config.stateMachineAddress,
     };
     const capabilityTables = capabilityTablesOf(this.config.artifact);
+    const runDeadline = signalDeadlineForJob(currentJob, this.config.deadlineSeconds);
+    const pinDeadline = (signal: StateMachineSignal): StateMachineSignal => signal.deadline === undefined
+      ? { ...signal, deadline: runDeadline }
+      : signal;
     const submitSignalWithJobRetry = async (
       signal: StateMachineSignal,
       signalIndex: number,
@@ -547,8 +552,12 @@ export class StateMachineWatcher {
         contextSubmissionCount += 1;
         const attempt = contextSubmissionCount;
         const submitConfig = normalizeSubmitConfig({ ...eventSubmitConfig, ...overrides });
-        const provenSignal = withCapabilityProofs(signal, capabilityTables);
-        const identityRequest = buildSubmitStateMachineSignalCall(submitConfig, provenSignal);
+        const provenSignal = withCapabilityProofs(pinDeadline(signal), capabilityTables);
+        const identityRequest = buildSubmitStateMachineSignalCall(
+          submitConfig,
+          provenSignal,
+          submitterAddressOf(submitConfig),
+        );
         const priorRecords = jobSubmissions.filter((submission) => submission.request?.data === identityRequest.data);
         const deliveredPrior = options?.resubmitDelivered
           ? undefined
@@ -695,9 +704,10 @@ export class StateMachineWatcher {
       }
     }
     const resolvedSignals = normalizeHandlerResult(handlerResult).map((signal): StateMachineSignal => ({
-      ...signal,
+      ...pinDeadline(signal),
       ...(signal.planId === undefined && fallbackPlanId !== undefined ? { planId: fallbackPlanId } : {}),
     }));
+    const eventSubmitter = submitterAddressOf(eventSubmitConfig);
     const deliveredRequestDatas = options?.resubmitDelivered
       ? new Set<string>()
       : deliveredRequestDatasFromSubmissions(currentJob.submissions);
@@ -756,7 +766,7 @@ export class StateMachineWatcher {
       let identityRequest: SubmitStateMachineSignalCall;
       try {
         resolvedSignal = withCapabilityProofs(handlerSignal, capabilityTables);
-        identityRequest = buildSubmitStateMachineSignalCall(eventSubmitConfig, resolvedSignal);
+        identityRequest = buildSubmitStateMachineSignalCall(eventSubmitConfig, resolvedSignal, eventSubmitter);
       } catch (error) {
         const classified = error instanceof ClassifiedStateMachineError
           ? error.classified
@@ -1099,7 +1109,7 @@ export class StateMachineWatcher {
     }
     return {
       dryRun: false,
-      request: buildSubmitStateMachineSignalCall(config, signal, config.walletAddress),
+      request: buildSubmitStateMachineSignalCall(config, signal, submitterAddressOf(config)),
       txHash,
       confirmed: receiptStatus === 'success',
     };
@@ -1297,6 +1307,15 @@ interface NormalizedStateMachineDeploymentWatcherConfig {
   readonly stateMachineAddress: Address;
   readonly deploymentId?: Hex;
   readonly status?: 'active' | 'deprecated' | 'canary' | 'candidate' | 'retired';
+}
+
+/** Stable per-job deadline so retried/recovered callback calldata keeps the same identity. */
+function signalDeadlineForJob(job: StateMachineWatcherJob, deadlineSeconds: number): bigint {
+  const detectedMs = Date.parse(job.detectedAt);
+  const detectedSeconds = Number.isFinite(detectedMs)
+    ? Math.floor(detectedMs / 1_000)
+    : Math.floor(Date.now() / 1_000);
+  return BigInt(detectedSeconds) + BigInt(deadlineSeconds);
 }
 
 function normalizeStateMachineWatcherConfig(config: StateMachineWatcherConfig): NormalizedStateMachineWatcherConfig {

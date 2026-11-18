@@ -5,7 +5,13 @@ import { createBrowserClient } from '../../src/browser/client.js';
 import { createHeadlessClient } from '../../src/headless/client.js';
 import type { Eip1193Provider } from '../../src/browser/wallet/provider.js';
 import type { OperationInput } from '../../src/core/operations.js';
-import { STATE_MACHINE, bytes32, planRegistrationFixture, triggerFixture, birthAttributionFixture } from '../core/fixtures.js';
+import {
+  STATE_MACHINE,
+  SIGNAL_DEADLINE,
+  bytes32,
+  planRegistrationFixture,
+  triggerSignalFixture,
+} from '../core/fixtures.js';
 
 interface ProviderRequest {
   readonly method: string;
@@ -40,36 +46,18 @@ function planInput(signer: Address): OperationInput {
     stateMachineAddress: STATE_MACHINE,
     signer,
     registration: planRegistrationFixture(),
-    deadline: 1_700_000_000n,
+    deadline: SIGNAL_DEADLINE,
   };
 }
 
-
-function birthIntentInput(signer: Address): OperationInput {
+function triggerInput(signer: Address): OperationInput {
   return {
-    operation: 'order.birth',
-    role: 'buyer-intent',
+    operation: 'order.trigger',
     chainId: 31337,
     stateMachineAddress: STATE_MACHINE,
     signer,
-    planId: bytes32('01'),
-    orderId: bytes32('02'),
-    termsHash: bytes32('03'),
-    nonce: 1,
-    deadline: 1_700_000_000n,
-  };
-}
-
-function birthAuthorizationInput(signer: Address): OperationInput {
-  const trigger = triggerFixture(signer);
-  return {
-    operation: 'order.birth',
-    role: 'birth-authorizer',
-    chainId: 31337,
-    stateMachineAddress: STATE_MACHINE,
-    signer,
-    trigger,
-    birthFactAttribution: birthAttributionFixture(trigger),
+    signal: triggerSignalFixture(bytes32('17')),
+    deadline: SIGNAL_DEADLINE,
   };
 }
 
@@ -88,7 +76,7 @@ describe('browser and headless operation clients', () => {
       rpcUrl: 'http://127.0.0.1:8545',
     });
 
-    for (const input of [planInput(account.address), birthIntentInput(account.address)]) {
+    for (const input of [planInput(account.address), triggerInput(account.address)]) {
       const browserSigned = await browser.sign(input);
       const headlessSigned = await headless.sign(input);
       expect(browserSigned.typedData).toEqual(headlessSigned.typedData);
@@ -97,7 +85,7 @@ describe('browser and headless operation clients', () => {
     }
   });
 
-  it('sign the same relay-mode buyer intent identically', async () => {
+  it('sign the same relay-mode trigger identically', async () => {
     const privateKey = generatePrivateKey();
     const account = privateKeyToAccount(privateKey);
     const neverCalled = async (): Promise<Response> => {
@@ -117,12 +105,12 @@ describe('browser and headless operation clients', () => {
       fetcher: neverCalled,
     });
 
-    const input = birthIntentInput(account.address);
+    const input = triggerInput(account.address);
     const browserSigned = await browser.sign(input);
     const headlessSigned = await headless.sign(input);
     expect(browserSigned.typedData).toEqual(headlessSigned.typedData);
     expect(browserSigned.signature).toBe(headlessSigned.signature);
-    expect(browserSigned.calls).toEqual([]);
+    expect(browserSigned.calls).toEqual(headlessSigned.calls);
   });
 
   it('delivers a direct browser operation through the injected provider', async () => {
@@ -141,39 +129,5 @@ describe('browser and headless operation clients', () => {
     ]);
     const send = requests[1]?.params as readonly [{ readonly from: string }];
     expect(send[0].from).toBe(account.address);
-  });
-
-  it('refuses to relay a birth authorization from the browser', async () => {
-    const account = privateKeyToAccount(generatePrivateKey());
-    const { provider } = mockProvider(account);
-    let relayCalls = 0;
-    const browser = createBrowserClient({
-      provider,
-      signer: account.address,
-      mode: 'relay',
-      relayUrl: 'https://relay.example',
-      fetcher: async () => {
-        relayCalls += 1;
-        return Response.json({ status: 'accepted' });
-      },
-    });
-
-    await expect(browser.execute(birthAuthorizationInput(account.address))).rejects.toMatchObject({
-      operation: 'order.birth',
-      code: 'unsupported_delivery',
-    });
-    expect(relayCalls).toBe(0);
-  });
-
-  it('refuses to deliver a buyer birth intent directly from the browser', async () => {
-    const account = privateKeyToAccount(generatePrivateKey());
-    const { provider, requests } = mockProvider(account);
-    const browser = createBrowserClient({ provider, signer: account.address, mode: 'direct' });
-
-    await expect(browser.execute(birthIntentInput(account.address))).rejects.toMatchObject({
-      operation: 'order.birth',
-      code: 'unsupported_delivery',
-    });
-    expect(requests).toEqual([]);
   });
 });

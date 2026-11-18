@@ -40,9 +40,8 @@ export interface DirectTransportConfig {
   readonly submitter: DirectCallSubmitter;
   /**
    * Account that pays for the tx. It differs from `SignedOperation.signer` when
-   * a relayer forwards a business-signed envelope (`submitSignalFor`): the
-   * signature inside the call still belongs to the assigned supplier account,
-   * never the relayer.
+   * a relayer forwards a participant-signed envelope: the signature inside the
+   * call still belongs to the assigned supplier account, never the relayer.
    */
   readonly relayer?: Address;
 }

@@ -48,37 +48,6 @@ describe('executor CLI', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
-
-  it('rejects chain-signal --payload-ref instead of silently dropping it', async () => {
-    await expect(main([
-      'node',
-      'uvp-executor',
-      'chain-signal',
-      '--rpc-url',
-      'http://127.0.0.1:8545',
-      '--state-machine',
-      RETRY_STATE_MACHINE,
-      '--chain-id',
-      '31337',
-      '--order-id',
-      RETRY_ORDER_ID,
-      '--plan-id',
-      RETRY_PLAN_ID,
-      '--source',
-      'slot-a',
-      '--stage',
-      'exec.main',
-      '--signal-name',
-      'cmp',
-      '--payload-hash',
-      `0x${'44'.repeat(32)}`,
-      '--payload-ref',
-      'ipfs://payload',
-      '--wallet-address',
-      RETRY_WALLET,
-      '--dry-run',
-    ])).rejects.toThrow(/--payload-ref is not supported by chain-signal/);
-  });
 });
 
 describe('honest execution exit codes', () => {
@@ -257,14 +226,17 @@ describe('watcher state storage', () => {
           status?: string;
           planId?: string;
           lastError?: { kind?: string };
-          submissions?: Array<{ request?: { args?: string[] } }>;
+          submissions?: Array<{ request?: { args?: Array<{ planId?: string } | string> } }>;
         }>;
       };
       expect(storedJobs.jobs).toHaveLength(1);
       expect(storedJobs.jobs?.[0]?.status).toBe('matched');
       expect(storedJobs.jobs?.[0]?.lastError).toBeUndefined();
       expect(storedJobs.jobs?.[0]?.planId).toBe(RETRY_PLAN_ID);
-      expect(storedJobs.jobs?.[0]?.submissions?.[0]?.request?.args?.[0]).toBe(RETRY_PLAN_ID);
+      const storedSubmission = storedJobs.jobs?.[0]?.submissions?.[0]?.request?.args?.[0];
+      expect(typeof storedSubmission === 'object' && storedSubmission !== null
+        ? storedSubmission.planId
+        : undefined).toBe(RETRY_PLAN_ID);
 
       logs.length = 0;
       stub.setHeadBlock('0xf');

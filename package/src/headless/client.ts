@@ -44,7 +44,6 @@ export function createHeadlessClient(options: HeadlessClientOptions): HeadlessCl
         address: account.address,
         signTypedData: (typedData) => account.signTypedData(typedData),
       },
-      mode,
       transport: createDirectTransport({
         relayer: account.address,
         submitter: {
@@ -67,7 +66,6 @@ export function createHeadlessClient(options: HeadlessClientOptions): HeadlessCl
       address: account.address,
       signTypedData: (typedData) => account.signTypedData(typedData),
     },
-    mode,
     transport: createRelayTransport({
       relayUrl,
       ...(options.relayPath !== undefined ? { relayPath: options.relayPath } : {}),

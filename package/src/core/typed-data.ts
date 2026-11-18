@@ -23,7 +23,6 @@ export {
   buildUVPStageInviteAcceptTypedData,
   buildUVPStageInviteCreateTypedData,
   factAttributionHash,
-  filePatchDigest,
   recoverSignalSubmissionSigner,
   recoverStageDockSupplierSelectionSigner,
   validateTypedDataForSigning,

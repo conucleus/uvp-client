@@ -14,14 +14,17 @@ export interface ChainSignalOptions {
   chainId: string;
   privateKeyEnv: string;
   walletAddress?: string;
-  orderId: string;
   planId: string;
-  source: string;
-  stage: string;
-  signalName: string;
+  orderId?: string;
+  source?: string;
+  stage?: string;
+  signalName?: string;
+  signalId?: string;
   payloadHash?: string;
-  payloadRef?: string;
   idempotencyKey?: string;
+  attribution?: string;
+  filePatch?: string;
+  deadlineSeconds?: string;
   dryRun?: boolean;
   waitForReceipt?: boolean;
 }
@@ -55,28 +58,24 @@ export interface PlanRegisterOptions extends OperationCliOptions {
   stateMachine: string;
   privateKeyEnv: string;
   deadlineSeconds?: string;
-  birthAuthorizer?: string;
   finalize?: boolean;
 }
 
-export interface OrderBirthIntentOptions extends OperationCliOptions {
+export interface OrderTriggerOptions extends OperationCliOptions {
   rpcUrl: string;
   chainId: string;
   stateMachine: string;
   privateKeyEnv: string;
   planId: string;
-  orderId: string;
-  termsHash: string;
-  nonce: string;
-  deadline: string;
-}
-
-export interface OrderBirthAuthorizeOptions extends OperationCliOptions {
-  rpcUrl: string;
-  chainId: string;
-  stateMachine: string;
-  privateKeyEnv: string;
-  birth: string;
+  source?: string;
+  stage?: string;
+  signalName?: string;
+  signalId?: string;
+  payloadHash?: string;
+  idempotencyKey: string;
+  attribution?: string;
+  filePatch?: string;
+  deadlineSeconds?: string;
 }
 
 export interface OrderFinalizeOptions extends OperationCliOptions {

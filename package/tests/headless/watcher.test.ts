@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { encodeAbiParameters, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it, vi } from 'vitest';
 import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler';
 import { HOOK_READY_TOPIC } from '@uvp-eth/protocol-bindings';
@@ -52,7 +53,7 @@ const ZERO_BYTES32_WORD = `0x${'00'.repeat(32)}` as Hex;
 const KEY_ENV = 'UVP_RECEIPT_TEST_PRIVATE_KEY';
 const TEST_PRIVATE_KEY = `0x${'ab'.repeat(32)}`;
 const STATE_MACHINE_FIXTURE = JSON.parse(
-  readFileSync(new URL('../../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.21.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../../uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.22.json', import.meta.url), 'utf8'),
 ) as {
   readonly hashes: {
     readonly artifactHash: Hex;
@@ -110,23 +111,19 @@ describe('state machine chain watcher', () => {
     expect(result.job?.matchedKey).toBe('exec.main#START');
     expect(matchedKeys).toEqual(['exec.main#START']);
     expect(submission.request.functionName).toBe('submitSignal');
-    expect(submission.request.args).toEqual([
-      PLAN_ID,
-      ORDER_ID,
-      SLOT_A_SOURCE_ID,
-      EXEC_MAIN_CMP_ID,
-      PAYLOAD_HASH,
-      expect.any(String),
-      { sourceId: ZERO_BYTES32_WORD, signalId: ZERO_BYTES32_WORD, stageId: ZERO_BYTES32_WORD, capabilityProof: [] },
-      ZERO_BYTES32_WORD,
-      {
-        targetStageId: ZERO_BYTES32_WORD,
-        baseHash: ZERO_BYTES32_WORD,
-        writerStageId: ZERO_BYTES32_WORD,
-        writerProof: [],
-        ops: [],
-      },
-    ]);
+    expect(submission.request.args[0]).toMatchObject({
+      planId: PLAN_ID,
+      orderId: ORDER_ID,
+      sourceId: SLOT_A_SOURCE_ID,
+      signalId: EXEC_MAIN_CMP_ID,
+      payloadHash: PAYLOAD_HASH,
+      attribution: { sourceId: ZERO_BYTES32_WORD, signalId: ZERO_BYTES32_WORD, stageId: ZERO_BYTES32_WORD, capabilityProof: [] },
+      patchHash: ZERO_BYTES32_WORD,
+      submitter: WALLET_ADDRESS,
+    });
+    expect(submission.request.args[0].idempotencyKey).toEqual(expect.any(String));
+    expect(submission.request.args[0].deadline).toEqual(expect.any(BigInt));
+    expect(submission.request.args[1]).toBe('0x');
   });
 
   it('derives capability proofs on the fly from artifact-embedded tables', async () => {
@@ -154,12 +151,12 @@ describe('state machine chain watcher', () => {
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
-    expect(submission.request.args[6]).toMatchObject({
+    expect(submission.request.args[0].attribution).toMatchObject({
       sourceId: SLOT_A_SOURCE_ID,
       signalId: EXEC_MAIN_CMP_ID,
       stageId: STAGE_ID,
     });
-    expect((submission.request.args[6] as { readonly capabilityProof: readonly Hex[] }).capabilityProof.length)
+    expect((submission.request.args[0].attribution as { readonly capabilityProof: readonly Hex[] }).capabilityProof.length)
       .toBeGreaterThan(0);
   });
 
@@ -188,7 +185,7 @@ describe('state machine chain watcher', () => {
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
-    expect(submission.request.args[6]).toEqual({
+    expect(submission.request.args[0].attribution).toEqual({
       sourceId: ZERO_BYTES32_WORD,
       signalId: ZERO_BYTES32_WORD,
       stageId: ZERO_BYTES32_WORD,
@@ -222,7 +219,7 @@ describe('state machine chain watcher', () => {
     expect(result.submissions).toHaveLength(0);
     const recorded = result.job?.submissions?.[0]?.request;
     expect(recorded?.functionName).toBe('submitSignal');
-    expect(recorded?.args[6]).toMatchObject({
+    expect(recorded?.args[0].attribution).toMatchObject({
       sourceId: SLOT_A_SOURCE_ID,
       signalId: EXEC_MAIN_CMP_ID,
       stageId: STAGE_ID,
@@ -1936,7 +1933,7 @@ describe('state machine chain watcher', () => {
       expect(retried.status).toBe('handled');
       expect(retried.job?.status).toBe('confirmed');
       expect(retried.submissions).toHaveLength(1);
-      const slotBIdentity = seedRequest('slot-b', PAYLOAD_HASH).data;
+      const slotBIdentity = seedRequest('slot-b', PAYLOAD_HASH, first.job!.detectedAt).data;
       expect(retried.submissions[0]?.request.data).toBe(slotBIdentity);
       const slotBDelivered = (retried.job?.submissions ?? []).filter(
         (submission) => submission.request?.data === slotBIdentity && submission.confirmed === true);
@@ -2193,12 +2190,12 @@ describe('state machine chain watcher', () => {
 
     const first = await watcher.handleLog(hookReadyLog());
     const keys = first.submissions.map((submission) =>
-      submission.dryRun ? submission.request.args[5] : undefined);
+      submission.dryRun ? submission.request.args[0].idempotencyKey : undefined);
     expect(keys[0]).not.toBe(keys[1]);
 
     const reEmitLog = { ...hookReadyLog(), transactionHash: `0x${'34'.repeat(32)}` as Hex, logIndex: 9 };
     const reEmit = await watcher.handleLog(reEmitLog);
-    const reEmitKey = reEmit.submissions[0]?.dryRun ? reEmit.submissions[0].request.args[5] : undefined;
+    const reEmitKey = reEmit.submissions[0]?.dryRun ? reEmit.submissions[0].request.args[0].idempotencyKey : undefined;
     expect(reEmitKey).toBe(keys[0]);
 
     const replay = await watcher.handleLog(hookReadyLog());
@@ -2442,7 +2439,7 @@ describe('state machine chain watcher', () => {
 
     const result = await watcher.handleLog(hookReadyLog());
     const planIds = result.submissions.map((submission) =>
-      submission.dryRun ? submission.request.args[0] : undefined);
+      submission.dryRun ? submission.request.args[0].planId : undefined);
     expect(planIds).toEqual([pinnedPlanId, PLAN_ID]);
     expect(result.job?.planId).toBe(PLAN_ID);
   });
@@ -3117,7 +3114,7 @@ describe('state machine chain watcher', () => {
             attempt: 1,
             dryRun: false,
             txHash: TX_HASH,
-            request: seedRequest('slot-a', PAYLOAD_HASH),
+            request: seedRequest('slot-a', PAYLOAD_HASH, seeded.detectedAt),
             error: { kind: 'rpc_network', message: 'Request timed out.', retryable: true },
           },
         ],
@@ -3561,13 +3558,13 @@ describe('state machine callback tx helper', () => {
     expect(result.request.chainId).toBe(31_337);
     expect(result.request.functionName).toBe('submitSignal');
     expect(result.request.data.slice(0, 10)).toBe(STATE_MACHINE_FIXTURE.functions.submitSignal.selector);
-    expect(result.request.args.slice(0, 5)).toEqual([
-      PLAN_ID,
-      ORDER_ID,
-      onchainSourceId('slot-b'),
-      onchainSignalId('ship.pickup.done'),
-      PAYLOAD_HASH,
-    ]);
+    expect(result.request.args[0]).toMatchObject({
+      planId: PLAN_ID,
+      orderId: ORDER_ID,
+      sourceId: onchainSourceId('slot-b'),
+      signalId: onchainSignalId('ship.pickup.done'),
+      payloadHash: PAYLOAD_HASH,
+    });
     expect(result.request.data).toMatch(/^0x[0-9a-f]+$/);
   });
 
@@ -3682,7 +3679,7 @@ describe('state machine callback tx helper', () => {
 
     expect(result.status).toBe('handled');
     expect(result.job?.status).toBe('matched');
-    expect(submission.request.args[0]).toBe(PLAN_ID);
+    expect(submission.request.args[0].planId).toBe(PLAN_ID);
     expect((await store.get(result.job!.id))?.planId).toBe(PLAN_ID);
   });
 
@@ -3707,7 +3704,7 @@ describe('state machine callback tx helper', () => {
     if (!submission || !submission.dryRun) {
       throw new Error('expected a dry-run submission');
     }
-    expect(submission.request.args[0]).toBe(configPlanId);
+    expect(submission.request.args[0].planId).toBe(configPlanId);
     expect(result.job?.planId).toBe(PLAN_ID);
   });
 });
@@ -4529,13 +4526,18 @@ function capabilityArtifact() {
       { selectorStageId: `0x${'66'.repeat(32)}`, targetStageId: STAGE_ID },
     ],
     signalCapabilities: [
-      { stageId: STAGE_ID, targetSourceId: otherSourceId, signalId: otherSignalId, relation: 1 as const },
+      { stageId: STAGE_ID, targetSourceId: otherSourceId, signalId: otherSignalId, relation: 0 as const },
       { stageId: STAGE_ID, targetSourceId: SLOT_A_SOURCE_ID, signalId: EXEC_MAIN_CMP_ID, relation: 0 as const },
     ],
   };
 }
 
-function seedRequest(source: 'slot-a' | 'slot-b', payloadHash?: Hex) {
+function seedRequest(
+  source: 'slot-a' | 'slot-b',
+  payloadHash?: Hex,
+  detectedAt = '2026-04-28T00:00:00.000Z',
+) {
+  const deadline = BigInt(Math.floor(Date.parse(detectedAt) / 1_000)) + 3_600n;
   return buildSubmitStateMachineSignalCall(
     { rpcUrl: 'http://127.0.0.1:8545', stateMachineAddress: STATE_MACHINE, chainId: 31_337 },
     {
@@ -4543,8 +4545,10 @@ function seedRequest(source: 'slot-a' | 'slot-b', payloadHash?: Hex) {
       orderId: ORDER_ID,
       source,
       signalName: 'exec.main.cmp',
+      deadline,
       ...(payloadHash !== undefined ? { payloadHash } : {}),
     },
+    privateKeyToAccount(TEST_PRIVATE_KEY).address,
   );
 }
 

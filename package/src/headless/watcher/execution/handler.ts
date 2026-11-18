@@ -272,8 +272,8 @@ function normalizeSignalCapabilityEntry(
   if (!isRecord(capability)) {
     throw new ValidationError(`${path} must be an object`);
   }
-  if (capability.relation !== 0 && capability.relation !== 1) {
-    throw new ValidationError(`${path}.relation must be 0 or 1`);
+  if (capability.relation !== 0) {
+    throw new ValidationError(`${path}.relation must be 0`);
   }
   return {
     stageId: normalizeBytes32(capability.stageId, `${path}.stageId`),

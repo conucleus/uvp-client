@@ -6,6 +6,7 @@
  */
 import type { Hex } from 'viem';
 import {
+  buildEmptySignatureOperation,
   prepareOperation,
   signOperation,
   type OperationClient,
@@ -81,7 +82,11 @@ export async function executeCliOperation(
 ): Promise<SignedOperation | OperationResult> {
   const context = cliOperationContext(options, defaultPrivateKeyEnv);
   if (options.dryRun) {
-    return signWith(context, input);
+    const prepared = prepareOperation(input);
+    if (context.mode === 'direct' && prepared.signatureDelivery === 'direct-empty') {
+      return buildEmptySignatureOperation(prepared);
+    }
+    return signOperation(prepared, context.signer);
   }
   return operationClient(context, options).execute(input);
 }

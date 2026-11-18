@@ -14,7 +14,13 @@ import {
   type DirectCall,
   type OperationFetcher,
 } from '../../src/core/transport.js';
-import { STATE_MACHINE, bytes32, planRegistrationFixture, stateMachineSignalFixture } from './fixtures.js';
+import {
+  STATE_MACHINE,
+  SIGNAL_DEADLINE,
+  bytes32,
+  planRegistrationFixture,
+  stateMachineSignalFixture,
+} from './fixtures.js';
 
 function planOperation(signer: Address) {
   return {
@@ -23,7 +29,7 @@ function planOperation(signer: Address) {
     stateMachineAddress: STATE_MACHINE,
     signer,
     registration: planRegistrationFixture(),
-    deadline: 1_700_000_000n,
+    deadline: SIGNAL_DEADLINE,
   };
 }
 
@@ -64,23 +70,21 @@ describe('direct transport', () => {
   it('refuses to deliver an operation that has no chain call', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const signed = await signOperation(prepareOperation({
-      operation: 'order.birth',
-      role: 'buyer-intent',
-      chainId: 31337,
-      stateMachineAddress: STATE_MACHINE,
+      operation: 'registry.write',
       signer: account.address,
-      planId: bytes32('01'),
-      orderId: bytes32('02'),
-      termsHash: bytes32('03'),
-      nonce: 1,
-      deadline: 1_700_000_000n,
+      typedData: {
+        domain: { name: 'UVPZhixuRegistry', version: '1', chainId: 31337 },
+        types: { ZhixuRecord: [{ name: 'planId', type: 'bytes32' }] },
+        primaryType: 'ZhixuRecord',
+        message: { planId: bytes32('01') },
+      },
     }), account);
     const transport = createDirectTransport({
       submitter: { sendCall: async () => txHash('a1') },
     });
 
     await expect(transport.submit(signed)).rejects.toMatchObject({
-      operation: 'order.birth',
+      operation: 'registry.write',
       code: 'unsupported_delivery',
       retryable: false,
     });
@@ -111,16 +115,16 @@ describe('direct transport', () => {
     expect(String((error as Error).message)).toContain(`already broadcast: ${txHash('b1')}`);
   });
 
-  it('sends a business-signed submitSignalFor envelope from the relayer, not the signer', async () => {
+  it('sends a participant-signed submitSignal envelope from the relayer, not the signer', async () => {
     const supplierAccount = privateKeyToAccount(generatePrivateKey());
     const relayer = privateKeyToAccount(generatePrivateKey());
     const signed = await signOperation(prepareOperation({
-      operation: 'signal.submitFor',
+      operation: 'signal.submit',
       chainId: 31337,
       stateMachineAddress: STATE_MACHINE,
       signer: supplierAccount.address,
       signal: stateMachineSignalFixture(),
-      deadline: 1_700_000_000n,
+      deadline: SIGNAL_DEADLINE,
     }), supplierAccount);
     const sent: DirectCall[] = [];
     const transport = createDirectTransport({
@@ -138,8 +142,10 @@ describe('direct transport', () => {
     expect(result.signer).toBe(supplierAccount.address);
     expect(sent.map((call) => call.from)).toEqual([relayer.address]);
     const decoded = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: sent[0]!.data });
-    expect(decoded.functionName).toBe('submitSignalFor');
-    expect((decoded.args as readonly unknown[])[9]).toBe(supplierAccount.address);
+    expect(decoded.functionName).toBe('submitSignal');
+    const submission = decoded.args[0] as unknown as { readonly submitter: string };
+    expect(submission.submitter).toBe(supplierAccount.address);
+    expect(decoded.args[1]).toBe(signed.signature);
   });
 });
 

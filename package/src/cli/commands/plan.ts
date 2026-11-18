@@ -62,7 +62,6 @@ export function registerPlanCommands(program: Command): void {
     .requiredOption('--state-machine <address>', 'UVPStateMachine contract address')
     .option('--private-key-env <name>', 'env var containing the publisher private key', PLAN_PRIVATE_KEY_ENV)
     .option('--deadline-seconds <n>', 'seconds from the current block timestamp for the commit deadline', '3600')
-    .option('--birth-authorizer <address>', 'birth authorizer (defaults to the publisher)')
     .option('--mode <mode>', 'delivery mode: direct or relay', 'direct')
     .option('--relay-url <url>', 'relay service base URL (required with --mode relay)')
     .option('--relay-path <path>', 'relay endpoint path', '/relay')
@@ -83,7 +82,6 @@ export function registerPlanCommands(program: Command): void {
         signer: context.signer.address,
         registration: planRegistrationArgs(compiled.registerArgs, compiled.planId),
         deadline,
-        ...(options.birthAuthorizer !== undefined ? { birthAuthorizer: options.birthAuthorizer } : {}),
         finalize: options.finalize !== false,
       };
 

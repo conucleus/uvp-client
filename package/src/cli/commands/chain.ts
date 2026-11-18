@@ -1,9 +1,15 @@
 import type { Command } from 'commander';
-import { parseNonNegativeInteger, parsePositiveInteger, ValidationError } from '../../core/validation.js';
+import type {
+  FilePatch,
+  SignalAttributionPayload,
+} from '@uvp-eth/protocol-bindings';
+import { readFile } from 'node:fs/promises';
+import { parsePositiveInteger, ValidationError } from '../../core/validation.js';
 import {
   DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV,
   submitStateMachineSignal,
   type StateMachinePollResult,
+  type StateMachineSignal,
 } from '../../headless/watcher/index.js';
 import { chainPollExecutionFailed, stringifyForTransport } from '../output.js';
 import {
@@ -94,28 +100,27 @@ export function registerChainCommands(program: Command): void {
 
   program
     .command('chain-signal')
-    .description('build and optionally submit one UVPStateMachine submitSignal tx')
+    .description('build and optionally submit one direct UVPStateMachine submitSignal tx (empty signature)')
     .requiredOption('--rpc-url <url>', 'EVM RPC URL')
     .requiredOption('--state-machine <address>', 'UVPStateMachine contract address')
     .requiredOption('--chain-id <id>', 'expected chain id')
-    .option('--wallet-address <address>', 'executor wallet address shown as submitSignal sender in dry-run')
-    .requiredOption('--order-id <bytes32>', 'order id')
-    .requiredOption('--plan-id <bytes32>', 'plan id the order belongs to (plan-scoped submitSignal ABI; zero placeholder is rejected)')
-    .requiredOption('--source <source>', 'signal source')
-    .requiredOption('--stage <stageIdentifier>', 'stage identifier')
-    .requiredOption('--signal-name <signalName>', 'signal name')
+    .option('--wallet-address <address>', 'submitting wallet address shown as submitSignal sender in dry-run')
+    .requiredOption('--plan-id <bytes32>', 'plan id')
+    .option('--order-id <bytes32>', 'order id; omitted or zero = trigger creation (the state machine generates the order id)')
+    .option('--source <source>', 'signal source (required for a non-trigger order signal)')
+    .option('--stage <stageIdentifier>', 'stage identifier (with --signal-name)')
+    .option('--signal-name <signalName>', 'signal name; signalId is derived from stageIdentifier.signalName')
+    .option('--signal-id <bytes32>', 'explicit signal id; zero marks a pure file patch')
     .option('--payload-hash <bytes32>', 'off-chain payload hash')
-    .option('--payload-ref <uri>', 'unsupported: rejected because submitSignal cannot carry an off-chain payload reference')
-    .option('--idempotency-key <key>', 'idempotency key')
+    .option('--idempotency-key <key>', 'idempotency key; required for trigger creation')
+    .option('--attribution <json>', 'fact attribution JSON (sourceId, signalId, stageId, capabilityProof)')
+    .option('--file-patch <json>', 'stage file patch JSON (targetStageId, baseHash, writerStageId, writerProof, ops)')
+    .option('--deadline-seconds <n>', 'seconds from now for the submission deadline', '3600')
     .option('--private-key-env <name>', 'environment variable containing the callback tx private key', DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV)
     .option('--dry-run', 'build the submitSignal tx request without broadcasting')
     .option('--wait-for-receipt', 'wait for tx receipt after broadcasting')
     .action(async (options: ChainSignalOptions) => {
-      if (options.payloadRef) {
-        throw new ValidationError(
-          '--payload-ref is not supported by chain-signal: submitSignal(planId, orderId, sourceId, signalId, payloadHash, idempotencyKey, attribution) has no reference field, so the flag would be silently dropped. Keep only the 32-byte --payload-hash on chain and record the off-chain payload reference in your own job/evidence store next to it.',
-        );
-      }
+      const signal = await signalFromOptions(options);
       const result = await submitStateMachineSignal({
         rpcUrl: options.rpcUrl,
         stateMachineAddress: options.stateMachine,
@@ -123,18 +128,50 @@ export function registerChainCommands(program: Command): void {
         ...(options.walletAddress ? { walletAddress: options.walletAddress } : {}),
         privateKeyEnv: options.privateKeyEnv,
         dryRun: options.dryRun ?? false,
+        ...(options.deadlineSeconds !== undefined ? { deadlineSeconds: options.deadlineSeconds } : {}),
         ...(options.waitForReceipt !== undefined ? { waitForReceipt: options.waitForReceipt } : {}),
-      }, {
-        planId: options.planId,
-        orderId: options.orderId,
-        source: options.source,
-        stageIdentifier: options.stage,
-        signalName: options.signalName,
-        ...(options.payloadHash ? { payloadHash: options.payloadHash } : {}),
-        ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
-      });
+      }, signal);
       console.log(stringifyForTransport({ stateMachineSignal: result }));
     });
+}
+
+async function signalFromOptions(options: ChainSignalOptions): Promise<StateMachineSignal> {
+  if ((options.signalName === undefined) === (options.signalId === undefined)) {
+    throw new ValidationError('pass exactly one of --signal-name or --signal-id');
+  }
+  if (options.signalName !== undefined && (options.stage === undefined || options.stage.trim().length === 0)) {
+    throw new ValidationError('--stage is required with --signal-name');
+  }
+  return {
+    planId: options.planId,
+    ...(options.orderId !== undefined && options.orderId.trim().length > 0 ? { orderId: options.orderId } : {}),
+    ...(options.source !== undefined ? { source: options.source } : {}),
+    ...(options.stage !== undefined ? { stageIdentifier: options.stage } : {}),
+    ...(options.signalName !== undefined ? { signalName: options.signalName } : {}),
+    ...(options.signalId !== undefined ? { signalId: options.signalId } : {}),
+    ...(options.payloadHash !== undefined ? { payloadHash: options.payloadHash } : {}),
+    ...(options.idempotencyKey !== undefined ? { idempotencyKey: options.idempotencyKey } : {}),
+    ...(options.attribution !== undefined
+      ? { attribution: await readJson<SignalAttributionPayload>(options.attribution, 'attribution') }
+      : {}),
+    ...(options.filePatch !== undefined
+      ? { filePatch: await readJson<FilePatch>(options.filePatch, 'file-patch') }
+      : {}),
+  };
+}
+
+async function readJson<T>(path: string, description: string): Promise<T> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    throw new ValidationError(`cannot read ${description} file ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    throw new ValidationError(`${description} file ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function watchCallbacks(): Parameters<typeof buildStateMachineWatcher>[1] {

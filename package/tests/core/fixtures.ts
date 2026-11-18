@@ -1,15 +1,13 @@
 import type { Address, Hex } from 'viem';
-import {
-  supplierIdFromUuid,
-  type SignalAttributionPayload,
-  type TriggerOrderFromOutsidePayload,
-} from '@uvp-eth/protocol-bindings';
+import { supplierIdFromUuid } from '@uvp-eth/protocol-bindings';
 import type { PlanRegistrationArgs } from '../../src/core/registration.js';
 import type { StateMachineSignal } from '../../src/core/signal/build.js';
 
 export const STATE_MACHINE = '0x0000000000000000000000000000000000000001' as Address;
 export const STAGE_PATCH_MODULE = '0x0000000000000000000000000000000000000003' as Address;
 export const CHAIN_ID = 31337;
+/** Far enough ahead to stay valid against wall-clock deadlines (year 2096). */
+export const SIGNAL_DEADLINE = 4_000_000_000n;
 
 export function bytes32(suffix: string): Hex {
   return `0x${suffix.padStart(64, '0')}` as Hex;
@@ -38,30 +36,6 @@ export function planRegistrationFixture(): PlanRegistrationArgs {
   };
 }
 
-export function triggerFixture(submitter: Address): TriggerOrderFromOutsidePayload {
-  return {
-    planId: bytes32('01'),
-    creator: '0x0000000000000000000000000000000000000020',
-    triggerHookId: bytes32('11'),
-    triggerStageId: bytes32('12'),
-    sourceId: bytes32('13'),
-    signalId: bytes32('14'),
-    payloadHash: bytes32('15'),
-    idempotencyKey: bytes32('16'),
-    submitter,
-    deadline: 1_700_000_000n,
-  };
-}
-
-export function birthAttributionFixture(trigger: TriggerOrderFromOutsidePayload): SignalAttributionPayload {
-  return {
-    sourceId: trigger.sourceId,
-    signalId: trigger.signalId,
-    stageId: bytes32('00'),
-    capabilityProof: [],
-  };
-}
-
 export function stateMachineSignalFixture(): StateMachineSignal {
   return {
     planId: bytes32('01'),
@@ -70,5 +44,15 @@ export function stateMachineSignalFixture(): StateMachineSignal {
     signalId: bytes32('0e'),
     payloadHash: bytes32('15'),
     idempotencyKey: bytes32('16'),
+  };
+}
+
+export function triggerSignalFixture(idempotencyKey: Hex | string = bytes32('17')): StateMachineSignal {
+  return {
+    planId: bytes32('01'),
+    sourceId: bytes32('13'),
+    signalId: bytes32('14'),
+    payloadHash: bytes32('15'),
+    idempotencyKey,
   };
 }

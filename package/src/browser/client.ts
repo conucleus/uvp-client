@@ -1,15 +1,13 @@
 /**
  * Browser operation client: the same operation set as headless/CLI, signed by
  * the injected EIP-1193 wallet and delivered by either the wallet itself
- * (direct) or a relay (relay). No compiler, no private key, no flow per
- * operation: construction and signing come from core operations.
+ * (direct) or a relay (relay). Direct signal submissions carry an empty
+ * signature (the wallet is the submitter), so they need no typed-data prompt.
  */
 import type { Address, Hex } from 'viem';
 import {
-  OperationError,
   createOperationClient,
   type OperationClient,
-  type OperationResult,
 } from '../core/operations.js';
 import {
   createDirectTransport,
@@ -38,37 +36,13 @@ export interface BrowserClientOptions {
 export function createBrowserClient(options: BrowserClientOptions): BrowserClient {
   const signer = normalizeAddressChecksummed(options.signer, 'signer');
   const mode = options.mode ?? 'direct';
-  const transport = browserTransport(options, signer, mode);
-  const client = createOperationClient({
+  return createOperationClient({
     signer: {
       address: signer,
       signTypedData: (typedData) => signTypedDataWithProvider(options.provider, typedData, signer),
     },
-    mode,
-    transport,
+    transport: browserTransport(options, signer, mode),
   });
-  return {
-    ...client,
-    async execute(input) {
-      if (input.operation === 'order.birth' && mode === 'relay' && input.role === 'birth-authorizer') {
-        throw new OperationError({
-          operation: 'order.birth',
-          code: 'unsupported_delivery',
-          message: 'browser relay mode signs the buyer intent only; the birth authorization is signed'
-            + ' by the plan birthAuthorizer, not by the buyer wallet',
-        });
-      }
-      if (input.operation === 'order.birth' && mode === 'direct' && input.role === 'buyer-intent') {
-        throw new OperationError({
-          operation: 'order.birth',
-          code: 'unsupported_delivery',
-          message: 'the buyer intent is relay-delivered: direct birth is signed and submitted by the'
-            + ' plan birthAuthorizer, not by the buyer wallet',
-        });
-      }
-      return client.execute(input);
-    },
-  };
 }
 
 function browserTransport(
