@@ -347,7 +347,7 @@ than parse messages.
 
 `createStateMachineWatcher` uses the fixed `UVPStateMachine` artifact ABI
 recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.22.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.23.json`:
 `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId,
 bytes32 hookName)`, `SignalSubmitted(bytes32 planId, bytes32 orderId, ...)`,
 and `submitSignal((planId, orderId, sourceId, signalId, payloadHash,
