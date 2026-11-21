@@ -78,21 +78,6 @@ export interface OrderTriggerOptions extends OperationCliOptions {
   deadlineSeconds?: string;
 }
 
-export interface OrderFinalizeOptions extends OperationCliOptions {
-  typedData: string;
-  privateKeyEnv: string;
-}
-
-export interface InviteAcceptOptions extends OperationCliOptions {
-  typedData: string;
-  privateKeyEnv: string;
-}
-
-export interface InviteCreateOptions extends OperationCliOptions {
-  payload: string;
-  privateKeyEnv: string;
-}
-
 export interface RegistrySignOptions extends OperationCliOptions {
   typedData: string;
   privateKeyEnv: string;

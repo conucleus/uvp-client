@@ -1,7 +1,12 @@
+/**
+ * Headless private-key loading: the only entry that reads process.env or handles
+ * a local private key; /core stays runtime-agnostic.
+ */
 import type { Hex } from 'viem';
-import { ValidationError } from './validation.js';
+import { DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV } from '../core/signal/build.js';
+import { ValidationError } from '../core/validation.js';
 
-export const DEFAULT_SIGNING_KEY_ENV = 'UVP_EXECUTOR_PRIVATE_KEY';
+export const DEFAULT_SIGNING_KEY_ENV = DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV;
 
 export function loadPrivateKeyFromEnv(envName = DEFAULT_SIGNING_KEY_ENV): Hex | undefined {
   const value = process.env[envName];

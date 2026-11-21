@@ -28,6 +28,7 @@ export interface BrowserClientOptions {
   readonly mode?: 'direct' | 'relay' | undefined;
   /** Relay service base URL; required in relay mode. */
   readonly relayUrl?: string | undefined;
+  /** Relay endpoint path or absolute URL; required in relay mode. */
   readonly relayPath?: string | undefined;
   readonly fetcher?: OperationFetcher | undefined;
   readonly timeoutMs?: number | undefined;
@@ -55,15 +56,18 @@ function browserTransport(
     if (!relayUrl) {
       throw new ValidationError('browser relay mode requires relayUrl');
     }
+    const relayPath = options.relayPath?.trim();
+    if (!relayPath) {
+      throw new ValidationError('browser relay mode requires relayPath');
+    }
     return createRelayTransport({
       relayUrl,
-      ...(options.relayPath !== undefined ? { relayPath: options.relayPath } : {}),
+      relayPath,
       ...(options.fetcher !== undefined ? { fetcher: options.fetcher } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     });
   }
   return createDirectTransport({
-    relayer: signer,
     submitter: {
       sendCall: async (call): Promise<Hex> => sendProviderTransaction(options.provider, {
         from: signer,

@@ -16,14 +16,9 @@ import {
   buildStageDockSupplierSelectionTypedData,
   buildStageSupplierPatchTypedData,
   buildSubmitSignalCall,
-  buildUVPStageInviteCreateTypedData,
-  validateUVPOrderFinalizeTypedData,
-  validateUVPStageInviteAcceptTypedData,
   type SelectorBindingPayload,
   type StageDockSupplierSelectionPayload,
   type StageSupplierPatchCallPatch,
-  type UVPOrderFinalizeTypedData,
-  type UVPStageInviteAcceptTypedData,
 } from '@uvp-eth/protocol-bindings';
 import { ZERO_BYTES32 } from './constants.js';
 import {
@@ -39,6 +34,7 @@ import {
   parseDeadline,
   type StateMachineSignal,
 } from './signal/build.js';
+import { buildRegisterSupplierCall } from './supplier-registry.js';
 import { buildPokeTimerCall } from './timer.js';
 import type { OperationTransport } from './transport.js';
 import {
@@ -52,13 +48,11 @@ import {
 export const OPERATION_NAMES = [
   'plan.register',
   'order.trigger',
-  'order.finalize',
-  'invite.accept',
-  'invite.create',
   'signal.submit',
   'stagePatch.submit',
   'stageDock.select',
   'registry.write',
+  'supplier.register',
   'timer.poke',
 ] as const;
 
@@ -232,7 +226,7 @@ export async function signOperation(
  * the calldata carries an empty signature, so no typed-data prompt is needed.
  */
 export function buildEmptySignatureOperation(prepared: PreparedOperation): SignedOperation {
-  return signedOperationOf(prepared, '0x');
+  return { ...signedOperationOf(prepared, '0x'), signatureDelivery: 'direct-empty' };
 }
 
 /** Direct delivery of a permissionless operation: no signature, no typed data, no relay. */
@@ -244,7 +238,7 @@ export function buildDirectOperation(prepared: PreparedOperation): SignedOperati
       message: `${prepared.operation} is not a direct-only operation`,
     });
   }
-  return signedOperationOf(prepared, '0x');
+  return { ...signedOperationOf(prepared, '0x'), signatureDelivery: 'direct-only' };
 }
 
 /**
@@ -275,7 +269,6 @@ function signedOperationOf(prepared: PreparedOperation, signature: Hex | string)
     ...(prepared.typedData === undefined ? {} : { typedData: prepared.typedData }),
     signature: signature as Hex,
     calls: prepared.buildCalls(signature as Hex),
-    ...(prepared.signatureDelivery === 'direct-only' ? { signatureDelivery: 'direct-only' as const } : {}),
   };
 }
 
@@ -337,37 +330,12 @@ export interface SignalSubmitOperationInput {
   readonly deadline: bigint | number | string;
 }
 
-export interface OrderFinalizeOperationInput {
-  readonly operation: 'order.finalize';
-  readonly signer: Address | string;
-  /** Buyer-signed UVPOrderFinalize prepared by the order service; validated field-by-field. */
-  readonly typedData: UVPOrderFinalizeTypedData;
-}
-
-export interface InviteAcceptOperationInput {
-  readonly operation: 'invite.accept';
-  readonly signer: Address | string;
-  /** Invitee-signed UVPStageInviteAccept prepared at invite preview; validated field-by-field. */
-  readonly typedData: UVPStageInviteAcceptTypedData;
-}
-
-export interface InviteCreateOperationInput {
-  readonly operation: 'invite.create';
-  /** Draft buyer; signs the invite terms that an app backend may turn into an invite. */
-  readonly signer: Address | string;
+export interface SupplierRegisterOperationInput {
+  readonly operation: 'supplier.register';
   readonly chainId: number;
-  readonly stateMachineAddress: Address | string;
-  readonly draftId: string;
-  readonly stageKey: string;
-  readonly stageId: Hex | string;
-  readonly slotKey: string;
-  readonly invitee: Address | string;
-  readonly amount: bigint | number | string;
-  readonly finalStandardHash: Hex | string;
-  readonly workDeadline: bigint | number | string;
-  readonly termsHash: Hex | string;
-  readonly nonce: bigint | number | string;
-  readonly deadline: bigint | number | string;
+  readonly supplierRegistryAddress: Address | string;
+  /** Supplier account that registers itself; registerSupplier requires caller == account. */
+  readonly signer: Address | string;
 }
 
 export interface StageSupplierPatchOperationInput {
@@ -420,12 +388,10 @@ export type OperationInput =
   | PlanRegisterOperationInput
   | OrderTriggerOperationInput
   | SignalSubmitOperationInput
-  | OrderFinalizeOperationInput
-  | InviteAcceptOperationInput
-  | InviteCreateOperationInput
   | StageSupplierPatchOperationInput
   | StageDockSelectOperationInput
   | RegistryWriteOperationInput
+  | SupplierRegisterOperationInput
   | TimerPokeOperationInput;
 
 export function prepareOperation(input: OperationInput): PreparedOperation {
@@ -481,56 +447,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
     case 'order.trigger':
     case 'signal.submit':
       return prepareSignalSubmission(input);
-
-    case 'order.finalize': {
-      const typedData = validateUVPOrderFinalizeTypedData(input.typedData);
-      const signer = assertMessageSigner(typedData.message.buyer, input.signer, 'order.finalize', 'buyer');
-      return {
-        operation: 'order.finalize',
-        chainId: typedData.domain.chainId,
-        signer,
-        typedData,
-        buildCalls: () => [],
-      };
-    }
-
-    case 'invite.accept': {
-      const typedData = validateUVPStageInviteAcceptTypedData(input.typedData);
-      const signer = assertMessageSigner(typedData.message.invitee, input.signer, 'invite.accept', 'invitee');
-      return {
-        operation: 'invite.accept',
-        chainId: typedData.domain.chainId,
-        signer,
-        typedData,
-        buildCalls: () => [],
-      };
-    }
-
-    case 'invite.create': {
-      const signer = normalizeAddressChecksummed(input.signer, 'signer');
-      const typedData = buildUVPStageInviteCreateTypedData({
-        chainId: input.chainId,
-        verifyingContract: input.stateMachineAddress,
-        draftId: input.draftId,
-        stageKey: input.stageKey,
-        stageId: input.stageId,
-        slotKey: input.slotKey,
-        invitee: input.invitee,
-        amount: input.amount,
-        finalStandardHash: input.finalStandardHash,
-        workDeadline: input.workDeadline,
-        termsHash: input.termsHash,
-        nonce: input.nonce,
-        deadline: input.deadline,
-      });
-      return {
-        operation: 'invite.create',
-        chainId: typedData.domain.chainId,
-        signer,
-        typedData,
-        buildCalls: () => [],
-      };
-    }
 
     case 'stagePatch.submit': {
       const signer = normalizeAddressChecksummed(input.signer, 'signer');
@@ -609,6 +525,21 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         signer,
         typedData: input.typedData,
         buildCalls: () => [],
+      };
+    }
+
+    case 'supplier.register': {
+      const signer = normalizeAddressChecksummed(input.signer, 'signer');
+      const chainId = parsePositiveInteger(input.chainId, 'chainId');
+      return {
+        operation: 'supplier.register',
+        chainId,
+        signer,
+        signatureDelivery: 'direct-only',
+        buildCalls: () => [callOf(buildRegisterSupplierCall(
+          { supplierRegistryAddress: input.supplierRegistryAddress, chainId },
+          signer,
+        ))],
       };
     }
 
@@ -691,24 +622,6 @@ function prepareSignalSubmission(
 
 function callOf(call: { readonly address: Address; readonly functionName: string; readonly data: Hex }): OperationCall {
   return { to: call.address, functionName: call.functionName, data: call.data };
-}
-
-function assertMessageSigner(
-  messageSigner: Address | string,
-  signer: Address | string,
-  operation: OperationName,
-  field: string,
-): Address {
-  const declared = normalizeAddressChecksummed(messageSigner, field);
-  const normalized = normalizeAddressChecksummed(signer, 'signer');
-  if (declared !== normalized) {
-    throw new OperationError({
-      operation,
-      code: 'signer_mismatch',
-      message: `${operation} typed data names ${declared} as ${field}, not signer ${normalized}`,
-    });
-  }
-  return normalized;
 }
 
 function chainIdOfTypedData(typedData: TypedDataDefinition, operation: OperationName): number {

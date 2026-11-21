@@ -64,7 +64,7 @@ export function registerPlanCommands(program: Command): void {
     .option('--deadline-seconds <n>', 'seconds from the current block timestamp for the commit deadline', '3600')
     .option('--mode <mode>', 'delivery mode: direct or relay', 'direct')
     .option('--relay-url <url>', 'relay service base URL (required with --mode relay)')
-    .option('--relay-path <path>', 'relay endpoint path', '/relay')
+    .option('--relay-path <path>', 'relay endpoint path (required with --mode relay)')
     .option('--no-finalize', 'stop after commitPlan and leave the plan unfinalized')
     .option('--dry-run', 'sign the operation locally but do not deliver it')
     .action(async (options: PlanRegisterOptions) => {

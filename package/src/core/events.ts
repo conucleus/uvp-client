@@ -1,7 +1,7 @@
 /**
  * Engine event decode: typed decoders for the state machine, stage patch, file
  * resource and supplier registry ABIs. Shapes and topics derive from
- * @uvp-eth/protocol-bindings; supplier activation is SupplierStatusChanged(Active).
+ * @uvp-eth/protocol-bindings; raw event fields stay raw, no derived labels.
  */
 import {
   decodeEventLog,
@@ -93,14 +93,10 @@ export type StateMachineEvent = {
 
 export type StagePatchEventName = 'StageSupplierPatchApplied';
 
-export type StageSupplierPatchAction = 'assign' | 'handoff';
-
 export type StagePatchEvent = DecodedEvent<
   'StageSupplierPatchApplied',
   StageSupplierPatchAppliedArgs
-> & {
-  readonly action: StageSupplierPatchAction;
-};
+>;
 
 export type StageFileEventName = 'StageFilePatchApplied';
 
@@ -210,10 +206,7 @@ export function decodeStagePatchEvent(log: StateMachineRawLog): StagePatchEvent 
   }
   const decoded = decodeLog(STAGE_PATCH_MODULE_ABI, 'StageSupplierPatchApplied', log);
   const args = decoded as StageSupplierPatchAppliedArgs;
-  return {
-    ...withLog(log, { eventName: 'StageSupplierPatchApplied', args }),
-    action: /^0x0{64}$/iu.test(args.previousSupplierId) ? 'assign' : 'handoff',
-  };
+  return withLog(log, { eventName: 'StageSupplierPatchApplied', args });
 }
 
 export function decodeStagePatchEvents(logs: readonly StateMachineRawLog[]): StagePatchEvent[] {
@@ -255,12 +248,6 @@ export function decodeSupplierRegistryEvent(log: StateMachineRawLog): SupplierRe
       };
       const previousStatus = supplierStatusWordOf(decoded.previousStatus);
       const newStatus = supplierStatusWordOf(decoded.newStatus);
-      if (previousStatus === undefined || newStatus === undefined) {
-        throw new EngineEventError(
-          'invalid_args',
-          `SupplierStatusChanged returned an unknown status ordinal: ${String(decoded.previousStatus)} -> ${String(decoded.newStatus)}`,
-        );
-      }
       return withLog(log, {
         eventName: 'SupplierStatusChanged',
         args: {

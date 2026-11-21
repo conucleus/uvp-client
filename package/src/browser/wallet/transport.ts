@@ -1,6 +1,7 @@
 /**
- * Browser wallet transport diagnostics: EIP-1193 failure classification and the
- * transaction receipt tri-state; hosts map kinds to their own copy.
+ * Browser wallet transport diagnostics: mechanical EIP-1193 provider-error
+ * normalization (rejection, chain switch, timeout) and the transaction receipt
+ * tri-state. Product-specific UX classification stays in the host.
  */
 import {
   ChainDisconnectedError,
@@ -13,15 +14,9 @@ import {
   type Hex,
 } from 'viem';
 import { ValidationError } from '../../core/validation.js';
-import { InjectedWalletError } from './errors.js';
 import type { Eip1193Provider } from './provider.js';
 
-export type WalletTransportFailureKind =
-  | 'user_rejected'
-  | 'timeout'
-  | 'wrong_chain'
-  | 'account_mismatch'
-  | 'other';
+export type WalletTransportFailureKind = 'user_rejected' | 'timeout' | 'wrong_chain' | 'other';
 
 export interface WalletTransportFailure {
   readonly kind: WalletTransportFailureKind;
@@ -29,27 +24,9 @@ export interface WalletTransportFailure {
   readonly code?: number | undefined;
 }
 
-export interface WalletAccountContext {
-  readonly expectedAccount?: Address | string | undefined;
-  readonly actualAccount?: Address | string | undefined;
-}
-
-export function classifyWalletTransportFailure(
-  error: unknown,
-  context?: WalletAccountContext,
-): WalletTransportFailure {
-  const mismatch = accountMismatchOf(context);
-  if (mismatch !== undefined) {
-    return { kind: 'account_mismatch', message: mismatch };
-  }
+export function classifyWalletTransportFailure(error: unknown): WalletTransportFailure {
   const code = numericCodeOf(error);
   const message = errorMessage(error);
-  if (error instanceof InjectedWalletError && error.code === 'typed_data_mismatch') {
-    return { kind: 'account_mismatch', message };
-  }
-  if (error instanceof InjectedWalletError && error.code === 'wallet_rejected') {
-    return failure('user_rejected', message, code);
-  }
   if (
     error instanceof UserRejectedRequestError
     || code === 4001
@@ -137,20 +114,6 @@ function failure(
   code: number | undefined,
 ): WalletTransportFailure {
   return code === undefined ? { kind, message } : { kind, message, code };
-}
-
-function accountMismatchOf(context: WalletAccountContext | undefined): string | undefined {
-  if (context?.expectedAccount === undefined || context.actualAccount === undefined) {
-    return undefined;
-  }
-  if (!isAddress(context.expectedAccount) || !isAddress(context.actualAccount)) {
-    return undefined;
-  }
-  const expected = getAddress(context.expectedAccount);
-  const actual = getAddress(context.actualAccount);
-  return expected === actual
-    ? undefined
-    : `wallet account ${actual} does not match the expected signer ${expected}`;
 }
 
 function numericCodeOf(error: unknown): number | undefined {

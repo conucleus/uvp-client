@@ -1,8 +1,8 @@
 import type { Hex } from 'viem';
 import type { ClassifiedExecutorKitError } from '../../../core/errors.js';
 import type { StateMachineJobStatus, StateMachineJobSubmission } from '../jobs/model.js';
-import { SubmitSignalReceiptError } from '../../../core/signal/submit.js';
-import type { SubmitStateMachineSignalResult } from '../../../core/signal/submit.js';
+import { SubmitSignalReceiptError } from '../../signal-submit.js';
+import type { SubmitStateMachineSignalResult } from '../../signal-submit.js';
 import type { StateMachineSignal } from '../../../core/signal/build.js';
 import type { StateMachineHookReadyHandlerResult } from './handler.js';
 

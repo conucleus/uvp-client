@@ -36,7 +36,7 @@ export {
   SubmitSignalReceiptError,
   submitStateMachineSignal,
   type SubmitStateMachineSignalResult,
-} from '../../core/signal/submit.js';
+} from '../signal-submit.js';
 
 export {
   POLL_FAILURE_BACKOFF_MULTIPLIER_CAP,

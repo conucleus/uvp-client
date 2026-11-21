@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   decodeFunctionData,
-  recoverTypedDataAddress,
   type Address,
   type Hex,
 } from 'viem';
@@ -13,9 +12,6 @@ import {
   STAGE_SUPPLIER_PATCH_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
   STAGE_PATCH_MODULE_ABI,
-  UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
-  buildUVPOrderFinalizeTypedData,
-  buildUVPStageInviteAcceptTypedData,
 } from '@uvp-eth/protocol-bindings';
 import {
   prepareOperation,
@@ -32,9 +28,6 @@ import {
   stateMachineSignalFixture,
   triggerSignalFixture,
 } from './fixtures.js';
-
-const ORDER_FINALIZE_PRIMARY_TYPE = 'UVPOrderFinalize';
-const INVITE_ACCEPT_PRIMARY_TYPE = 'UVPStageInviteAccept';
 
 function registrationInput(signer: Address): OperationInput {
   return {
@@ -111,69 +104,6 @@ function orderTriggerInput(signer: Address): OperationInput {
   };
 }
 
-function finalizeInput(signer: Address, buyer: Address): OperationInput {
-  return {
-    operation: 'order.finalize',
-    signer,
-    typedData: buildUVPOrderFinalizeTypedData({
-      chainId: 31337,
-      verifyingContract: STATE_MACHINE,
-      draftId: 'draft-1',
-      planId: bytes32('01'),
-      configId: 'used-car.v3',
-      configVersion: '1',
-      configHash: bytes32('0a'),
-      buyer,
-      termsHash: bytes32('0b'),
-      nonce: 1,
-      deadline: SIGNAL_DEADLINE,
-    }),
-  };
-}
-
-function inviteInput(signer: Address, invitee: Address): OperationInput {
-  return {
-    operation: 'invite.accept',
-    signer,
-    typedData: buildUVPStageInviteAcceptTypedData({
-      chainId: 31337,
-      verifyingContract: STATE_MACHINE,
-      draftId: 'draft-1',
-      inviteId: 'invite-1',
-      stageKey: 'main',
-      stageId: bytes32('0c'),
-      slotKey: 'performer',
-      invitee,
-      amount: 100n,
-      finalStandardHash: bytes32('0d'),
-      workDeadline: 1_700_000_500n,
-      termsHash: bytes32('0e'),
-      nonce: 1,
-      deadline: SIGNAL_DEADLINE,
-    }),
-  };
-}
-
-function inviteCreateInput(signer: Address): OperationInput {
-  return {
-    operation: 'invite.create',
-    signer,
-    chainId: 31337,
-    stateMachineAddress: STATE_MACHINE,
-    draftId: 'draft-1',
-    stageKey: 'main',
-    stageId: bytes32('0c'),
-    slotKey: 'performer',
-    invitee: '0x0000000000000000000000000000000000000022',
-    amount: 100n,
-    finalStandardHash: bytes32('0d'),
-    workDeadline: 1_700_000_500n,
-    termsHash: bytes32('0e'),
-    nonce: 1,
-    deadline: SIGNAL_DEADLINE,
-  };
-}
-
 function registryInput(signer: Address): OperationInput {
   return {
     operation: 'registry.write',
@@ -189,7 +119,6 @@ function registryInput(signer: Address): OperationInput {
 
 describe('operation matrix', () => {
   const signerAccount = privateKeyToAccount(generatePrivateKey());
-  const buyer = privateKeyToAccount(generatePrivateKey());
 
   it('prepares every operation name and signs it through the single core path', async () => {
     const cases: ReadonlyArray<{
@@ -212,27 +141,6 @@ describe('operation matrix', () => {
         primaryType: SIGNAL_SUBMISSION_PRIMARY_TYPE,
         calls: ['submitSignal'],
         signer: signerAccount,
-      },
-      {
-        label: 'order.finalize',
-        input: finalizeInput(buyer.address, buyer.address),
-        primaryType: ORDER_FINALIZE_PRIMARY_TYPE,
-        calls: [],
-        signer: buyer,
-      },
-      {
-        label: 'invite.accept',
-        input: inviteInput(buyer.address, buyer.address),
-        primaryType: INVITE_ACCEPT_PRIMARY_TYPE,
-        calls: [],
-        signer: buyer,
-      },
-      {
-        label: 'invite.create',
-        input: inviteCreateInput(buyer.address),
-        primaryType: UVP_STAGE_INVITE_CREATE_PRIMARY_TYPE,
-        calls: [],
-        signer: buyer,
       },
       {
         label: 'signal.submit',
@@ -328,55 +236,4 @@ describe('operation matrix', () => {
     expect(submission.submitter.toLowerCase()).toBe(contractSupplierAccount.toLowerCase());
     expect(call.args[1]).toBe(signature);
   });
-
-  it('refuses typed data that names another party as signer', () => {
-    const buyer = privateKeyToAccount(generatePrivateKey());
-    const other = privateKeyToAccount(generatePrivateKey());
-    expect(captureError(() => prepareOperation(finalizeInput(other.address, buyer.address)))).toMatchObject({
-      operation: 'order.finalize',
-      code: 'signer_mismatch',
-    });
-    expect(captureError(() => prepareOperation(inviteInput(other.address, buyer.address)))).toMatchObject({
-      operation: 'invite.accept',
-      code: 'signer_mismatch',
-    });
-  });
-
-  it('signs an invite.create payload that recovers to the buyer', async () => {
-    const buyerAccount = privateKeyToAccount(generatePrivateKey());
-    const prepared = prepareOperation(inviteCreateInput(buyerAccount.address));
-    expect(prepared.typedData.domain).toMatchObject({
-      name: 'UVPOrderBook',
-      version: '1',
-      chainId: 31337,
-      verifyingContract: STATE_MACHINE,
-    });
-    expect(prepared.typedData.message).toMatchObject({
-      draftId: 'draft-1',
-      stageKey: 'main',
-      slotKey: 'performer',
-      amount: '100',
-      workDeadline: '1700000500',
-      nonce: '1',
-      deadline: SIGNAL_DEADLINE.toString(10),
-    });
-    const signed = await signOperation(prepared, buyerAccount);
-    expect(signed.calls).toEqual([]);
-    expect(await recoverTypedDataAddress({
-      domain: signed.typedData.domain,
-      types: signed.typedData.types,
-      primaryType: signed.typedData.primaryType,
-      message: signed.typedData.message,
-      signature: signed.signature,
-    } as never)).toBe(buyerAccount.address);
-  });
 });
-
-function captureError(run: () => unknown): unknown {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  throw new Error('expected the operation to be rejected');
-}

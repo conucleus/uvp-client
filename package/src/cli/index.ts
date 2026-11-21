@@ -10,7 +10,6 @@ import { Command } from 'commander';
 import { ExecutorKitError } from '../core/validation.js';
 import { registerChainCommands } from './commands/chain.js';
 import { registerDoctorCommand } from './commands/doctor.js';
-import { registerInviteCommands } from './commands/invite.js';
 import { registerOrderCommands } from './commands/order.js';
 import { registerPlanCommands } from './commands/plan.js';
 import { registerRegistryCommands } from './commands/registry.js';
@@ -28,7 +27,6 @@ export function buildProgram(): Command {
   registerDoctorCommand(program);
   registerPlanCommands(program);
   registerOrderCommands(program);
-  registerInviteCommands(program);
   registerRegistryCommands(program);
   registerChainCommands(program);
 

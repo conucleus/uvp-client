@@ -15,7 +15,7 @@ import {
   type SignedOperation,
   type SubmitMode,
 } from '../core/operations.js';
-import { loadPrivateKeyFromEnv } from '../core/signing.js';
+import { loadPrivateKeyFromEnv } from '../headless/signing.js';
 import { ValidationError } from '../core/validation.js';
 import { createHeadlessClient } from '../headless/client.js';
 import { signerFromPrivateKey, type TypedDataSigner } from '../headless/signers.js';

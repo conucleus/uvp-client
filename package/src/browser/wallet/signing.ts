@@ -6,15 +6,7 @@
  */
 import { isHex, type Address, type Hex } from 'viem';
 import { normalizeAddress, type ProductSubmitTypedData } from '@uvp-eth/protocol-bindings';
-import { UnsupportedChainTargetError, type ChainTarget } from '../../core/chain-target.js';
 import type { Eip1193Provider } from './provider.js';
-
-export interface ProductSubmitSignatureRequest {
-  readonly target?: ChainTarget;
-  readonly provider: Eip1193Provider;
-  readonly typedData: ProductSubmitTypedData;
-  readonly submitter: Address | string;
-}
 
 export async function requestProductSubmitSignature(
   provider: Eip1193Provider,
@@ -34,16 +26,4 @@ export async function requestProductSubmitSignature(
     throw new Error('wallet returned an invalid hex signature');
   }
   return signature;
-}
-
-export async function requestProductSubmitSignatureForTarget(
-  input: ProductSubmitSignatureRequest,
-): Promise<Hex> {
-  const target = input.target ?? 'evm';
-  switch (target) {
-    case 'evm':
-      return requestProductSubmitSignature(input.provider, input.typedData, input.submitter);
-    case 'solana':
-      throw new UnsupportedChainTargetError('solana', 'solana participant signing is reserved but not implemented');
-  }
 }

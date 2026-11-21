@@ -1,12 +1,12 @@
 /**
- * Stage file read surface: direct contract views of UVPFileResourceModule.
- * ABI single source is @uvp-eth/protocol-bindings (FILE_RESOURCE_MODULE_ABI);
- * this module only normalizes inputs, injects the public-client seam, and maps
- * failures to explicit codes so an unreachable or malformed read is never
- * reported as an empty file map entry.
+ * Stage file read surface: direct contract views of UVPFileResourceModule plus
+ * the state machine's fileResourceModule() address lookup. ABI single source is
+ * @uvp-eth/protocol-bindings (FILE_RESOURCE_MODULE_ABI / STATE_MACHINE_ABI);
+ * this module only normalizes inputs, injects the public-client seam (either
+ * rpcUrl or publicClient) and maps failures to explicit codes.
  */
 import { createPublicClient, http, type Address, type Hex } from 'viem';
-import { FILE_RESOURCE_MODULE_ABI } from '@uvp-eth/protocol-bindings';
+import { FILE_RESOURCE_MODULE_ABI, STATE_MACHINE_ABI } from '@uvp-eth/protocol-bindings';
 import {
   ExecutorKitError,
   normalizeAddressChecksummed,
@@ -38,8 +38,16 @@ export interface StageFilesReadClient {
 }
 
 export interface StageFilesReadConfig {
-  readonly rpcUrl: string;
+  /** Required unless publicClient is supplied. */
+  readonly rpcUrl?: string | undefined;
   readonly fileResourceModuleAddress: Address | string;
+  readonly publicClient?: StageFilesReadClient;
+}
+
+export interface FileResourceModuleReadConfig {
+  /** Required unless publicClient is supplied. */
+  readonly rpcUrl?: string | undefined;
+  readonly stateMachineAddress: Address | string;
   readonly publicClient?: StageFilesReadClient;
 }
 
@@ -60,12 +68,21 @@ export interface StageFileRecord {
   readonly patchHash: Hex;
 }
 
+export async function fileResourceModule(
+  config: FileResourceModuleReadConfig,
+): Promise<Address> {
+  const publicClient = readClient(config.rpcUrl, config.publicClient);
+  const stateMachineAddress = addressValue(config.stateMachineAddress, 'stateMachineAddress');
+  const value = await readContractOf(publicClient, stateMachineAddress, STATE_MACHINE_ABI, 'fileResourceModule', []);
+  return addressValue(value, 'fileResourceModule');
+}
+
 export async function getStageFile(
   config: StageFilesReadConfig,
   lookup: StageFileLookup,
 ): Promise<StageFileRecord> {
   const read = normalizeReadConfig(config);
-  const value = await readContractOf(read, 'getStageFile', [
+  const value = await readContractOf(read.publicClient, read.fileResourceModuleAddress, FILE_RESOURCE_MODULE_ABI, 'getStageFile', [
     normalizeBytes32Value(lookup.planId, 'planId'),
     normalizeBytes32Value(lookup.orderId, 'orderId'),
     normalizeBytes32Value(lookup.targetStageId, 'targetStageId'),
@@ -79,7 +96,7 @@ export async function stageFilesHash(
   key: StageFileKey,
 ): Promise<Hex> {
   const read = normalizeReadConfig(config);
-  const value = await readContractOf(read, 'stageFilesHash', [
+  const value = await readContractOf(read.publicClient, read.fileResourceModuleAddress, FILE_RESOURCE_MODULE_ABI, 'stageFilesHash', [
     normalizeBytes32Value(key.planId, 'planId'),
     normalizeBytes32Value(key.orderId, 'orderId'),
     normalizeBytes32Value(key.targetStageId, 'targetStageId'),
@@ -96,9 +113,6 @@ interface NormalizedStageFilesReadConfig {
 }
 
 function normalizeReadConfig(config: StageFilesReadConfig): NormalizedStageFilesReadConfig {
-  if (typeof config.rpcUrl !== 'string' || config.rpcUrl.trim().length === 0) {
-    throw new StageFileReadError('invalid_config', 'stage file reads require a non-empty rpcUrl');
-  }
   let fileResourceModuleAddress: Address;
   try {
     fileResourceModuleAddress = normalizeAddressChecksummed(
@@ -114,30 +128,41 @@ function normalizeReadConfig(config: StageFilesReadConfig): NormalizedStageFiles
   }
   return {
     fileResourceModuleAddress,
-    publicClient: config.publicClient ?? defaultReadClient(config.rpcUrl),
+    publicClient: readClient(config.rpcUrl, config.publicClient),
   };
 }
 
-function defaultReadClient(rpcUrl: string): StageFilesReadClient {
+function readClient(
+  rpcUrl: string | undefined,
+  publicClient: StageFilesReadClient | undefined,
+): StageFilesReadClient {
+  if (publicClient !== undefined) {
+    return publicClient;
+  }
+  if (typeof rpcUrl !== 'string' || rpcUrl.trim().length === 0) {
+    throw new StageFileReadError('invalid_config', 'stage file reads require rpcUrl or an injected publicClient');
+  }
   return createPublicClient({ transport: http(rpcUrl) }) as unknown as StageFilesReadClient;
 }
 
 async function readContractOf(
-  config: NormalizedStageFilesReadConfig,
-  functionName: 'getStageFile' | 'stageFilesHash',
+  publicClient: StageFilesReadClient,
+  address: Address,
+  abi: readonly unknown[],
+  functionName: string,
   args: readonly unknown[],
 ): Promise<unknown> {
   try {
-    return await config.publicClient.readContract({
-      address: config.fileResourceModuleAddress,
-      abi: FILE_RESOURCE_MODULE_ABI,
+    return await publicClient.readContract({
+      address,
+      abi,
       functionName,
       args,
     });
   } catch (error) {
     throw new StageFileReadError(
       'read_failed',
-      `${functionName} read against ${config.fileResourceModuleAddress} failed: ${errorMessage(error)}`,
+      `${functionName} read against ${address} failed: ${errorMessage(error)}`,
       { cause: error },
     );
   }
@@ -167,6 +192,17 @@ function normalizeBytes32Value(value: unknown, fieldName: string): Hex {
     return normalizeBytes32(value, fieldName);
   } catch (error) {
     throw invalidResponse(`${fieldName} is not a bytes32 hex string: ${errorMessage(error)}`);
+  }
+}
+
+function addressValue(value: unknown, fieldName: string): Address {
+  if (typeof value !== 'string') {
+    throw invalidResponse(`${fieldName} is not an address`);
+  }
+  try {
+    return normalizeAddressChecksummed(value, fieldName);
+  } catch (error) {
+    throw invalidResponse(`${fieldName} is not an address: ${errorMessage(error)}`);
   }
 }
 

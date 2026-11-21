@@ -1,9 +1,8 @@
 /**
  * Browser-host entry: injected EIP-1193 operation client (same operation set as
- * headless/CLI, direct or relay), wallet signing primitives, deadline/format
- * derivations, and the D4b write-signature entrance. Used-car product
- * transports/kernels live in @used-car/product-client; this entry never reads
- * env/localStorage/private keys and never imports the compiler.
+ * headless/CLI, direct or relay), wallet signing primitives and deadline/format
+ * derivations. This entry never reads env/localStorage/private keys and never
+ * imports the compiler.
  */
 export * from './client.js';
 export * from './wallet/index.js';

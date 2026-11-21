@@ -115,9 +115,9 @@ describe('direct transport', () => {
     expect(String((error as Error).message)).toContain(`already broadcast: ${txHash('b1')}`);
   });
 
-  it('sends a participant-signed submitSignal envelope from the relayer, not the signer', async () => {
+  it('sends a participant-signed submitSignal envelope from the sender, not the signer', async () => {
     const supplierAccount = privateKeyToAccount(generatePrivateKey());
-    const relayer = privateKeyToAccount(generatePrivateKey());
+    const sender = privateKeyToAccount(generatePrivateKey());
     const signed = await signOperation(prepareOperation({
       operation: 'signal.submit',
       chainId: 31337,
@@ -128,7 +128,7 @@ describe('direct transport', () => {
     }), supplierAccount);
     const sent: DirectCall[] = [];
     const transport = createDirectTransport({
-      relayer: relayer.address,
+      sender: sender.address,
       submitter: {
         sendCall: async (call) => {
           sent.push(call);
@@ -140,7 +140,7 @@ describe('direct transport', () => {
     const result = await transport.submit(signed);
 
     expect(result.signer).toBe(supplierAccount.address);
-    expect(sent.map((call) => call.from)).toEqual([relayer.address]);
+    expect(sent.map((call) => call.from)).toEqual([sender.address]);
     const decoded = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: sent[0]!.data });
     expect(decoded.functionName).toBe('submitSignal');
     const submission = decoded.args[0] as unknown as { readonly submitter: string };
@@ -162,7 +162,7 @@ describe('relay transport', () => {
         txHashes: [txHash('c1'), txHash('c2')],
       });
     };
-    const transport = createRelayTransport({ relayUrl: 'https://relay.example/api/', fetcher });
+    const transport = createRelayTransport({ relayUrl: 'https://relay.example/api/', relayPath: '/relay', fetcher });
 
     const result = await transport.submit(signed);
 
@@ -211,6 +211,7 @@ describe('relay transport', () => {
     const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
     const transport = createRelayTransport({
       relayUrl: 'https://relay.example',
+      relayPath: '/relay',
       fetcher: async () => Response.json(
         { error: 'overloaded', message: 'retry later', retryable: true },
         { status: 503 },
@@ -229,6 +230,7 @@ describe('relay transport', () => {
     const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
     const transport = createRelayTransport({
       relayUrl: 'https://relay.example',
+      relayPath: '/relay',
       fetcher: async () => Response.json({ status: 'submitted' }),
     });
 

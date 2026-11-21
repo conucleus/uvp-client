@@ -8,7 +8,7 @@
 import { createPublicClient, http, type Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { classifyExecutorKitError } from '../core/errors.js';
-import { loadPrivateKeyFromEnv } from '../core/signing.js';
+import { loadPrivateKeyFromEnv } from './signing.js';
 import { normalizeAddressChecksummed, ValidationError } from '../core/validation.js';
 import {
   loadStateMachineHandlerConfig,

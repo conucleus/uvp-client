@@ -25,6 +25,7 @@ export interface HeadlessClientOptions {
   readonly rpcUrl?: string | undefined;
   /** Relay service base URL; required in relay mode. */
   readonly relayUrl?: string | undefined;
+  /** Relay endpoint path or absolute URL; required in relay mode. */
   readonly relayPath?: string | undefined;
   readonly fetcher?: OperationFetcher | undefined;
   readonly timeoutMs?: number | undefined;
@@ -45,7 +46,6 @@ export function createHeadlessClient(options: HeadlessClientOptions): HeadlessCl
         signTypedData: (typedData) => account.signTypedData(typedData),
       },
       transport: createDirectTransport({
-        relayer: account.address,
         submitter: {
           sendCall: async (call): Promise<Hex> => wallet.sendTransaction({
             account,
@@ -61,6 +61,10 @@ export function createHeadlessClient(options: HeadlessClientOptions): HeadlessCl
   if (!relayUrl) {
     throw new ValidationError('headless relay mode requires relayUrl');
   }
+  const relayPath = options.relayPath?.trim();
+  if (!relayPath) {
+    throw new ValidationError('headless relay mode requires relayPath');
+  }
   return createOperationClient({
     signer: {
       address: account.address,
@@ -68,7 +72,7 @@ export function createHeadlessClient(options: HeadlessClientOptions): HeadlessCl
     },
     transport: createRelayTransport({
       relayUrl,
-      ...(options.relayPath !== undefined ? { relayPath: options.relayPath } : {}),
+      relayPath,
       ...(options.fetcher !== undefined ? { fetcher: options.fetcher } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     }),

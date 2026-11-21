@@ -18,7 +18,6 @@ import {
   type StageSelectorBindingTableEntry,
   type SubmitSignalCall,
 } from '@uvp-eth/protocol-bindings';
-import { DEFAULT_SIGNING_KEY_ENV } from '../signing.js';
 import {
   normalizeAddressChecksummed,
   normalizeBytes32,
@@ -37,7 +36,7 @@ export type {
   SubmitSignalCallConfig,
 } from '@uvp-eth/protocol-bindings';
 
-export const DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV = DEFAULT_SIGNING_KEY_ENV;
+export const DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV = 'UVP_EXECUTOR_PRIVATE_KEY';
 export const DEFAULT_SIGNAL_DEADLINE_SECONDS = 3_600;
 
 export interface StateMachineSignal {

@@ -1,11 +1,11 @@
 /**
- * Operation delivery: one transport interface for signed operations, two
- * implementations — direct (broadcast the authorized calls through the
- * submitting account's own RPC/provider seam: the signer itself, or a relayer
- * forwarding a business-signed envelope) and relay (POST the signed envelope to
- * a relay that forwards it). Nonce/broadcast mechanics belong to the injected
- * submitter or the relay; this module owns only the envelope, receipt parsing
- * and the operation/ code/ retryable error model.
+ * Operation delivery: one transport interface for authorized operations, two
+ * implementations — direct (broadcast the prepared calls through the submitting
+ * account's own RPC/provider seam; a participant-signed envelope may be sent by
+ * a different paying account) and relay (POST the signed envelope to a relay
+ * that forwards it). Nonce/broadcast mechanics belong to the injected submitter
+ * or the relay; this module owns only the envelope, receipt parsing and the
+ * operation/code/retryable error model.
  */
 import type { Address, Hex } from 'viem';
 import {
@@ -15,6 +15,7 @@ import {
   type SignedOperation,
   type SubmitMode,
 } from './operations.js';
+import { normalizeAddressChecksummed } from './validation.js';
 
 export type OperationFetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -39,14 +40,18 @@ export interface DirectCallSubmitter {
 export interface DirectTransportConfig {
   readonly submitter: DirectCallSubmitter;
   /**
-   * Account that pays for the tx. It differs from `SignedOperation.signer` when
-   * a relayer forwards a participant-signed envelope: the signature inside the
-   * call still belongs to the assigned supplier account, never the relayer.
+   * Account that sends/pays for the tx. It differs from `SignedOperation.signer`
+   * only when a relayer forwards a participant-signed envelope; a direct-empty
+   * submission (empty signature, submitter == sender) requires it to be absent
+   * or equal to the signer.
    */
-  readonly relayer?: Address;
+  readonly sender?: Address;
 }
 
 export function createDirectTransport(config: DirectTransportConfig): OperationTransport {
+  const configuredSender = config.sender === undefined
+    ? undefined
+    : normalizeAddressChecksummed(config.sender, 'sender');
   return {
     mode: 'direct',
     async submit(signed) {
@@ -57,10 +62,18 @@ export function createDirectTransport(config: DirectTransportConfig): OperationT
           message: `${signed.operation} has no chain call in this role; direct delivery is chain-only`,
         });
       }
+      const sender = configuredSender ?? signed.signer;
+      if (signed.signatureDelivery === 'direct-empty' && sender !== signed.signer) {
+        throw new OperationError({
+          operation: signed.operation,
+          code: 'signer_mismatch',
+          message: `${signed.operation} is a direct-empty submission: sender ${sender} must equal signer ${signed.signer}`,
+        });
+      }
       const txHashes: Hex[] = [];
       for (const [index, call] of signed.calls.entries()) {
         try {
-          txHashes.push(await sendCall(config, signed, call));
+          txHashes.push(await sendCall(config, sender, signed, call));
         } catch (error) {
           if (error instanceof OperationError) {
             throw error;
@@ -89,17 +102,15 @@ export function createDirectTransport(config: DirectTransportConfig): OperationT
 export interface RelayTransportConfig {
   /** Relay service base URL; relayPath is appended unless it is an absolute URL. */
   readonly relayUrl: string;
-  /** Endpoint path, normally `/relay`; app-owned relays pass their own route. */
-  readonly relayPath?: string | undefined;
+  /** Relay endpoint path or absolute URL; the relay owns its route, there is no client default. */
+  readonly relayPath: string;
   readonly fetcher?: OperationFetcher | undefined;
   readonly timeoutMs?: number | undefined;
   readonly headers?: Readonly<Record<string, string>> | undefined;
 }
 
-export const DEFAULT_RELAY_PATH = '/relay';
-
 export function createRelayTransport(config: RelayTransportConfig): OperationTransport {
-  const endpoint = joinUrl(config.relayUrl.trim(), config.relayPath ?? DEFAULT_RELAY_PATH);
+  const endpoint = joinUrl(config.relayUrl.trim(), config.relayPath);
   const fetcher = config.fetcher ?? defaultFetcher();
   const timeoutMs = config.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
   return {
@@ -237,11 +248,12 @@ function invalidRelayResponse(signed: SignedOperation, endpoint: string, detail:
 
 async function sendCall(
   config: DirectTransportConfig,
+  sender: Address,
   signed: SignedOperation,
   call: OperationCall,
 ): Promise<Hex> {
   const txHash = await config.submitter.sendCall({
-    from: config.relayer ?? signed.signer,
+    from: sender,
     to: call.to,
     data: call.data,
     chainId: signed.chainId,

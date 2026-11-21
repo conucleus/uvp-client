@@ -1,20 +1,18 @@
 /**
  * order commands: trigger creation (orderId 0 SignalSubmission, submitter =
- * trigger stage supplier) and buyer UVPOrderFinalize signing. Construction,
- * signing and delivery go through core operations; no per-shape sign flow lives
- * here.
+ * trigger stage supplier). Construction, signing and delivery go through core
+ * operations; no per-shape sign flow lives here.
  */
 import { readFile } from 'node:fs/promises';
 import type { Command } from 'commander';
 import type {
   FilePatch,
   SignalAttributionPayload,
-  UVPOrderFinalizeTypedData,
 } from '@uvp-eth/protocol-bindings';
 import type { OperationInput } from '../../core/operations.js';
 import { parsePositiveInteger, ValidationError } from '../../core/validation.js';
-import type { OrderFinalizeOptions, OrderTriggerOptions } from '../options.js';
-import { cliOperationContext, executeCliOperation, signWith } from '../operation.js';
+import type { OrderTriggerOptions } from '../options.js';
+import { cliOperationContext, executeCliOperation } from '../operation.js';
 import { stringifyForTransport } from '../output.js';
 
 const ORDER_PRIVATE_KEY_ENV = 'UVP_EXECUTOR_PRIVATE_KEY';
@@ -41,7 +39,7 @@ export function registerOrderCommands(program: Command): void {
     .option('--private-key-env <name>', 'env var containing the trigger submitter private key', ORDER_PRIVATE_KEY_ENV)
     .option('--mode <mode>', 'delivery mode: direct or relay', 'direct')
     .option('--relay-url <url>', 'relay service base URL (required with --mode relay)')
-    .option('--relay-path <path>', 'relay endpoint path', '/relay')
+    .option('--relay-path <path>', 'relay endpoint path (required with --mode relay)')
     .option('--dry-run', 'build/sign the operation locally but do not deliver it')
     .action(async (options: OrderTriggerOptions) => {
       const context = cliOperationContext(options, ORDER_PRIVATE_KEY_ENV);
@@ -72,27 +70,6 @@ export function registerOrderCommands(program: Command): void {
       };
       const result = await executeCliOperation(input, options, ORDER_PRIVATE_KEY_ENV);
       console.log(stringifyForTransport({ order: options.dryRun ? { mode: context.mode, ...result } : result }));
-    });
-
-  order
-    .command('finalize')
-    .description('sign the buyer UVPOrderFinalize typed data (service delivery stays with order app)')
-    .requiredOption('--typed-data <path>', 'JSON file with UVPOrderFinalize typed data from finalize/prepare')
-    .option('--private-key-env <name>', 'env var containing the buyer private key', ORDER_PRIVATE_KEY_ENV)
-    .action(async (options: OrderFinalizeOptions) => {
-      const context = cliOperationContext(options, ORDER_PRIVATE_KEY_ENV);
-      const typedData = await readJson<UVPOrderFinalizeTypedData>(options.typedData, 'typed data');
-      const signed = await signWith(context, {
-        operation: 'order.finalize',
-        signer: context.signer.address,
-        typedData,
-      });
-      console.log(stringifyForTransport({
-        operation: signed.operation,
-        chainId: signed.chainId,
-        signer: signed.signer,
-        signature: signed.signature,
-      }));
     });
 }
 

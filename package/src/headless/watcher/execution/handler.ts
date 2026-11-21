@@ -15,7 +15,7 @@ import { asNonEmptyString, asNumberOrString, dedupe, isRecord } from '../../../c
 import { normalizeRetryConfig, type StateMachineRetryConfig } from '../jobs/retry.js';
 import type { StateMachineArtifactIndex, StateMachineHookReady } from '../../../core/signal/decode.js';
 import type { StateMachineSignal, SubmitStateMachineSignalConfig } from '../../../core/signal/build.js';
-import type { SubmitStateMachineSignalResult } from '../../../core/signal/submit.js';
+import type { SubmitStateMachineSignalResult } from '../../signal-submit.js';
 import type { StateMachineDeploymentWatcherConfig } from '../watcher.js';
 
 export interface StateMachineHookReadyHandlerContext {

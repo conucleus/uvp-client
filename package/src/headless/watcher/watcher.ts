@@ -38,7 +38,7 @@ import {
   SubmitSignalReceiptError,
   submitterAddressOf,
   type SubmitStateMachineSignalResult,
-} from '../../core/signal/submit.js';
+} from '../signal-submit.js';
 import {
   normalizeArtifactIndex,
   resolveStateMachineHandler,
@@ -1384,9 +1384,9 @@ function normalizeStateMachineWatcherConfig(config: StateMachineWatcherConfig): 
 }
 
 function normalizeStateMachineDeployments(
-  config: Pick<StateMachineWatcherConfig, 'stateMachineAddress' | 'stateMachines'>,
+  config: StateMachineWatcherConfig,
 ): readonly NormalizedStateMachineDeploymentWatcherConfig[] {
-  const rawDeployments = config.stateMachines?.length
+  const rawDeployments: readonly StateMachineDeploymentWatcherConfig[] = config.stateMachines?.length
     ? config.stateMachines
     : config.stateMachineAddress
       ? [{ stateMachineAddress: config.stateMachineAddress }]
@@ -1429,7 +1429,7 @@ export function normalizeStateMachineDeploymentConfig(
   };
 }
 
-function scannedHookReadyEventIds(logs: readonly StateMachineRawLog[]): Set<Hex> {
+function scannedHookReadyEventIds(logs: readonly StateMachineRawLog[]): ReadonlySet<Hex> {
   const eventIds = new Set<Hex>();
   for (const log of logs) {
     if (log.topics[0] !== HOOK_READY_TOPIC) {
@@ -1448,7 +1448,7 @@ function pollFailureDelayMs(pollIntervalMs: number, consecutiveFailures: number)
   return pollIntervalMs * Math.min(2 ** exponent, POLL_FAILURE_BACKOFF_MULTIPLIER_CAP);
 }
 
-function normalizeRuntimeEnvironment(value: StateMachineRuntimeEnvironment | undefined): StateMachineRuntimeEnvironment | undefined {
+function normalizeRuntimeEnvironment(value: unknown): StateMachineRuntimeEnvironment | undefined {
   if (value === undefined) {
     return undefined;
   }

@@ -93,9 +93,38 @@ export interface PlanState {
   readonly finalized: boolean;
   readonly publisher: Address;
   readonly planHash: Hex;
-  readonly capabilitiesRoot: Hex;
   readonly supplierBindingsRoot: Hex;
 }
+
+export type PlanCapabilitiesRootRead =
+  | {
+      readonly kind: 'available';
+      readonly planId: Hex;
+      readonly capabilitiesRoot: Hex;
+    }
+  | {
+      readonly kind: 'unavailable';
+      readonly planId: Hex;
+      readonly reason: 'lens_not_configured';
+    };
+
+export type SupplierRegistrationRead =
+  | {
+      readonly kind: 'unregistered';
+      readonly account: Address;
+    }
+  | {
+      readonly kind: 'registered';
+      readonly account: Address;
+      readonly supplierId: Hex;
+      readonly status: SupplierStatusWord;
+    }
+  | {
+      readonly kind: 'unknown';
+      readonly account: Address;
+      readonly supplierId: Hex;
+      readonly statusOrdinal: bigint;
+    };
 
 export async function getHookStatus(
   config: StateMachineReadConfig,
@@ -108,12 +137,8 @@ export async function getHookStatus(
     bytes32Input(key.hookId, 'hookId'),
   ]);
   const fields = tupleOf(value, 'getHookStatus', 3);
-  const status = hookStatusWordOf(fields[0]);
-  if (status === undefined) {
-    throw invalidResponse(`getHookStatus returned an unknown status ordinal: ${String(fields[0])}`);
-  }
   return {
-    status,
+    status: hookStatusWordOf(fields[0]),
     dueAt: uintOf(fields[1], 'getHookStatus.dueAt'),
     readyEmitted: boolOf(fields[2], 'getHookStatus.readyEmitted'),
   };
@@ -146,24 +171,13 @@ export async function readPlanState(
 ): Promise<PlanState> {
   const read = normalizeStateMachineRead(config);
   const normalizedPlanId = bytes32Input(planId, 'planId');
-  const [exists, committed, finalized, publisher, planHash, supplierBindingsRoot, lens] = await Promise.all([
+  const [exists, committed, finalized, publisher, planHash, supplierBindingsRoot] = await Promise.all([
     readOf(read, STATE_MACHINE_ABI, 'planExists', read.stateMachineAddress, [normalizedPlanId]),
     readOf(read, STATE_MACHINE_ABI, 'planCommitted', read.stateMachineAddress, [normalizedPlanId]),
     readOf(read, STATE_MACHINE_ABI, 'planFinalized', read.stateMachineAddress, [normalizedPlanId]),
     readOf(read, STATE_MACHINE_ABI, 'planPublisher', read.stateMachineAddress, [normalizedPlanId]),
     readOf(read, STATE_MACHINE_ABI, 'planHash', read.stateMachineAddress, [normalizedPlanId]),
     readOf(read, STATE_MACHINE_ABI, 'planSupplierBindingsRoot', read.stateMachineAddress, [normalizedPlanId]),
-    readOf(read, STATE_MACHINE_ABI, 'lens', read.stateMachineAddress, []),
-  ]);
-  const lensAddress = addressOf(lens, 'lens');
-  if (lensAddress === ZERO_ADDRESS) {
-    throw new EngineReadError(
-      'invalid_config',
-      `state machine ${read.stateMachineAddress} has no lens module configured; plan capabilitiesRoot cannot be read`,
-    );
-  }
-  const capabilitiesRoot = await readOf(read, STATE_MACHINE_LENS_ABI, 'planCapabilitiesRoot', lensAddress, [
-    normalizedPlanId,
   ]);
   return {
     planId: normalizedPlanId,
@@ -172,8 +186,28 @@ export async function readPlanState(
     finalized: boolOf(finalized, 'planFinalized'),
     publisher: addressOf(publisher, 'planPublisher'),
     planHash: bytes32Of(planHash, 'planHash'),
-    capabilitiesRoot: bytes32Of(capabilitiesRoot, 'planCapabilitiesRoot'),
     supplierBindingsRoot: bytes32Of(supplierBindingsRoot, 'planSupplierBindingsRoot'),
+  };
+}
+
+export async function readPlanCapabilitiesRoot(
+  config: StateMachineReadConfig,
+  planId: Hex | string,
+): Promise<PlanCapabilitiesRootRead> {
+  const read = normalizeStateMachineRead(config);
+  const normalizedPlanId = bytes32Input(planId, 'planId');
+  const lens = await readOf(read, STATE_MACHINE_ABI, 'lens', read.stateMachineAddress, []);
+  const lensAddress = addressOf(lens, 'lens');
+  if (lensAddress === ZERO_ADDRESS) {
+    return { kind: 'unavailable', planId: normalizedPlanId, reason: 'lens_not_configured' };
+  }
+  const capabilitiesRoot = await readOf(read, STATE_MACHINE_LENS_ABI, 'planCapabilitiesRoot', lensAddress, [
+    normalizedPlanId,
+  ]);
+  return {
+    kind: 'available',
+    planId: normalizedPlanId,
+    capabilitiesRoot: bytes32Of(capabilitiesRoot, 'planCapabilitiesRoot'),
   };
 }
 
@@ -203,6 +237,24 @@ export async function effectiveStageAccount(
   return addressOf(value, 'effectiveStageAccount');
 }
 
+/** Supplier registry address configured on the state machine (deployment manifests do not duplicate it). */
+export async function supplierRegistry(config: StateMachineReadConfig): Promise<Address> {
+  const read = normalizeStateMachineRead(config);
+  const value = await readOf(read, STATE_MACHINE_ABI, 'supplierRegistry', read.stateMachineAddress, []);
+  return addressOf(value, 'supplierRegistry');
+}
+
+export async function supplierIdOf(
+  config: SupplierRegistryReadConfig,
+  account: Address | string,
+): Promise<Hex> {
+  const read = normalizeSupplierRegistryRead(config);
+  const value = await readOf(read, SUPPLIER_REGISTRY_ABI, 'supplierOf', read.supplierRegistryAddress, [
+    addressInput(account, 'account'),
+  ]);
+  return bytes32Of(value, 'supplierOf');
+}
+
 export async function supplierAccountOf(
   config: SupplierRegistryReadConfig,
   supplierId: Hex | string,
@@ -223,11 +275,36 @@ export async function supplierStatusOf(
     bytes32Input(supplierId, 'supplierId'),
   ]);
   const ordinal = uintOf(value, 'statusOf');
-  const status = supplierStatusWordOf(Number(ordinal));
-  if (status === undefined) {
-    throw invalidResponse(`statusOf returned an unknown status ordinal: ${ordinal.toString(10)}`);
+  return supplierStatusWordOf(Number(ordinal));
+}
+
+export async function readSupplierRegistration(
+  config: SupplierRegistryReadConfig,
+  account: Address | string,
+): Promise<SupplierRegistrationRead> {
+  const read = normalizeSupplierRegistryRead(config);
+  const normalizedAccount = addressInput(account, 'account');
+  const supplierId = bytes32Of(
+    await readOf(read, SUPPLIER_REGISTRY_ABI, 'supplierOf', read.supplierRegistryAddress, [normalizedAccount]),
+    'supplierOf',
+  );
+  if (supplierId === ZERO_BYTES32) {
+    return { kind: 'unregistered', account: normalizedAccount };
   }
-  return status;
+  const statusOrdinal = uintOf(
+    await readOf(read, SUPPLIER_REGISTRY_ABI, 'statusOf', read.supplierRegistryAddress, [supplierId]),
+    'statusOf',
+  );
+  const status = supplierStatusWordOf(Number(statusOrdinal));
+  if (status === 'unknown') {
+    return {
+      kind: 'unknown',
+      account: normalizedAccount,
+      supplierId,
+      statusOrdinal,
+    };
+  }
+  return { kind: 'registered', account: normalizedAccount, supplierId, status };
 }
 
 export async function isActiveSupplier(
@@ -305,6 +382,18 @@ async function readOf(
   }
 }
 
+function addressInput(value: Address | string, field: string): Address {
+  try {
+    return normalizeAddressChecksummed(value, field);
+  } catch (error) {
+    throw new EngineReadError(
+      'invalid_input',
+      `${field} is not a valid address: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
 function bytes32Input(value: Hex | string, field: string): Hex {
   try {
     return normalizeBytes32(value, field);
@@ -372,3 +461,4 @@ function errorMessage(error: unknown): string {
 }
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ZERO_BYTES32 = `0x${'0'.repeat(64)}` as Hex;

@@ -1,31 +1,22 @@
 /**
- * On-chain status ordinals: words are the @uvp-eth/chain-read-contract
- * vocabulary, ordinals are the Solidity enums behind the protocol-bindings ABIs.
+ * On-chain status words: the ordinal order is the Solidity enum order behind the
+ * @uvp-eth/protocol-bindings ABIs (UVPStateMachine.HookStatus via getHookStatus,
+ * IUVPSupplierRegistry.SupplierStatus via statusOf); an ordinal outside the
+ * mapping is the explicit "unknown" word, never a thrown error.
  */
-import type { ChainHookStatus, ChainSupplierStatus } from '@uvp-eth/chain-read-contract';
 
-export const HOOK_STATUS_WORDS: readonly Exclude<ChainHookStatus, 'unknown'>[] = [
-  'init',
-  'waiting',
-  'ready',
-  'cancelled',
-];
-export type HookStatusWord = Exclude<ChainHookStatus, 'unknown'>;
+export const HOOK_STATUS_WORDS = ['init', 'waiting', 'ready', 'cancelled'] as const;
+export type HookStatusWord = (typeof HOOK_STATUS_WORDS)[number] | 'unknown';
 
-export const SUPPLIER_STATUS_WORDS: readonly Exclude<ChainSupplierStatus, 'unknown'>[] = [
-  'pending',
-  'active',
-  'suspended',
-  'revoked',
-];
-export type SupplierStatusWord = Exclude<ChainSupplierStatus, 'unknown'>;
+export const SUPPLIER_STATUS_WORDS = ['pending', 'active', 'suspended', 'revoked'] as const;
+export type SupplierStatusWord = (typeof SUPPLIER_STATUS_WORDS)[number] | 'unknown';
 
-export function hookStatusWordOf(ordinal: unknown): HookStatusWord | undefined {
-  return statusWordOf(HOOK_STATUS_WORDS, ordinal);
+export function hookStatusWordOf(ordinal: unknown): HookStatusWord {
+  return statusWordOf(HOOK_STATUS_WORDS, ordinal) ?? 'unknown';
 }
 
-export function supplierStatusWordOf(ordinal: unknown): SupplierStatusWord | undefined {
-  return statusWordOf(SUPPLIER_STATUS_WORDS, ordinal);
+export function supplierStatusWordOf(ordinal: unknown): SupplierStatusWord {
+  return statusWordOf(SUPPLIER_STATUS_WORDS, ordinal) ?? 'unknown';
 }
 
 function statusWordOf<TWord extends string>(

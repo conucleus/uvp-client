@@ -96,12 +96,14 @@ describe('browser and headless operation clients', () => {
       signer: account.address,
       mode: 'relay',
       relayUrl: 'https://relay.example',
+      relayPath: '/relay',
       fetcher: neverCalled,
     });
     const headless = createHeadlessClient({
       privateKey,
       mode: 'relay',
       relayUrl: 'https://relay.example',
+      relayPath: '/relay',
       fetcher: neverCalled,
     });
 

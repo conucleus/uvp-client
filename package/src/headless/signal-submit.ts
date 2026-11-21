@@ -1,9 +1,15 @@
+/**
+ * Headless signal submission: broadcasts submitSignal through a local private
+ * key and resolves the generated order id from the receipt. The Node wallet
+ * client lives here so /core stays runtime-agnostic; call construction stays in
+ * core signal build.
+ */
 import { createPublicClient, createWalletClient, http, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { loadPrivateKeyFromEnv } from '../signing.js';
-import { ZERO_BYTES32 } from '../constants.js';
-import { ValidationError } from '../validation.js';
-import { triggeredOrderIdFromLogs, type StateMachineRawLog } from './decode.js';
+import { loadPrivateKeyFromEnv } from './signing.js';
+import { ZERO_BYTES32 } from '../core/constants.js';
+import { ValidationError } from '../core/validation.js';
+import { triggeredOrderIdFromLogs, type StateMachineRawLog } from '../core/signal/decode.js';
 import {
   buildSubmitStateMachineSignalCall,
   normalizeSubmitConfig,
@@ -12,7 +18,7 @@ import {
   type StateMachineSignal,
   type SubmitStateMachineSignalCall,
   type SubmitStateMachineSignalConfig,
-} from './build.js';
+} from '../core/signal/build.js';
 
 export type SubmitStateMachineSignalResult =
   | {
