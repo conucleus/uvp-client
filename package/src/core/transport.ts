@@ -105,6 +105,13 @@ export function createRelayTransport(config: RelayTransportConfig): OperationTra
   return {
     mode: 'relay',
     async submit(signed) {
+      if (signed.signatureDelivery === 'direct-only') {
+        throw new OperationError({
+          operation: signed.operation,
+          code: 'unsupported_delivery',
+          message: `${signed.operation} is direct-only: it has no signature or typed data for a relay to forward`,
+        });
+      }
       const signal = AbortSignal.timeout(timeoutMs);
       let response: Response;
       try {

@@ -29,6 +29,14 @@ import { ZERO_BYTES32 } from '../constants.js';
 import { asNonEmptyString } from '../internal.js';
 import type { StateMachineRawLog } from './decode.js';
 
+export { buildSubmitSignalCall, filePatchHash } from '@uvp-eth/protocol-bindings';
+export type {
+  SignalSubmissionCallStruct,
+  SubmitSignalCall,
+  SubmitSignalCallArgs,
+  SubmitSignalCallConfig,
+} from '@uvp-eth/protocol-bindings';
+
 export const DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV = DEFAULT_SIGNING_KEY_ENV;
 export const DEFAULT_SIGNAL_DEADLINE_SECONDS = 3_600;
 

@@ -30,6 +30,8 @@ import {
   buildPlanCommitCall,
   buildPlanCommitTypedDataFor,
   buildPlanFinalizeCall,
+  planRegistrationFromCompiled,
+  type CompiledPlanRegistration,
   type PlanRegistrationArgs,
 } from './registration.js';
 import {
@@ -37,6 +39,7 @@ import {
   parseDeadline,
   type StateMachineSignal,
 } from './signal/build.js';
+import { buildPokeTimerCall } from './timer.js';
 import type { OperationTransport } from './transport.js';
 import {
   ExecutorKitError,
@@ -56,6 +59,7 @@ export const OPERATION_NAMES = [
   'stagePatch.submit',
   'stageDock.select',
   'registry.write',
+  'timer.poke',
 ] as const;
 
 export type OperationName = (typeof OPERATION_NAMES)[number];
@@ -65,9 +69,11 @@ export type SubmitMode = 'direct' | 'relay';
 /**
  * `direct-empty`: a direct submission is authorized by the sender itself, so
  * the calldata carries an empty signature (submitSignal direct path); relayed
- * submissions still sign the typed data. `signed` always signs.
+ * submissions still sign the typed data. `signed` always signs. `direct-only`
+ * operations carry neither typed data nor a signature: the sending account is
+ * the whole authorization and relay delivery is rejected.
  */
-export type OperationSignatureDelivery = 'signed' | 'direct-empty';
+export type OperationSignatureDelivery = 'signed' | 'direct-empty' | 'direct-only';
 
 export interface OperationCall {
   readonly to: Address;
@@ -80,18 +86,20 @@ export interface PreparedOperation {
   readonly operation: OperationName;
   readonly chainId: number;
   readonly signer: Address;
-  readonly typedData: TypedDataDefinition;
+  /** Absent only for `direct-only` operations, which have no typed data. */
+  readonly typedData?: TypedDataDefinition | undefined;
   readonly buildCalls: (signature: Hex) => readonly OperationCall[];
-  readonly signatureDelivery?: OperationSignatureDelivery;
+  readonly signatureDelivery?: OperationSignatureDelivery | undefined;
 }
 
 export interface SignedOperation {
   readonly operation: OperationName;
   readonly chainId: number;
   readonly signer: Address;
-  readonly typedData: TypedDataDefinition;
+  readonly typedData?: TypedDataDefinition | undefined;
   readonly signature: Hex;
   readonly calls: readonly OperationCall[];
+  readonly signatureDelivery?: OperationSignatureDelivery | undefined;
 }
 
 export type OperationStatus = 'submitted' | 'accepted';
@@ -178,6 +186,9 @@ export function createOperationClient(input: {
     submit: (signed) => transport.submit(signed),
     async execute(operationInput) {
       const prepared = prepareOperation(operationInput);
+      if (prepared.signatureDelivery === 'direct-only') {
+        return transport.submit(buildDirectOperation(prepared));
+      }
       if (transport.mode === 'direct' && prepared.signatureDelivery === 'direct-empty') {
         return transport.submit(buildEmptySignatureOperation(prepared));
       }
@@ -190,6 +201,13 @@ export async function signOperation(
   prepared: PreparedOperation,
   signer: OperationSigner,
 ): Promise<SignedOperation> {
+  if (prepared.signatureDelivery === 'direct-only' || prepared.typedData === undefined) {
+    throw new OperationError({
+      operation: prepared.operation,
+      code: 'unsupported_delivery',
+      message: `${prepared.operation} carries no typed data to sign; deliver it directly instead`,
+    });
+  }
   const signerAddress = normalizeAddressChecksummed(signer.address, 'signer');
   if (signerAddress !== prepared.signer) {
     throw new OperationError({
@@ -214,6 +232,18 @@ export async function signOperation(
  * the calldata carries an empty signature, so no typed-data prompt is needed.
  */
 export function buildEmptySignatureOperation(prepared: PreparedOperation): SignedOperation {
+  return signedOperationOf(prepared, '0x');
+}
+
+/** Direct delivery of a permissionless operation: no signature, no typed data, no relay. */
+export function buildDirectOperation(prepared: PreparedOperation): SignedOperation {
+  if (prepared.signatureDelivery !== 'direct-only') {
+    throw new OperationError({
+      operation: prepared.operation,
+      code: 'unsupported_delivery',
+      message: `${prepared.operation} is not a direct-only operation`,
+    });
+  }
   return signedOperationOf(prepared, '0x');
 }
 
@@ -242,9 +272,10 @@ function signedOperationOf(prepared: PreparedOperation, signature: Hex | string)
     operation: prepared.operation,
     chainId: prepared.chainId,
     signer: prepared.signer,
-    typedData: prepared.typedData,
+    ...(prepared.typedData === undefined ? {} : { typedData: prepared.typedData }),
     signature: signature as Hex,
     calls: prepared.buildCalls(signature as Hex),
+    ...(prepared.signatureDelivery === 'direct-only' ? { signatureDelivery: 'direct-only' as const } : {}),
   };
 }
 
@@ -261,6 +292,30 @@ export interface PlanRegisterOperationInput {
 
 /** Signal fields of an operation: the deadline is the operation envelope's signed field. */
 export type OperationSignal = Omit<StateMachineSignal, 'deadline'>;
+
+export interface PlanRegisterFromCompiledInput {
+  readonly chainId: number;
+  readonly stateMachineAddress: Address | string;
+  readonly signer: Address | string;
+  readonly deadline: bigint | number | string;
+  readonly finalize?: boolean | undefined;
+  /** Compiler register args plus the publisher-keyed planId the compiler derived. */
+  readonly registration: CompiledPlanRegistration;
+}
+
+export function planRegisterFromCompiled(
+  input: PlanRegisterFromCompiledInput,
+): PlanRegisterOperationInput {
+  return {
+    operation: 'plan.register',
+    chainId: input.chainId,
+    stateMachineAddress: input.stateMachineAddress,
+    signer: input.signer,
+    registration: planRegistrationFromCompiled(input.registration),
+    deadline: input.deadline,
+    ...(input.finalize === undefined ? {} : { finalize: input.finalize }),
+  };
+}
 
 export interface OrderTriggerOperationInput {
   readonly operation: 'order.trigger';
@@ -350,6 +405,17 @@ export interface RegistryWriteOperationInput {
   readonly typedData: TypedDataDefinition;
 }
 
+export interface TimerPokeOperationInput {
+  readonly operation: 'timer.poke';
+  readonly chainId: number;
+  readonly stateMachineAddress: Address | string;
+  /** Wallet account that sends the poke; pokeTimer is permissionless and direct-only. */
+  readonly signer: Address | string;
+  readonly planId: Hex | string;
+  readonly orderId: Hex | string;
+  readonly hookId: Hex | string;
+}
+
 export type OperationInput =
   | PlanRegisterOperationInput
   | OrderTriggerOperationInput
@@ -359,7 +425,8 @@ export type OperationInput =
   | InviteCreateOperationInput
   | StageSupplierPatchOperationInput
   | StageDockSelectOperationInput
-  | RegistryWriteOperationInput;
+  | RegistryWriteOperationInput
+  | TimerPokeOperationInput;
 
 export function prepareOperation(input: OperationInput): PreparedOperation {
   try {
@@ -542,6 +609,22 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         signer,
         typedData: input.typedData,
         buildCalls: () => [],
+      };
+    }
+
+    case 'timer.poke': {
+      const signer = normalizeAddressChecksummed(input.signer, 'signer');
+      const chainId = parsePositiveInteger(input.chainId, 'chainId');
+      const call = buildPokeTimerCall(
+        { stateMachineAddress: input.stateMachineAddress, chainId },
+        { planId: input.planId, orderId: input.orderId, hookId: input.hookId },
+      );
+      return {
+        operation: 'timer.poke',
+        chainId,
+        signer,
+        signatureDelivery: 'direct-only',
+        buildCalls: () => [callOf(call)],
       };
     }
   }
