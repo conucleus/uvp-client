@@ -5,6 +5,7 @@
  */
 import {
   decodeEventLog,
+  getAbiItem,
   toEventSelector,
   type AbiEvent,
   type Address,
@@ -14,6 +15,7 @@ import {
 import {
   FILE_RESOURCE_MODULE_ABI,
   STAGE_PATCH_MODULE_ABI,
+  STATE_MACHINE_ABI,
   SUPPLIER_REGISTRY_ABI,
   UVP_STATE_MACHINE_ARTIFACT_ABI,
   type StateMachineRawLog,
@@ -370,3 +372,60 @@ function errorMessage(error: unknown): string {
 }
 
 const ZERO_TOPIC = '0x0000000000000000000000000000000000000000000000000000000000000000';
+
+const ORDER_TRIGGERED_EVENT_ITEM = getAbiItem({ abi: STATE_MACHINE_ABI, name: 'OrderTriggered' }) as AbiEvent;
+const SIGNAL_SUBMITTED_EVENT_ITEM = getAbiItem({ abi: STATE_MACHINE_ABI, name: 'SignalSubmitted' }) as AbiEvent;
+const STAGE_SUPPLIER_ASSIGNED_EVENT_ITEM = getAbiItem({
+  abi: STATE_MACHINE_ABI,
+  name: 'StageSupplierAssigned',
+}) as AbiEvent;
+
+export const STAGE_FILE_PATCH_APPLIED_TOPIC = toEventSelector(
+  getAbiItem({ abi: FILE_RESOURCE_MODULE_ABI, name: 'StageFilePatchApplied' }) as AbiEvent,
+);
+
+export const SIGNAL_SUBMITTED_TOPIC = toEventSelector(SIGNAL_SUBMITTED_EVENT_ITEM);
+
+export interface StateMachineStepLogClient {
+  getLogs(args: {
+    address: Address;
+    event: AbiEvent;
+    fromBlock: bigint;
+    toBlock: bigint;
+  }): Promise<readonly StateMachineRawLog[]>;
+}
+
+export async function fetchStateMachineStepEventLogs(
+  client: StateMachineStepLogClient,
+  input: {
+    readonly address: Address;
+    readonly fromBlock: bigint;
+    readonly toBlock: bigint;
+  },
+): Promise<{
+  readonly triggeredLogs: readonly StateMachineRawLog[];
+  readonly signalLogs: readonly StateMachineRawLog[];
+  readonly assignedLogs: readonly StateMachineRawLog[];
+}> {
+  const [triggeredLogs, signalLogs, assignedLogs] = await Promise.all([
+    client.getLogs({
+      address: input.address,
+      event: ORDER_TRIGGERED_EVENT_ITEM,
+      fromBlock: input.fromBlock,
+      toBlock: input.toBlock,
+    }),
+    client.getLogs({
+      address: input.address,
+      event: SIGNAL_SUBMITTED_EVENT_ITEM,
+      fromBlock: input.fromBlock,
+      toBlock: input.toBlock,
+    }),
+    client.getLogs({
+      address: input.address,
+      event: STAGE_SUPPLIER_ASSIGNED_EVENT_ITEM,
+      fromBlock: input.fromBlock,
+      toBlock: input.toBlock,
+    }),
+  ]);
+  return { triggeredLogs, signalLogs, assignedLogs };
+}

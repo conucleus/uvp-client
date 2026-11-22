@@ -244,6 +244,69 @@ export async function supplierRegistry(config: StateMachineReadConfig): Promise<
   return addressOf(value, 'supplierRegistry');
 }
 
+export interface EngineModulesRead {
+  readonly stateMachine: Address;
+  readonly fileResourceModule: Address;
+  readonly stagePatchModule: Address;
+  readonly supplierRegistry: Address;
+}
+
+export async function readEngineModules(config: StateMachineReadConfig): Promise<EngineModulesRead> {
+  const read = normalizeStateMachineRead(config);
+  const [fileResourceModule, stagePatchModule, supplierRegistryAddress] = await Promise.all([
+    readOf(read, STATE_MACHINE_ABI, 'fileResourceModule', read.stateMachineAddress, []),
+    readOf(read, STATE_MACHINE_ABI, 'stagePatchModule', read.stateMachineAddress, []),
+    readOf(read, STATE_MACHINE_ABI, 'supplierRegistry', read.stateMachineAddress, []),
+  ]);
+  return {
+    stateMachine: read.stateMachineAddress,
+    fileResourceModule: addressOf(fileResourceModule, 'fileResourceModule'),
+    stagePatchModule: addressOf(stagePatchModule, 'stagePatchModule'),
+    supplierRegistry: addressOf(supplierRegistryAddress, 'supplierRegistry'),
+  };
+}
+
+export async function readSupplierRegistryOwner(config: SupplierRegistryReadConfig): Promise<Address> {
+  const read = normalizeSupplierRegistryRead(config);
+  const value = await readOf(read, SUPPLIER_REGISTRY_ABI, 'owner', read.supplierRegistryAddress, []);
+  return addressOf(value, 'owner');
+}
+
+export interface PlanStageInfoRead {
+  readonly isPlanStage: boolean;
+  readonly defaultSupplier: Hex;
+  readonly hasDynamicSupplier: boolean;
+}
+
+export async function readPlanStageInfo(
+  config: StateMachineReadConfig,
+  planId: Hex | string,
+  stageId: Hex | string,
+): Promise<PlanStageInfoRead> {
+  const read = normalizeStateMachineRead(config);
+  const normalizedPlanId = bytes32Input(planId, 'planId');
+  const normalizedStageId = bytes32Input(stageId, 'stageId');
+  const [isPlanStage, defaultSupplier, hasDynamicSupplier] = await Promise.all([
+    readOf(read, STATE_MACHINE_ABI, 'isPlanStage', read.stateMachineAddress, [
+      normalizedPlanId,
+      normalizedStageId,
+    ]),
+    readOf(read, STATE_MACHINE_ABI, 'planStageDefaultSupplier', read.stateMachineAddress, [
+      normalizedPlanId,
+      normalizedStageId,
+    ]),
+    readOf(read, STATE_MACHINE_ABI, 'planStageHasDynamicSupplier', read.stateMachineAddress, [
+      normalizedPlanId,
+      normalizedStageId,
+    ]),
+  ]);
+  return {
+    isPlanStage: boolOf(isPlanStage, 'isPlanStage'),
+    defaultSupplier: bytes32Of(defaultSupplier, 'planStageDefaultSupplier'),
+    hasDynamicSupplier: boolOf(hasDynamicSupplier, 'planStageHasDynamicSupplier'),
+  };
+}
+
 export async function supplierIdOf(
   config: SupplierRegistryReadConfig,
   account: Address | string,
