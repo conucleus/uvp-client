@@ -47,13 +47,17 @@ const signed = await signOperation(prepared, signer);
 - Direct transport broadcasts the prepared calls through an injected
   `sendCall` seam (wallet provider or RPC wallet); relay transport POSTs the
   `SignedOperation` envelope as JSON to `${relayUrl}${relayPath}` (default
-  `/relay`) and expects `{status: "submitted"|"accepted", txHashes?, relayRef?,
-  operation?}`. Relay failures carry `operation`/`code`/`retryable`
+  `/relay`) and expects `{status: "submitted"|"accepted"|"unknown", txHashes?,
+  relayRef?, operation?}`. Relay failures carry `operation`/`code`/`retryable`
   (`OperationError`).
+- A timeout after the envelope was posted, or after an earlier direct call was
+  sent, returns `status: "unknown"`: the operation may have been broadcast, so
+  callers reconcile instead of retrying a `retryable` error. A pre-send
+  connection failure stays `relay_unreachable`/retryable.
 - Signal submissions (trigger creation and order signals) accept an empty
   signature on the direct path: `submitter` is the sending wallet, so direct
   execution needs no typed-data prompt. The relay path signs
-  `UVPStateMachineSignalSubmission` typed data (domain `0.20`) and appends the
+  `UVPStateMachineSignalSubmission` typed data (domain `1`) and appends the
   65-byte participant signature to `submitSignal(SignalSubmission, bytes)`.
 - Message operations (`order.finalize`, `invite.accept`, `invite.create`,
   `registry.write`) have no chain call: the shells sign them and the caller
@@ -347,7 +351,7 @@ than parse messages.
 
 `createStateMachineWatcher` uses the fixed `UVPStateMachine` artifact ABI
 recorded in
-`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.23.json`:
+`uvp-protocol/contracts/uvp-contracts/fixtures/uvp-state-machine.v0.1.json`:
 `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId,
 bytes32 hookName)`, `SignalSubmitted(bytes32 planId, bytes32 orderId, ...)`,
 and `submitSignal((planId, orderId, sourceId, signalId, payloadHash,

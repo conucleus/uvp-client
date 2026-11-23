@@ -96,7 +96,7 @@ export interface SignedOperation {
   readonly signatureDelivery?: OperationSignatureDelivery | undefined;
 }
 
-export type OperationStatus = 'submitted' | 'accepted';
+export type OperationStatus = 'submitted' | 'accepted' | 'unknown';
 
 export interface OperationResult {
   readonly operation: OperationName;

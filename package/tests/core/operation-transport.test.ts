@@ -115,6 +115,32 @@ describe('direct transport', () => {
     expect(String((error as Error).message)).toContain(`already broadcast: ${txHash('b1')}`);
   });
 
+  it('reports an unknown outcome when a later direct broadcast times out after an earlier call was sent', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
+    let sent = 0;
+    const transport = createDirectTransport({
+      submitter: {
+        sendCall: async () => {
+          sent += 1;
+          if (sent === 2) {
+            throw timeoutError();
+          }
+          return txHash('e1');
+        },
+      },
+    });
+
+    await expect(transport.submit(signed)).resolves.toEqual({
+      operation: 'plan.register',
+      mode: 'direct',
+      chainId: 31337,
+      signer: account.address,
+      status: 'unknown',
+      txHashes: [txHash('e1')],
+    });
+  });
+
   it('sends a participant-signed submitSignal envelope from the sender, not the signer', async () => {
     const supplierAccount = privateKeyToAccount(generatePrivateKey());
     const sender = privateKeyToAccount(generatePrivateKey());
@@ -187,6 +213,83 @@ describe('relay transport', () => {
     });
   });
 
+  it('reports an unknown outcome when the relay receipt times out after the signed envelope was posted', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
+    const transport = createRelayTransport({
+      relayUrl: 'https://relay.example',
+      relayPath: '/relay',
+      fetcher: async () => {
+        throw timeoutError();
+      },
+    });
+
+    await expect(transport.submit(signed)).resolves.toEqual({
+      operation: 'plan.register',
+      mode: 'relay',
+      chainId: 31337,
+      signer: account.address,
+      status: 'unknown',
+      txHashes: [],
+    });
+  });
+
+  it('reports an unknown outcome when the relay gateway times out while forwarding the envelope', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
+    const transport = createRelayTransport({
+      relayUrl: 'https://relay.example',
+      relayPath: '/relay',
+      fetcher: async () => new Response(null, { status: 504 }),
+    });
+
+    await expect(transport.submit(signed)).resolves.toEqual({
+      operation: 'plan.register',
+      mode: 'relay',
+      chainId: 31337,
+      signer: account.address,
+      status: 'unknown',
+      txHashes: [],
+    });
+  });
+
+  it('keeps a pre-send relay connection failure retryable instead of reporting an unknown outcome', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
+    const transport = createRelayTransport({
+      relayUrl: 'https://relay.example',
+      relayPath: '/relay',
+      fetcher: async () => {
+        throw new Error('connect ECONNREFUSED 127.0.0.1:8080');
+      },
+    });
+
+    await expect(transport.submit(signed)).rejects.toMatchObject({
+      operation: 'plan.register',
+      code: 'relay_unreachable',
+      retryable: true,
+    });
+  });
+
+  it('maps a relay receipt that explicitly reports unknown without inventing a tx hash', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
+    const transport = createRelayTransport({
+      relayUrl: 'https://relay.example',
+      relayPath: '/relay',
+      fetcher: async () => Response.json({ status: 'unknown', operation: 'plan.register' }),
+    });
+
+    await expect(transport.submit(signed)).resolves.toEqual({
+      operation: 'plan.register',
+      mode: 'relay',
+      chainId: 31337,
+      signer: account.address,
+      status: 'unknown',
+      txHashes: [],
+    });
+  });
+
   it('serializes bigint typed-data fields as base-10 strings', () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const body = stringifyOperation({
@@ -241,6 +344,12 @@ describe('relay transport', () => {
     });
   });
 });
+
+function timeoutError(): Error {
+  const error = new Error('The operation was aborted due to timeout');
+  error.name = 'TimeoutError';
+  return error;
+}
 
 async function captureRejection(run: Promise<unknown>): Promise<unknown> {
   try {

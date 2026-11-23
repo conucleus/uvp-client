@@ -102,9 +102,10 @@ const KIND_PROBES: Readonly<Record<ExecutorKitErrorKind, () => { readonly kind: 
 
 describe('executor-kit classification completeness against the taxonomy', () => {
   it('maps every ExecutorKitErrorKind onto an existing taxonomy entry produced by executor-kit', () => {
-    for (const [kind, code] of Object.entries(KIND_TO_TAXONOMY_CODE)) {
+    for (const [kind, code] of Object.entries(KIND_TO_TAXONOMY_CODE) as [ExecutorKitErrorKind, string][]) {
       const attrs = attrsForExecutorKit(code);
-      expect(attrs.retryable, `${kind} -> ${code}.retryable`).toBe(attrs.retryable);
+      const classified = KIND_PROBES[kind]();
+      expect(classified.retryable, `${kind} -> ${code}.retryable`).toBe(attrs.retryable);
       expect(typeof attrs.dead_letter, `${kind} -> ${code}.dead_letter`).toBe('boolean');
     }
     expect(Object.keys(KIND_TO_TAXONOMY_CODE)).toHaveLength(9);

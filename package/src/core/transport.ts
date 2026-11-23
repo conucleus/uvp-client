@@ -78,6 +78,9 @@ export function createDirectTransport(config: DirectTransportConfig): OperationT
           if (error instanceof OperationError) {
             throw error;
           }
+          if (isTimeoutError(error)) {
+            return unknownResult(signed, 'direct', txHashes);
+          }
           throw new OperationError({
             operation: signed.operation,
             code: 'broadcast_failed',
@@ -134,6 +137,9 @@ export function createRelayTransport(config: RelayTransportConfig): OperationTra
           signal,
         });
       } catch (error) {
+        if (isTimeoutError(error)) {
+          return unknownResult(signed, 'relay', []);
+        }
         throw new OperationError({
           operation: signed.operation,
           code: 'relay_unreachable',
@@ -142,6 +148,9 @@ export function createRelayTransport(config: RelayTransportConfig): OperationTra
         });
       }
       if (!response.ok) {
+        if (response.status === 408 || response.status === 504) {
+          return unknownResult(signed, 'relay', []);
+        }
         throw await relayRejection(signed, response, endpoint);
       }
       let body: unknown;
@@ -171,8 +180,8 @@ function relayResult(signed: SignedOperation, body: unknown, endpoint: string): 
   }
   const record = body as Record<string, unknown>;
   const status = record.status;
-  if (status !== 'submitted' && status !== 'accepted') {
-    throw invalidRelayResponse(signed, endpoint, '2xx body has no submitted/accepted status');
+  if (status !== 'submitted' && status !== 'accepted' && status !== 'unknown') {
+    throw invalidRelayResponse(signed, endpoint, '2xx body has no submitted/accepted/unknown status');
   }
   if (record.operation !== undefined && record.operation !== signed.operation) {
     throw invalidRelayResponse(
@@ -281,4 +290,28 @@ function joinUrl(baseUrl: string, relayPath: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.name === 'TimeoutError' ||
+    error.name === 'AbortError' ||
+    /\btimeout\b|\btimed out\b/i.test(error.message);
+}
+
+function unknownResult(
+  signed: SignedOperation,
+  mode: SubmitMode,
+  txHashes: readonly Hex[],
+): OperationResult {
+  return {
+    operation: signed.operation,
+    mode,
+    chainId: signed.chainId,
+    signer: signed.signer,
+    status: 'unknown',
+    txHashes,
+  };
 }
