@@ -4,9 +4,9 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   STATE_MACHINE_ABI,
   factAttributionHash,
-  filePatchHash,
-  type FilePatch,
+  stageFilesHash,
   type SignalAttributionPayload,
+  type StageFile,
 } from '@uvp-eth/protocol-bindings';
 import {
   buildEmptySignatureOperation,
@@ -29,7 +29,6 @@ import {
 } from './fixtures.js';
 
 const WALLET_ADDRESS = '0x0000000000000000000000000000000000000002' as Hex;
-const ZERO_PATCH_HASH = `0x${'00'.repeat(32)}` as Hex;
 
 const CONFIG = {
   rpcUrl: 'http://127.0.0.1:8545',
@@ -37,15 +36,9 @@ const CONFIG = {
   chainId: 31_337,
 };
 
-const FILE_PATCH: FilePatch = {
-  targetStageId: bytes32('21'),
-  baseHash: bytes32('22'),
-  writerStageId: bytes32('23'),
-  writerProof: [],
-  ops: [
-    { kind: 0, key: bytes32('24'), contentHash: bytes32('25'), handle: 'ipfs://evidence/25' },
-  ],
-};
+const FILES: readonly StageFile[] = [
+  { key: 'ipfs://evidence/25', payload: bytes32('25') },
+];
 
 const ATTRIBUTION: SignalAttributionPayload = {
   sourceId: bytes32('0d'),
@@ -76,8 +69,8 @@ function decodeSubmission(data: Hex): {
     readonly payloadHash: Hex;
     readonly idempotencyKey: Hex;
     readonly attribution: { readonly stageId: Hex; readonly capabilityProof: readonly Hex[] };
-    readonly filePatch: FilePatch;
-    readonly patchHash: Hex;
+    readonly targetStageId: Hex;
+    readonly files: readonly StageFile[];
     readonly submitter: string;
     readonly deadline: bigint;
   };
@@ -94,8 +87,8 @@ function decodeSubmission(data: Hex): {
       readonly payloadHash: Hex;
       readonly idempotencyKey: Hex;
       readonly attribution: { readonly stageId: Hex; readonly capabilityProof: readonly Hex[] };
-      readonly filePatch: FilePatch;
-      readonly patchHash: Hex;
+      readonly targetStageId: Hex;
+      readonly files: readonly StageFile[];
       readonly submitter: string;
       readonly deadline: bigint;
     },
@@ -105,7 +98,7 @@ function decodeSubmission(data: Hex): {
 }
 
 describe('SignalSubmission call construction', () => {
-  it('builds the direct submitSignal call with an empty signature and a zero patchHash', () => {
+  it('builds the direct submitSignal call with an empty signature and no files', () => {
     const call = buildSubmitStateMachineSignalCall(CONFIG, signalFixture, WALLET_ADDRESS);
     const { submission, signature } = decodeSubmission(call.data);
 
@@ -113,23 +106,26 @@ describe('SignalSubmission call construction', () => {
     expect(submission.submitter).toBe(WALLET_ADDRESS);
     expect(submission.orderId).toBe(signalFixture.orderId);
     expect(submission.signalId).toBe(signalFixture.signalId);
-    expect(submission.patchHash).toBe(ZERO_PATCH_HASH);
+    expect(submission.targetStageId).toBe(bytes32('00'));
+    expect(submission.files).toEqual([]);
     expect(submission.deadline).toBeGreaterThan(0n);
     expect(submission.attribution).toEqual(ZERO_FACT_ATTRIBUTION);
   });
 
-  it('signs the patchHash of a file patch and keeps it in the encoded submission', async () => {
+  it('signs the files hash and keeps the files in the encoded submission', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const prepared = prepareOperation(signalSubmitInput(account, {
       ...stateMachineSignalFixture(),
-      filePatch: FILE_PATCH,
+      targetStageId: bytes32('21'),
+      files: FILES,
     }));
-    const expectedPatchHash = filePatchHash(FILE_PATCH);
+    const expectedFilesHash = stageFilesHash(FILES);
     expect(prepared.typedData.primaryType).toBe('UVPStateMachineSignalSubmission');
     expect(prepared.typedData.message).toMatchObject({
       planId: signalFixture.planId,
       orderId: signalFixture.orderId,
-      patchHash: expectedPatchHash,
+      targetStageId: bytes32('21'),
+      filesHash: expectedFilesHash,
       deadline: SIGNAL_DEADLINE.toString(10),
     });
     expect(String(prepared.typedData.message.submitter).toLowerCase()).toBe(account.address.toLowerCase());
@@ -137,8 +133,8 @@ describe('SignalSubmission call construction', () => {
     const signed = await signOperation(prepared, account);
     const { submission, signature } = decodeSubmission(signed.calls[0]!.data);
     expect(signature).toBe(signed.signature);
-    expect(submission.patchHash).toBe(expectedPatchHash);
-    expect(submission.filePatch).toEqual(FILE_PATCH);
+    expect(submission.targetStageId).toBe(bytes32('21'));
+    expect(submission.files).toEqual(FILES);
   });
 
   it('hashes the attribution in the typed data and keeps the proof in the call', async () => {
@@ -159,17 +155,18 @@ describe('SignalSubmission call construction', () => {
     });
   });
 
-  it('builds a pure file patch submission with signalId 0 and its patchHash', () => {
+  it('builds a pure file submission with signalId 0', () => {
     const call = buildSubmitStateMachineSignalCall(CONFIG, {
       ...stateMachineSignalFixture(),
       signalId: bytes32('00'),
       sourceId: bytes32('00'),
-      filePatch: FILE_PATCH,
+      targetStageId: bytes32('21'),
+      files: FILES,
     }, WALLET_ADDRESS);
     const { submission } = decodeSubmission(call.data);
     expect(submission.signalId).toBe(bytes32('00'));
-    expect(submission.patchHash).toBe(filePatchHash(FILE_PATCH));
-    expect(submission.filePatch).toEqual(FILE_PATCH);
+    expect(submission.targetStageId).toBe(bytes32('21'));
+    expect(submission.files).toEqual(FILES);
   });
 });
 

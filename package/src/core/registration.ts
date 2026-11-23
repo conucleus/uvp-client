@@ -22,6 +22,7 @@ export function planRegistrationFromCompiled(compiled: CompiledPlanRegistration)
   const hooksHash = requireNonZeroBytes32(compiled.hooksHash, 'hooksHash');
   const capabilitiesRoot = requireBytes32(compiled.capabilitiesRoot, 'capabilitiesRoot');
   const supplierBindingsRoot = requireBytes32(compiled.supplierBindingsRoot, 'supplierBindingsRoot');
+  const fileWritersHash = requireBytes32(compiled.fileWritersHash, 'fileWritersHash');
   if (!Array.isArray(compiled.hooks) || compiled.hooks.length === 0) {
     throw new ValidationError('compiled plan registration requires at least one hook');
   }
@@ -39,14 +40,19 @@ export function planRegistrationFromCompiled(compiled: CompiledPlanRegistration)
   if (!Array.isArray(compiled.supplierBindings)) {
     throw new ValidationError('compiled plan registration requires a supplierBindings array');
   }
+  if (!Array.isArray(compiled.fileWriters)) {
+    throw new ValidationError('compiled plan registration requires a fileWriters array');
+  }
   return planRegistrationArgs(
     {
       planHash,
       hooksHash,
       capabilitiesRoot,
       supplierBindingsRoot,
+      fileWritersHash,
       hooks: compiled.hooks,
       supplierBindings: compiled.supplierBindings,
+      fileWriters: compiled.fileWriters,
     },
     planId,
   );

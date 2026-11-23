@@ -11,7 +11,7 @@ package produces and reads signals, it never owns orders, sessions, or keys.
 
 | Entry | Responsibility (one sentence) |
 |---|---|
-| `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, signal build/decode/submit (order signals, trigger creation with orderId 0, pure file patches, optional signed `patchHash`), stage file read helpers (`getStageFile`/`stageFilesHash`), validation, signing helpers, evidence hashing, and re-exported protocol typed data. No Node builtins. |
+| `@uvp-eth/uvp-client/core` | Runtime-agnostic operation layer: `OperationName`/`SignedOperation`/`OperationResult`, one prepare+sign engine for all operations, direct/relay transports, signal build/decode/submit (order signals, trigger creation with orderId 0, bare stage files, optional signed `filesHash`), stage file read helper (`getStageFile`), validation, signing helpers, evidence hashing, and re-exported protocol typed data. No Node builtins. |
 | `@uvp-eth/uvp-client/chain-read` | Typed HTTP client for chain-services' generic `/chain/*` projection reads plus the bigint projection decoders; wire DTOs/structural decoders are single-sourced in `@uvp-eth/chain-read-contract`, failures stay typed (`invalid_config`/`timeout`/`transport`/`http`/`not_found`/`invalid_response`). |
 | `@uvp-eth/uvp-client/server` | Node-only server tooling: server-side `@uvp-eth/compiler` primitives plus file-based evidence hashing. Never imported by `/browser` or `/core`. |
 | `@uvp-eth/uvp-client/browser` | Browser-host client: `createBrowserClient` exposes the same operation set through the injected EIP-1193 wallet (direct or relay); wallet signing primitives, deadline/format derivations, and the stage supplier patch plus dock supplier selection typed-data surfaces — no compiler/env/localStorage/private keys. |
@@ -20,7 +20,7 @@ package produces and reads signals, it never owns orders, sessions, or keys.
 
 There is no root entry and no wildcard export; consumers pick one of the six
 subpaths. ABI, EIP-712 typed data, plan-registration calldata, the HookReady
-decoder, `filePatchHash`, and canonical hashing are single-sourced in
+decoder, `stageFilesHash`, and canonical hashing are single-sourced in
 `@uvp-eth/protocol-bindings`; chain-read wire DTOs are single-sourced in
 `@uvp-eth/chain-read-contract`; Zhixu compilation is single-sourced in
 `@uvp-eth/compiler` (headless and server only). Used-car product DTOs and
@@ -99,8 +99,9 @@ const prepared = prepareOperation({
   `SignalSubmitted` receipt log, and the `HookReady`/`SignalSubmitted` events
   are the authoritative source for callers that only have a transaction hash.
 - `signal.submit` is the existing-order lane: `signalId != 0` is an order
-  signal (first-writer-wins; a duplicate signal is absorbed but its file patch
-  is still applied), `signalId == 0` is a pure stage file patch.
+  signal (first-writer-wins; a duplicate signal absorbs the whole request and
+  does not re-apply files), `signalId == 0` with non-empty `files` is a bare
+  stage file write.
 
 ## Signed writes
 
@@ -108,19 +109,19 @@ All signed writes belong to the client, not to chain-services:
 
 | Operation | Entry | Shape |
 |---|---|---|
-| `plan.register` | `browser` / `headless` / `cli` | 5-field `commitPlan` typed data + calldata (publisher/hooksHash/capabilitiesRoot/supplierBindingsRoot/deadline, with `supplierBindings`), then `finalizePlan` |
+| `plan.register` | `browser` / `headless` / `cli` | 6-field `commitPlan` typed data + calldata (publisher/hooksHash/capabilitiesRoot/supplierBindingsRoot/fileWritersHash/deadline, with `supplierBindings` and `fileWriters`), then `finalizePlan` |
 | `order.trigger` | `core` / `browser` / `headless` / `cli` | `SignalSubmission` with `orderId = 0`, submitter = trigger stage supplier; direct empty signature or relay `UVPStateMachineSignalSubmission` signature |
 | `order.finalize` / `invite.accept` | `browser` / `headless` / `cli` | protocol-bindings UVPOrderFinalize / UVPStageInviteAccept typed data, validated before signing |
 | `invite.create` | `core` / `browser` / `headless` / `cli` | buyer-signed UVPStageInviteCreate terms (`UVPOrderBook/1`, single-sourced in protocol-bindings) |
 | `signal.submit` | `core` / `browser` / `headless` | `UVPStateMachineSignalSubmission` + `submitSignal` calldata: the signer is the source stage's assigned supplier account (SID active) and the delivering account is only the relayer (EOA ECDSA / contract EIP-1271) |
 | `stagePatch.submit` | `core` / `browser` / `headless` | stage supplier patch typed data (supplierId/previousSupplierId/patchNonce) + `applyStageSupplierPatchFor` calldata |
 | `stageDock.select` | `core` / `browser` / `headless` | dock supplier selection typed data (dockId/supplierId/patchNonce) + `selectStageDockSupplierFor` calldata |
-| `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/protocol-bindings` (`UVPZhixuRegistry/1`); headless exposes `publishZhixuRecord`/`publishIdentityClaim` default builders |
+| `registry.write` | `browser` / `headless` / `cli` | registry EIP-712 record, single-sourced in `@uvp-eth/protocol-bindings` (`UVPZhixuRegistry/1`); headless exposes `publishZhixuRecord` default builders |
 
 Signal submission authority is the source stage's **assigned supplier
 account** (plan default supplier, active stage-patch supplier, or the per-order
 dynamic assignment; the SID must be active), resolved on chain from
-`UVPSupplierRegistry.accountOf`; there is no order-level authorization array in
+the single `UVPIdentityRegistry` supplier namespace `accountOf`; there is no order-level authorization array in
 the client operation inputs or calldata. The selected supplier account is
 permanently bound to its SID — there is no account rotation to track.
 
@@ -133,29 +134,30 @@ and are rejected by the state machine once expired.
 
 The browser path never imports the compiler or reads private keys. The headless
 path signs with a local private key. Registry storage/HTTP is not a client
-transport: headless `publishZhixuRecord`/`publishIdentityClaim` build the
+transport: headless `publishZhixuRecord` build the
 registry's own typed data (no local copy), sign it through `registry.write`, and
 hand the signed operation to the caller's submitter.
 
-### Stage file patches
+### Stage files
 
-A stage file patch rides the same `SignalSubmission`: `filePatch` is the
-protocol-bindings `FilePatch` shape and the signed `patchHash` is
-`filePatchHash(filePatch)` (single-sourced in protocol-bindings). `filesDigest`
-is not a client input — the contract computes it from `(planId, orderId,
-filePatch)` after the order id exists.
+Stage files ride the same `SignalSubmission`: `targetStageId` names the stage
+whose opaque `key -> payload` map is written, and `files` is the
+protocol-bindings `StageFile[]` shape. The typed-data `filesHash` is
+`stageFilesHash(files)` (single-sourced in protocol-bindings); the contract
+recomputes the same `keccak256(abi.encode(StageFile[]))` from calldata.
 
-- A standalone pure patch uses `orderId != 0`, `signalId = 0`, non-empty
-  `filePatch.ops`; files are applied to the target stage with
-  `signalStageId = 0`.
-- An order signal may carry a patch too; the state machine absorbs a duplicate
-  signal but still applies the patch independently.
-- Write authority is the writer stage's assigned supplier account plus, for a
-  cross-stage target, its `fileWriters` capability proof.
-- `getStageFile` and `stageFilesHash` read the file resource module through the
-  `FILE_RESOURCE_MODULE_ABI` exported by protocol-bindings. A failed or malformed
-  read throws `StageFileReadError` (`invalid_config`/`read_failed`/`invalid_response`)
-  instead of being reported as an empty file map entry.
+- A bare file write uses `orderId != 0`, `signalId = 0`, non-zero
+  `targetStageId`, and non-empty `files`.
+- An order signal may carry files too; a duplicate signal absorbs the whole
+  request and does not re-apply files.
+- Write authority is the target stage's assigned supplier account or a
+  declared `fileWriters` stage's assigned supplier account. There is no
+  file-writer Merkle proof.
+- `getStageFile` reads the file resource module through the
+  `FILE_RESOURCE_MODULE_ABI` exported by protocol-bindings and returns
+  `{ exists, payload }`. A failed or malformed read throws
+  `StageFileReadError` (`invalid_config`/`read_failed`/`invalid_response`)
+  instead of being reported as an empty entry.
 
 ## Wallet Sessions
 
@@ -240,7 +242,7 @@ Operation commands accept `--mode direct|relay`, `--relay-url <url>`,
 - `order trigger`: submit `submitSignal` with `orderId = 0` from flags
   (`--plan-id`, `--source`, `--stage`, `--signal-name`,
   `--idempotency-key`, optional `--payload-hash`/`--attribution`/
-  `--file-patch`/`--deadline-seconds`). Direct mode sends the empty-signature
+  `--target-stage-id`/`--files`/`--deadline-seconds`). Direct mode sends the empty-signature
   call and reports the generated `orderId` decoded from the receipt.
 - `order finalize` / `invite accept`: sign the validated UVPOrderFinalize /
   UVPStageInviteAccept typed data; delivery stays with the order service.
@@ -355,7 +357,7 @@ recorded in
 `HookReady(bytes32 planId, bytes32 orderId, bytes32 hookId, bytes32 stageId,
 bytes32 hookName)`, `SignalSubmitted(bytes32 planId, bytes32 orderId, ...)`,
 and `submitSignal((planId, orderId, sourceId, signalId, payloadHash,
-idempotencyKey, attribution, filePatch, patchHash, submitter, deadline)
+idempotencyKey, attribution, targetStageId, files, submitter, deadline)
 submission, bytes signature)`. The kit consumes that surface only through
 `@uvp-eth/protocol-bindings`' exported ABI and typed-data field tables — never
 hand-copied here.
@@ -364,8 +366,8 @@ hand-copied here.
 
 - No HTTP server, no callback/job runtime process, and no database.
 - No registry storage or compiler in the browser entry; registry typed-data/record shape stays single-sourced in `@uvp-eth/protocol-bindings` (the client never depends on the registry storage package).
-- No order creation, order-id derivation, or order-level authorization: trigger creation is a `submitSignal` with `orderId = 0` and the state machine generates the order id; signal submission authority is the stage's assigned supplier account, resolved on chain from `UVPSupplierRegistry` (SID must be active).
-- No supplier registration or status writes: `UVPSupplierRegistry` SIDs are
+- No order creation, order-id derivation, or order-level authorization: trigger creation is a `submitSignal` with `orderId = 0` and the state machine generates the order id; signal submission authority is the stage's assigned supplier account, resolved on chain from the `UVPIdentityRegistry` supplier namespace (SID must be active).
+- No supplier registration or status writes: `UVPIdentityRegistry` SIDs are
   self-registered by the supplier account itself and activated/suspended/
   revoked by the platform store's registrar — this client has no such
   operation.

@@ -2,7 +2,7 @@ import { decodeErrorResult, type Hex } from 'viem';
 import {
   FILE_RESOURCE_MODULE_ABI,
   STAGE_PATCH_MODULE_ABI,
-  SUPPLIER_REGISTRY_ABI,
+  IDENTITY_REGISTRY_ABI,
   UVP_STATE_MACHINE_ARTIFACT_ABI,
 } from '@uvp-eth/protocol-bindings';
 import { ValidationError } from './validation.js';
@@ -195,7 +195,7 @@ const ENGINE_REVERT_ABIS = [
   UVP_STATE_MACHINE_ARTIFACT_ABI,
   FILE_RESOURCE_MODULE_ABI,
   STAGE_PATCH_MODULE_ABI,
-  SUPPLIER_REGISTRY_ABI,
+  IDENTITY_REGISTRY_ABI,
 ] as const;
 
 export function decodeEngineRevert(data: Hex): DecodedEngineRevert | undefined {

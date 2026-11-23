@@ -1,13 +1,13 @@
 /**
  * Engine contract read surface: typed direct views of UVPStateMachine,
- * UVPStateMachineLens and UVPSupplierRegistry; ABI single source is
+ * UVPStateMachineLens and UVPIdentityRegistry; ABI single source is
  * @uvp-eth/protocol-bindings and any failed read is an explicit error.
  */
 import { createPublicClient, http, type Address, type Hex } from 'viem';
 import {
   STATE_MACHINE_ABI,
   STATE_MACHINE_LENS_ABI,
-  SUPPLIER_REGISTRY_ABI,
+  IDENTITY_REGISTRY_ABI,
 } from '@uvp-eth/protocol-bindings';
 import type { StageFilesReadClient } from './signal/files.js';
 import {
@@ -46,10 +46,10 @@ export interface StateMachineReadConfig {
   readonly publicClient?: EngineReadClient;
 }
 
-export interface SupplierRegistryReadConfig {
+export interface SupplierCapabilityReadConfig {
   /** Required unless publicClient is supplied (browser hosts inject one). */
   readonly rpcUrl?: string | undefined;
-  readonly supplierRegistryAddress: Address | string;
+  readonly identityRegistryAddress: Address | string;
   readonly publicClient?: EngineReadClient;
 }
 
@@ -237,38 +237,38 @@ export async function effectiveStageAccount(
   return addressOf(value, 'effectiveStageAccount');
 }
 
-/** Supplier registry address configured on the state machine (deployment manifests do not duplicate it). */
-export async function supplierRegistry(config: StateMachineReadConfig): Promise<Address> {
+/** Identity registry address configured on the state machine (deployment manifests do not duplicate it). */
+export async function identityRegistry(config: StateMachineReadConfig): Promise<Address> {
   const read = normalizeStateMachineRead(config);
-  const value = await readOf(read, STATE_MACHINE_ABI, 'supplierRegistry', read.stateMachineAddress, []);
-  return addressOf(value, 'supplierRegistry');
+  const value = await readOf(read, STATE_MACHINE_ABI, 'identityRegistry', read.stateMachineAddress, []);
+  return addressOf(value, 'identityRegistry');
 }
 
 export interface EngineModulesRead {
   readonly stateMachine: Address;
   readonly fileResourceModule: Address;
   readonly stagePatchModule: Address;
-  readonly supplierRegistry: Address;
+  readonly identityRegistry: Address;
 }
 
 export async function readEngineModules(config: StateMachineReadConfig): Promise<EngineModulesRead> {
   const read = normalizeStateMachineRead(config);
-  const [fileResourceModule, stagePatchModule, supplierRegistryAddress] = await Promise.all([
+  const [fileResourceModule, stagePatchModule, identityRegistryAddress] = await Promise.all([
     readOf(read, STATE_MACHINE_ABI, 'fileResourceModule', read.stateMachineAddress, []),
     readOf(read, STATE_MACHINE_ABI, 'stagePatchModule', read.stateMachineAddress, []),
-    readOf(read, STATE_MACHINE_ABI, 'supplierRegistry', read.stateMachineAddress, []),
+    readOf(read, STATE_MACHINE_ABI, 'identityRegistry', read.stateMachineAddress, []),
   ]);
   return {
     stateMachine: read.stateMachineAddress,
     fileResourceModule: addressOf(fileResourceModule, 'fileResourceModule'),
     stagePatchModule: addressOf(stagePatchModule, 'stagePatchModule'),
-    supplierRegistry: addressOf(supplierRegistryAddress, 'supplierRegistry'),
+    identityRegistry: addressOf(identityRegistryAddress, 'identityRegistry'),
   };
 }
 
-export async function readSupplierRegistryOwner(config: SupplierRegistryReadConfig): Promise<Address> {
-  const read = normalizeSupplierRegistryRead(config);
-  const value = await readOf(read, SUPPLIER_REGISTRY_ABI, 'owner', read.supplierRegistryAddress, []);
+export async function readIdentityRegistryOwner(config: SupplierCapabilityReadConfig): Promise<Address> {
+  const read = normalizeSupplierCapabilityRead(config);
+  const value = await readOf(read, IDENTITY_REGISTRY_ABI, 'owner', read.identityRegistryAddress, []);
   return addressOf(value, 'owner');
 }
 
@@ -308,33 +308,33 @@ export async function readPlanStageInfo(
 }
 
 export async function supplierIdOf(
-  config: SupplierRegistryReadConfig,
+  config: SupplierCapabilityReadConfig,
   account: Address | string,
 ): Promise<Hex> {
-  const read = normalizeSupplierRegistryRead(config);
-  const value = await readOf(read, SUPPLIER_REGISTRY_ABI, 'supplierOf', read.supplierRegistryAddress, [
+  const read = normalizeSupplierCapabilityRead(config);
+  const value = await readOf(read, IDENTITY_REGISTRY_ABI, 'supplierOf', read.identityRegistryAddress, [
     addressInput(account, 'account'),
   ]);
   return bytes32Of(value, 'supplierOf');
 }
 
 export async function supplierAccountOf(
-  config: SupplierRegistryReadConfig,
+  config: SupplierCapabilityReadConfig,
   supplierId: Hex | string,
 ): Promise<Address> {
-  const read = normalizeSupplierRegistryRead(config);
-  const value = await readOf(read, SUPPLIER_REGISTRY_ABI, 'accountOf', read.supplierRegistryAddress, [
+  const read = normalizeSupplierCapabilityRead(config);
+  const value = await readOf(read, IDENTITY_REGISTRY_ABI, 'accountOf', read.identityRegistryAddress, [
     bytes32Input(supplierId, 'supplierId'),
   ]);
   return addressOf(value, 'accountOf');
 }
 
 export async function supplierStatusOf(
-  config: SupplierRegistryReadConfig,
+  config: SupplierCapabilityReadConfig,
   supplierId: Hex | string,
 ): Promise<SupplierStatusWord> {
-  const read = normalizeSupplierRegistryRead(config);
-  const value = await readOf(read, SUPPLIER_REGISTRY_ABI, 'statusOf', read.supplierRegistryAddress, [
+  const read = normalizeSupplierCapabilityRead(config);
+  const value = await readOf(read, IDENTITY_REGISTRY_ABI, 'statusOf', read.identityRegistryAddress, [
     bytes32Input(supplierId, 'supplierId'),
   ]);
   const ordinal = uintOf(value, 'statusOf');
@@ -342,20 +342,20 @@ export async function supplierStatusOf(
 }
 
 export async function readSupplierRegistration(
-  config: SupplierRegistryReadConfig,
+  config: SupplierCapabilityReadConfig,
   account: Address | string,
 ): Promise<SupplierRegistrationRead> {
-  const read = normalizeSupplierRegistryRead(config);
+  const read = normalizeSupplierCapabilityRead(config);
   const normalizedAccount = addressInput(account, 'account');
   const supplierId = bytes32Of(
-    await readOf(read, SUPPLIER_REGISTRY_ABI, 'supplierOf', read.supplierRegistryAddress, [normalizedAccount]),
+    await readOf(read, IDENTITY_REGISTRY_ABI, 'supplierOf', read.identityRegistryAddress, [normalizedAccount]),
     'supplierOf',
   );
   if (supplierId === ZERO_BYTES32) {
     return { kind: 'unregistered', account: normalizedAccount };
   }
   const statusOrdinal = uintOf(
-    await readOf(read, SUPPLIER_REGISTRY_ABI, 'statusOf', read.supplierRegistryAddress, [supplierId]),
+    await readOf(read, IDENTITY_REGISTRY_ABI, 'statusOf', read.identityRegistryAddress, [supplierId]),
     'statusOf',
   );
   const status = supplierStatusWordOf(Number(statusOrdinal));
@@ -371,11 +371,11 @@ export async function readSupplierRegistration(
 }
 
 export async function isActiveSupplier(
-  config: SupplierRegistryReadConfig,
+  config: SupplierCapabilityReadConfig,
   supplierId: Hex | string,
 ): Promise<boolean> {
-  const read = normalizeSupplierRegistryRead(config);
-  const value = await readOf(read, SUPPLIER_REGISTRY_ABI, 'isActiveSupplier', read.supplierRegistryAddress, [
+  const read = normalizeSupplierCapabilityRead(config);
+  const value = await readOf(read, IDENTITY_REGISTRY_ABI, 'isActiveSupplier', read.identityRegistryAddress, [
     bytes32Input(supplierId, 'supplierId'),
   ]);
   return boolOf(value, 'isActiveSupplier');
@@ -386,8 +386,8 @@ interface NormalizedStateMachineRead {
   readonly publicClient: EngineReadClient;
 }
 
-interface NormalizedSupplierRegistryRead {
-  readonly supplierRegistryAddress: Address;
+interface NormalizedSupplierCapabilityRead {
+  readonly identityRegistryAddress: Address;
   readonly publicClient: EngineReadClient;
 }
 
@@ -398,9 +398,9 @@ function normalizeStateMachineRead(config: StateMachineReadConfig): NormalizedSt
   };
 }
 
-function normalizeSupplierRegistryRead(config: SupplierRegistryReadConfig): NormalizedSupplierRegistryRead {
+function normalizeSupplierCapabilityRead(config: SupplierCapabilityReadConfig): NormalizedSupplierCapabilityRead {
   return {
-    supplierRegistryAddress: addressConfig(config.supplierRegistryAddress, 'supplierRegistryAddress'),
+    identityRegistryAddress: addressConfig(config.identityRegistryAddress, 'identityRegistryAddress'),
     publicClient: readClient(config.rpcUrl, config.publicClient),
   };
 }
@@ -428,7 +428,7 @@ function readClient(rpcUrl: string | undefined, client: EngineReadClient | undef
 }
 
 async function readOf(
-  read: NormalizedStateMachineRead | NormalizedSupplierRegistryRead,
+  read: NormalizedStateMachineRead | NormalizedSupplierCapabilityRead,
   abi: readonly unknown[],
   functionName: string,
   address: Address,

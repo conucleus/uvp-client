@@ -1,7 +1,7 @@
 /**
  * Signal submission surface: one SignalSubmission shape covers order signals,
  * trigger creation (orderId 0) and pure file patches (signalId 0). The
- * struct/ABI, typed-data field table, filePatchHash and attribution hash are
+ * struct/ABI, typed-data field table, stageFilesHash and attribution hash are
  * single-sourced in @uvp-eth/protocol-bindings; this module only resolves
  * client inputs and builds the direct (empty-signature) call.
  */
@@ -10,11 +10,11 @@ import { onchainSignalId, onchainSourceId } from '@uvp-eth/compiler/browser';
 import {
   buildSubmitSignalCall,
   factAttribution,
-  filePatchHash,
-  type FilePatch,
+  stageFilesHash,
   type SignalAttributionCallStruct,
   type SignalAttributionPayload,
   type SignalCapabilityTableEntry,
+  type StageFile,
   type StageSelectorBindingTableEntry,
   type SubmitSignalCall,
 } from '@uvp-eth/protocol-bindings';
@@ -28,7 +28,7 @@ import { ZERO_BYTES32 } from '../constants.js';
 import { asNonEmptyString } from '../internal.js';
 import type { StateMachineRawLog } from './decode.js';
 
-export { buildSubmitSignalCall, filePatchHash } from '@uvp-eth/protocol-bindings';
+export { buildSubmitSignalCall, stageFilesHash } from '@uvp-eth/protocol-bindings';
 export type {
   SignalSubmissionCallStruct,
   SubmitSignalCall,
@@ -52,7 +52,8 @@ export interface StateMachineSignal {
   readonly payloadHash?: Hex | string;
   readonly idempotencyKey?: Hex | string;
   readonly attribution?: SignalAttributionPayload;
-  readonly filePatch?: FilePatch;
+  readonly targetStageId?: Hex | string;
+  readonly files?: readonly StageFile[];
   readonly deadline?: bigint | number | string;
 }
 
@@ -64,8 +65,9 @@ export interface NormalizedStateMachineSignal {
   readonly payloadHash: Hex;
   readonly idempotencyKey: Hex;
   readonly attribution: SignalAttributionCallStruct;
-  readonly filePatch?: FilePatch;
-  readonly patchHash: Hex;
+  readonly targetStageId: Hex;
+  readonly files: readonly StageFile[];
+  readonly filesHash: Hex;
   readonly deadline?: bigint;
 }
 
@@ -196,8 +198,8 @@ export function buildSubmitStateMachineSignalCall(
       payloadHash: args.payloadHash,
       idempotencyKey: args.idempotencyKey,
       attribution: args.attribution,
-      ...(args.filePatch !== undefined ? { filePatch: args.filePatch } : {}),
-      patchHash: args.patchHash,
+      targetStageId: args.targetStageId,
+      files: args.files,
       submitter,
       deadline,
     },
@@ -262,17 +264,19 @@ export function normalizeSignalSubmission(signal: StateMachineSignal): Normalize
   const payloadHash = signal.payloadHash === undefined
     ? ZERO_BYTES32
     : normalizeBytes32(signal.payloadHash, 'payloadHash');
-  const filePatch = signal.filePatch === undefined || signal.filePatch.ops.length === 0
-    ? undefined
-    : signal.filePatch;
-  const patchHash = filePatch === undefined ? ZERO_BYTES32 : filePatchHash(filePatch);
+  const files = signal.files === undefined || signal.files.length === 0 ? [] : signal.files;
+  const filesHash = stageFilesHash(files);
+  const targetStageId = signal.targetStageId === undefined
+    ? ZERO_BYTES32
+    : normalizeBytes32(signal.targetStageId, 'targetStageId');
   const idempotencyKey = resolveIdempotencyKey(signal.idempotencyKey, {
     planId,
     orderId,
     sourceId,
     signalId,
     payloadHash,
-    patchHash,
+    targetStageId,
+    filesHash,
   });
   return {
     planId,
@@ -282,8 +286,9 @@ export function normalizeSignalSubmission(signal: StateMachineSignal): Normalize
     payloadHash,
     idempotencyKey,
     attribution: normalizeAttribution(signal.attribution, sourceId, signalId),
-    ...(filePatch !== undefined ? { filePatch } : {}),
-    patchHash,
+    targetStageId,
+    files,
+    filesHash,
     ...(signal.deadline === undefined ? {} : { deadline: parseDeadline(signal.deadline, 'deadline') }),
   };
 }
@@ -324,7 +329,8 @@ function resolveIdempotencyKey(
     readonly sourceId: Hex;
     readonly signalId: Hex;
     readonly payloadHash: Hex;
-    readonly patchHash: Hex;
+    readonly targetStageId: Hex;
+    readonly filesHash: Hex;
   },
 ): Hex {
   const text = typeof raw === 'string' ? raw.trim() : raw;
@@ -344,7 +350,7 @@ function resolveIdempotencyKey(
   }
   // Stable per signal identity so retried submissions/deduped watcher requests keep the same key.
   return hashText(
-    `uvp:signal-idempotency:v1:${identity.planId}:${identity.orderId}:${identity.sourceId}:${identity.signalId}:${identity.payloadHash}:${identity.patchHash}`,
+    `uvp:signal-idempotency:v1:${identity.planId}:${identity.orderId}:${identity.sourceId}:${identity.signalId}:${identity.payloadHash}:${identity.targetStageId}:${identity.filesHash}`,
     'idempotencyKey',
   );
 }

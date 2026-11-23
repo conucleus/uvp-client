@@ -34,7 +34,7 @@ import {
   parseDeadline,
   type StateMachineSignal,
 } from './signal/build.js';
-import { buildRegisterSupplierCall } from './supplier-registry.js';
+import { buildRegisterSupplierCall } from './supplier-capability.js';
 import { buildPokeTimerCall } from './timer.js';
 import type { OperationTransport } from './transport.js';
 import {
@@ -333,7 +333,7 @@ export interface SignalSubmitOperationInput {
 export interface SupplierRegisterOperationInput {
   readonly operation: 'supplier.register';
   readonly chainId: number;
-  readonly supplierRegistryAddress: Address | string;
+  readonly identityRegistryAddress: Address | string;
   /** Supplier account that registers itself; registerSupplier requires caller == account. */
   readonly signer: Address | string;
 }
@@ -537,7 +537,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
         signer,
         signatureDelivery: 'direct-only',
         buildCalls: () => [callOf(buildRegisterSupplierCall(
-          { supplierRegistryAddress: input.supplierRegistryAddress, chainId },
+          { identityRegistryAddress: input.identityRegistryAddress, chainId },
           signer,
         ))],
       };
@@ -589,7 +589,8 @@ function prepareSignalSubmission(
     signalId: signal.signalId,
     payloadHash: signal.payloadHash,
     idempotencyKey: signal.idempotencyKey,
-    patchHash: signal.patchHash,
+    targetStageId: signal.targetStageId,
+    files: signal.files,
     attribution: signal.attribution,
     submitter: signer,
     deadline,
@@ -610,8 +611,8 @@ function prepareSignalSubmission(
         payloadHash: signal.payloadHash,
         idempotencyKey: signal.idempotencyKey,
         attribution: signal.attribution,
-        ...(signal.filePatch !== undefined ? { filePatch: signal.filePatch } : {}),
-        patchHash: signal.patchHash,
+        targetStageId: signal.targetStageId,
+        files: signal.files,
         submitter: signer,
         deadline,
         signature,

@@ -5,9 +5,7 @@
  * injected submitter; this module owns no registry persistence.
  */
 import {
-  buildIdentityClaimTypedData,
   buildZhixuRecordTypedData,
-  type IdentityClaimTypedDataInput,
   type ZhixuRecordTypedDataInput,
 } from '@uvp-eth/protocol-bindings';
 import type { TypedDataDefinition } from 'viem';
@@ -15,7 +13,6 @@ import { prepareOperation, signOperation, type SignedOperation } from '../core/o
 import type { TypedDataSigner } from './signers.js';
 
 type ZhixuRecordFields = ZhixuRecordTypedDataInput;
-type IdentityClaimDraft = IdentityClaimTypedDataInput;
 
 export type RegistryRecordSubmitter<TResult> = (signed: SignedOperation) => Promise<TResult>;
 
@@ -34,12 +31,6 @@ export function publishZhixuRecord<TResult>(
   input: RegistryRecordPublishInput<ZhixuRecordFields, TResult>,
 ): Promise<PublishedRegistryRecord<TResult>> {
   return publish(input, buildZhixuRecordTypedData);
-}
-
-export function publishIdentityClaim<TResult>(
-  input: RegistryRecordPublishInput<IdentityClaimDraft, TResult>,
-): Promise<PublishedRegistryRecord<TResult>> {
-  return publish(input, buildIdentityClaimTypedData);
 }
 
 async function publish<TFields, TResult>(

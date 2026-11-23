@@ -4,8 +4,6 @@
  * @uvp-eth/protocol-bindings. No type or digest is redefined here.
  */
 export {
-  FILE_HANDLE_MAX_BYTES,
-  FILE_OP_KIND,
   PLAN_COMMIT_PRIMARY_TYPE,
   PLAN_COMMIT_TYPED_DATA_FIELDS,
   PRODUCT_SUBMIT_DOMAIN_NAME,
@@ -38,15 +36,13 @@ export type {
   BuildSignalSubmissionTypedDataInput,
   BuildStageDockSupplierSelectionTypedDataInput,
   BuildStageSupplierPatchTypedDataInput,
-  FileOp,
-  FileOpKind,
-  FilePatch,
   PlanCommitPayload,
   PlanCommitTypedData,
   ProductSubmitTypedData,
   ProductSubmitTypedDataField,
   SignalAttributionPayload,
   SignalSubmissionTypedData,
+  StageFile,
   StageDockSupplierSelectionPayload,
   StageDockSupplierSelectionTypedData,
   StageSupplierPatchPayload,

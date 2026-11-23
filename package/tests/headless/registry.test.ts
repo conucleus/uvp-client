@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getAddress, recoverTypedDataAddress, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { publishIdentityClaim, publishZhixuRecord } from '../../src/headless/registry.js';
+import { publishZhixuRecord } from '../../src/headless/registry.js';
 import type { SignedOperation } from '../../src/core/operations.js';
 
 function bytes32(suffix: string): Hex {
@@ -62,31 +62,4 @@ describe('headless registry publish default builders', () => {
     expect(await recoverSigner(signed)).toBe(account.address);
   });
 
-  it('signs an identity claim with the protocol-bindings typed data', async () => {
-    const account = privateKeyToAccount(generatePrivateKey());
-    const submitted: SignedOperation[] = [];
-
-    await publishIdentityClaim({
-      fields: {
-        chainId: 31337,
-        wallet: account.address,
-        subject: 'curator-of-record',
-        attestationRefs: ['https://attestations.example/1'],
-      },
-      signer: account,
-      submit: async (signed) => {
-        submitted.push(signed);
-        return signed.signature;
-      },
-    });
-
-    const signed = submitted[0]!;
-    expect(signed.typedData.primaryType).toBe('IdentityClaim');
-    expect(signed.typedData.domain).toMatchObject({ name: 'UVPZhixuRegistry', version: '1' });
-    expect(signed.typedData.message).toMatchObject({
-      subject: 'curator-of-record',
-      attestationRefs: ['https://attestations.example/1'],
-    });
-    expect(await recoverSigner(signed)).toBe(account.address);
-  });
 });

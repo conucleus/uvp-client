@@ -20,6 +20,8 @@ export function planRegistrationFixture(): PlanRegistrationArgs {
     hooksHash: bytes32('03'),
     capabilitiesRoot: bytes32('04'),
     supplierBindingsRoot: bytes32('07'),
+    fileWritersHash: bytes32('08'),
+    fileWriters: [],
     hooks: [{
       hookId: bytes32('0a'),
       stageId: bytes32('0b'),

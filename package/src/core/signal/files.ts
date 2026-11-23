@@ -58,14 +58,12 @@ export interface StageFileKey {
 }
 
 export interface StageFileLookup extends StageFileKey {
-  readonly key: Hex | string;
+  readonly key: string;
 }
 
 export interface StageFileRecord {
   readonly exists: boolean;
-  readonly contentHash: Hex;
-  readonly handle: string;
-  readonly patchHash: Hex;
+  readonly payload: Hex;
 }
 
 export async function fileResourceModule(
@@ -82,29 +80,16 @@ export async function getStageFile(
   lookup: StageFileLookup,
 ): Promise<StageFileRecord> {
   const read = normalizeReadConfig(config);
+  if (typeof lookup.key !== 'string' || lookup.key.length === 0) {
+    throw new StageFileReadError('invalid_config', 'key must be a non-empty string');
+  }
   const value = await readContractOf(read.publicClient, read.fileResourceModuleAddress, FILE_RESOURCE_MODULE_ABI, 'getStageFile', [
     normalizeBytes32Value(lookup.planId, 'planId'),
     normalizeBytes32Value(lookup.orderId, 'orderId'),
     normalizeBytes32Value(lookup.targetStageId, 'targetStageId'),
-    normalizeBytes32Value(lookup.key, 'key'),
+    lookup.key,
   ]);
   return stageFileRecordOf(value);
-}
-
-export async function stageFilesHash(
-  config: StageFilesReadConfig,
-  key: StageFileKey,
-): Promise<Hex> {
-  const read = normalizeReadConfig(config);
-  const value = await readContractOf(read.publicClient, read.fileResourceModuleAddress, FILE_RESOURCE_MODULE_ABI, 'stageFilesHash', [
-    normalizeBytes32Value(key.planId, 'planId'),
-    normalizeBytes32Value(key.orderId, 'orderId'),
-    normalizeBytes32Value(key.targetStageId, 'targetStageId'),
-  ]);
-  if (typeof value !== 'string') {
-    throw invalidResponse('stageFilesHash did not return a bytes32 hex string');
-  }
-  return normalizeBytes32Value(value, 'stageFilesHash');
 }
 
 interface NormalizedStageFilesReadConfig {
@@ -169,19 +154,24 @@ async function readContractOf(
 }
 
 function stageFileRecordOf(value: unknown): StageFileRecord {
-  if (!Array.isArray(value) || value.length !== 4) {
-    throw invalidResponse('getStageFile did not return (exists, contentHash, handle, patchHash)');
+  if (!Array.isArray(value) || value.length !== 2) {
+    throw invalidResponse('getStageFile did not return (exists, payload)');
   }
-  const [exists, contentHash, handle, patchHash] = value as readonly unknown[];
-  if (typeof exists !== 'boolean' || typeof handle !== 'string') {
-    throw invalidResponse('getStageFile returned a non-boolean exists flag or non-string handle');
+  const [exists, payload] = value as readonly unknown[];
+  if (typeof exists !== 'boolean' || typeof payload !== 'string') {
+    throw invalidResponse('getStageFile returned a non-boolean exists flag or non-hex payload');
   }
   return {
     exists,
-    contentHash: normalizeBytes32Value(contentHash, 'contentHash'),
-    handle,
-    patchHash: normalizeBytes32Value(patchHash, 'patchHash'),
+    payload: normalizeHexValue(payload, 'payload'),
   };
+}
+
+function normalizeHexValue(value: string, fieldName: string): Hex {
+  if (!/^0x[0-9a-fA-F]*$/.test(value) || value.length % 2 !== 0) {
+    throw invalidResponse(`${fieldName} is not a hex byte string`);
+  }
+  return value.toLowerCase() as Hex;
 }
 
 function normalizeBytes32Value(value: unknown, fieldName: string): Hex {

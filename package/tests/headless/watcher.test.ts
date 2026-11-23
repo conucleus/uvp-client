@@ -118,7 +118,8 @@ describe('state machine chain watcher', () => {
       signalId: EXEC_MAIN_CMP_ID,
       payloadHash: PAYLOAD_HASH,
       attribution: { sourceId: ZERO_BYTES32_WORD, signalId: ZERO_BYTES32_WORD, stageId: ZERO_BYTES32_WORD, capabilityProof: [] },
-      patchHash: ZERO_BYTES32_WORD,
+      targetStageId: ZERO_BYTES32_WORD,
+      files: [],
       submitter: WALLET_ADDRESS,
     });
     expect(submission.request.args[0].idempotencyKey).toEqual(expect.any(String));

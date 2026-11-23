@@ -1,6 +1,6 @@
 import type { Command } from 'commander';
 import type {
-  FilePatch,
+  StageFile,
   SignalAttributionPayload,
 } from '@uvp-eth/protocol-bindings';
 import { readFile } from 'node:fs/promises';
@@ -114,7 +114,8 @@ export function registerChainCommands(program: Command): void {
     .option('--payload-hash <bytes32>', 'off-chain payload hash')
     .option('--idempotency-key <key>', 'idempotency key; required for trigger creation')
     .option('--attribution <json>', 'fact attribution JSON (sourceId, signalId, stageId, capabilityProof)')
-    .option('--file-patch <json>', 'stage file patch JSON (targetStageId, baseHash, writerStageId, writerProof, ops)')
+    .option('--target-stage-id <bytes32>', 'stage whose file map receives the files')
+    .option('--files <json>', 'stage files JSON array of { key, payload }')
     .option('--deadline-seconds <n>', 'seconds from now for the submission deadline', '3600')
     .option('--private-key-env <name>', 'environment variable containing the callback tx private key', DEFAULT_STATE_MACHINE_PRIVATE_KEY_ENV)
     .option('--dry-run', 'build the submitSignal tx request without broadcasting')
@@ -154,8 +155,9 @@ async function signalFromOptions(options: ChainSignalOptions): Promise<StateMach
     ...(options.attribution !== undefined
       ? { attribution: await readJson<SignalAttributionPayload>(options.attribution, 'attribution') }
       : {}),
-    ...(options.filePatch !== undefined
-      ? { filePatch: await readJson<FilePatch>(options.filePatch, 'file-patch') }
+    ...(options.targetStageId !== undefined ? { targetStageId: options.targetStageId } : {}),
+    ...(options.files !== undefined
+      ? { files: await readJson<readonly StageFile[]>(options.files, 'files') }
       : {}),
   };
 }

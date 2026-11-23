@@ -1,6 +1,6 @@
 /**
  * Engine event decode: typed decoders for the state machine, stage patch, file
- * resource and supplier registry ABIs. Shapes and topics derive from
+ * resource and identity registry ABIs. Shapes and topics derive from
  * @uvp-eth/protocol-bindings; raw event fields stay raw, no derived labels.
  */
 import {
@@ -16,7 +16,7 @@ import {
   FILE_RESOURCE_MODULE_ABI,
   STAGE_PATCH_MODULE_ABI,
   STATE_MACHINE_ABI,
-  SUPPLIER_REGISTRY_ABI,
+  IDENTITY_REGISTRY_ABI,
   UVP_STATE_MACHINE_ARTIFACT_ABI,
   type StateMachineRawLog,
 } from '@uvp-eth/protocol-bindings';
@@ -100,14 +100,14 @@ export type StagePatchEvent = DecodedEvent<
   StageSupplierPatchAppliedArgs
 >;
 
-export type StageFileEventName = 'StageFilePatchApplied';
+export type StageFileEventName = 'StageFileWritten';
 
 export type StageFileEvent = DecodedEvent<
-  'StageFilePatchApplied',
-  EventArgsOf<typeof FILE_RESOURCE_MODULE_ABI, 'StageFilePatchApplied'>
+  'StageFileWritten',
+  EventArgsOf<typeof FILE_RESOURCE_MODULE_ABI, 'StageFileWritten'>
 >;
 
-export type SupplierRegistryEventName = 'SupplierRegistered' | 'SupplierStatusChanged';
+export type SupplierCapabilityEventName = 'SupplierRegistered' | 'SupplierStatusChanged';
 
 export interface SupplierStatusChangedArgs {
   readonly supplierId: Hex;
@@ -116,14 +116,14 @@ export interface SupplierStatusChangedArgs {
   readonly account: Address;
 }
 
-export type SupplierRegistryEvent =
+export type SupplierCapabilityEvent =
   | DecodedEvent<
       'SupplierRegistered',
-      EventArgsOf<typeof SUPPLIER_REGISTRY_ABI, 'SupplierRegistered'>
+      EventArgsOf<typeof IDENTITY_REGISTRY_ABI, 'SupplierRegistered'>
     >
   | DecodedEvent<'SupplierStatusChanged', SupplierStatusChangedArgs>;
 
-export type EngineEvent = StateMachineEvent | StagePatchEvent | StageFileEvent | SupplierRegistryEvent;
+export type EngineEvent = StateMachineEvent | StagePatchEvent | StageFileEvent | SupplierCapabilityEvent;
 
 const STATE_MACHINE_EVENT_NAMES: readonly StateMachineEventName[] = [
   'PlanCommitted',
@@ -136,8 +136,8 @@ const STATE_MACHINE_EVENT_NAMES: readonly StateMachineEventName[] = [
   'StageSupplierAssigned',
 ];
 const STAGE_PATCH_EVENT_NAMES: readonly StagePatchEventName[] = ['StageSupplierPatchApplied'];
-const STAGE_FILE_EVENT_NAMES: readonly StageFileEventName[] = ['StageFilePatchApplied'];
-const SUPPLIER_REGISTRY_EVENT_NAMES: readonly SupplierRegistryEventName[] = [
+const STAGE_FILE_EVENT_NAMES: readonly StageFileEventName[] = ['StageFileWritten'];
+const SUPPLIER_CAPABILITY_EVENT_NAMES: readonly SupplierCapabilityEventName[] = [
   'SupplierRegistered',
   'SupplierStatusChanged',
 ];
@@ -148,9 +148,9 @@ const STATE_MACHINE_TOPICS = eventTopicsOf(
 );
 const STAGE_PATCH_TOPICS = eventTopicsOf(STAGE_PATCH_MODULE_ABI, STAGE_PATCH_EVENT_NAMES);
 const STAGE_FILE_TOPICS = eventTopicsOf(FILE_RESOURCE_MODULE_ABI, STAGE_FILE_EVENT_NAMES);
-const SUPPLIER_REGISTRY_TOPICS = eventTopicsOf(
-  SUPPLIER_REGISTRY_ABI,
-  SUPPLIER_REGISTRY_EVENT_NAMES,
+const SUPPLIER_CAPABILITY_TOPICS = eventTopicsOf(
+  IDENTITY_REGISTRY_ABI,
+  SUPPLIER_CAPABILITY_EVENT_NAMES,
 );
 
 export function isStateMachineEventLog(log: StateMachineRawLog): boolean {
@@ -168,9 +168,9 @@ export function isStageFileEventLog(log: StateMachineRawLog): boolean {
   return topic !== undefined && STAGE_FILE_TOPICS.has(topic);
 }
 
-export function isSupplierRegistryEventLog(log: StateMachineRawLog): boolean {
+export function isSupplierCapabilityEventLog(log: StateMachineRawLog): boolean {
   const topic = topicOf(log);
-  return topic !== undefined && SUPPLIER_REGISTRY_TOPICS.has(topic);
+  return topic !== undefined && SUPPLIER_CAPABILITY_TOPICS.has(topic);
 }
 
 export function decodeStateMachineEvent(log: StateMachineRawLog): StateMachineEvent {
@@ -217,12 +217,12 @@ export function decodeStagePatchEvents(logs: readonly StateMachineRawLog[]): Sta
 
 export function decodeStageFileEvent(log: StateMachineRawLog): StageFileEvent {
   const eventName = STAGE_FILE_TOPICS.get(requiredTopic(log));
-  if (eventName !== 'StageFilePatchApplied') {
+  if (eventName !== 'StageFileWritten') {
     throw unknownEvent('file resource module', log);
   }
-  const decoded = decodeLog(FILE_RESOURCE_MODULE_ABI, 'StageFilePatchApplied', log);
+  const decoded = decodeLog(FILE_RESOURCE_MODULE_ABI, 'StageFileWritten', log);
   return withLog(log, {
-    eventName: 'StageFilePatchApplied',
+    eventName: 'StageFileWritten',
     args: decoded as StageFileEvent['args'],
   });
 }
@@ -231,18 +231,18 @@ export function decodeStageFileEvents(logs: readonly StateMachineRawLog[]): Stag
   return logs.filter(isStageFileEventLog).map(decodeStageFileEvent);
 }
 
-export function decodeSupplierRegistryEvent(log: StateMachineRawLog): SupplierRegistryEvent {
-  const eventName = SUPPLIER_REGISTRY_TOPICS.get(requiredTopic(log));
+export function decodeSupplierCapabilityEvent(log: StateMachineRawLog): SupplierCapabilityEvent {
+  const eventName = SUPPLIER_CAPABILITY_TOPICS.get(requiredTopic(log));
   switch (eventName) {
     case 'SupplierRegistered': {
-      const decoded = decodeLog(SUPPLIER_REGISTRY_ABI, 'SupplierRegistered', log);
+      const decoded = decodeLog(IDENTITY_REGISTRY_ABI, 'SupplierRegistered', log);
       return withLog(log, {
         eventName: 'SupplierRegistered',
-        args: decoded as Extract<SupplierRegistryEvent, { readonly eventName: 'SupplierRegistered' }>['args'],
+        args: decoded as Extract<SupplierCapabilityEvent, { readonly eventName: 'SupplierRegistered' }>['args'],
       });
     }
     case 'SupplierStatusChanged': {
-      const decoded = decodeLog(SUPPLIER_REGISTRY_ABI, 'SupplierStatusChanged', log) as {
+      const decoded = decodeLog(IDENTITY_REGISTRY_ABI, 'SupplierStatusChanged', log) as {
         readonly supplierId: Hex;
         readonly previousStatus: unknown;
         readonly newStatus: unknown;
@@ -261,14 +261,14 @@ export function decodeSupplierRegistryEvent(log: StateMachineRawLog): SupplierRe
       });
     }
     default:
-      throw unknownEvent('supplier registry', log);
+      throw unknownEvent('identity registry supplier events', log);
   }
 }
 
-export function decodeSupplierRegistryEvents(
+export function decodeSupplierCapabilityEvents(
   logs: readonly StateMachineRawLog[],
-): SupplierRegistryEvent[] {
-  return logs.filter(isSupplierRegistryEventLog).map(decodeSupplierRegistryEvent);
+): SupplierCapabilityEvent[] {
+  return logs.filter(isSupplierCapabilityEventLog).map(decodeSupplierCapabilityEvent);
 }
 
 function stateMachineEventOf<K extends StateMachineEventName>(
@@ -380,8 +380,8 @@ const STAGE_SUPPLIER_ASSIGNED_EVENT_ITEM = getAbiItem({
   name: 'StageSupplierAssigned',
 }) as AbiEvent;
 
-export const STAGE_FILE_PATCH_APPLIED_TOPIC = toEventSelector(
-  getAbiItem({ abi: FILE_RESOURCE_MODULE_ABI, name: 'StageFilePatchApplied' }) as AbiEvent,
+export const STAGE_FILE_WRITTEN_TOPIC = toEventSelector(
+  getAbiItem({ abi: FILE_RESOURCE_MODULE_ABI, name: 'StageFileWritten' }) as AbiEvent,
 );
 
 export const SIGNAL_SUBMITTED_TOPIC = toEventSelector(SIGNAL_SUBMITTED_EVENT_ITEM);

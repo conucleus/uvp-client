@@ -6,7 +6,7 @@
 import { readFile } from 'node:fs/promises';
 import type { Command } from 'commander';
 import type {
-  FilePatch,
+  StageFile,
   SignalAttributionPayload,
 } from '@uvp-eth/protocol-bindings';
 import type { OperationInput } from '../../core/operations.js';
@@ -31,7 +31,8 @@ export function registerOrderCommands(program: Command): void {
     .requiredOption('--idempotency-key <key>', 'trigger idempotency key (non-zero; persisted by the caller)')
     .option('--payload-hash <bytes32>', 'off-chain payload hash')
     .option('--attribution <json>', 'fact attribution JSON (sourceId, signalId, stageId, capabilityProof)')
-    .option('--file-patch <json>', 'stage file patch JSON (targetStageId, baseHash, writerStageId, writerProof, ops)')
+    .option('--target-stage-id <bytes32>', 'stage whose file map receives the files')
+    .option('--files <json>', 'stage files JSON array of { key, payload }')
     .option('--deadline-seconds <n>', 'seconds from now for the submission deadline', String(DEFAULT_TRIGGER_DEADLINE_SECONDS))
     .option('--chain-id <id>', 'chain id of the state machine')
     .option('--state-machine <address>', 'UVPStateMachine contract address')
@@ -62,8 +63,9 @@ export function registerOrderCommands(program: Command): void {
           ...(options.attribution !== undefined
             ? { attribution: await readJson<SignalAttributionPayload>(options.attribution, 'attribution') }
             : {}),
-          ...(options.filePatch !== undefined
-            ? { filePatch: await readJson<FilePatch>(options.filePatch, 'filePatch') }
+          ...(options.targetStageId !== undefined ? { targetStageId: options.targetStageId } : {}),
+          ...(options.files !== undefined
+            ? { files: await readJson<readonly StageFile[]>(options.files, 'files') }
             : {}),
         },
         deadline: BigInt(Math.floor(Date.now() / 1_000)) + BigInt(deadlineSeconds),

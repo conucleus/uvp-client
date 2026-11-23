@@ -15,7 +15,7 @@ export * from './operations.js';
 export * from './registration.js';
 export * from './signal/index.js';
 export * from './status-words.js';
-export * from './supplier-registry.js';
+export * from './supplier-capability.js';
 export * from './timer.js';
 export * from './transport.js';
 export * from './typed-data.js';

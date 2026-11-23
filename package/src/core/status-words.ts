@@ -1,7 +1,7 @@
 /**
  * On-chain status words: the ordinal order is the Solidity enum order behind the
  * @uvp-eth/protocol-bindings ABIs (UVPStateMachine.HookStatus via getHookStatus,
- * IUVPSupplierRegistry.SupplierStatus via statusOf); an ordinal outside the
+ * IUVPIdentityRegistry.SupplierStatus via statusOf); an ordinal outside the
  * mapping is the explicit "unknown" word, never a thrown error.
  */
 

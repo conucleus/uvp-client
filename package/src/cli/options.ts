@@ -23,7 +23,8 @@ export interface ChainSignalOptions {
   payloadHash?: string;
   idempotencyKey?: string;
   attribution?: string;
-  filePatch?: string;
+  targetStageId?: string;
+  files?: string;
   deadlineSeconds?: string;
   dryRun?: boolean;
   waitForReceipt?: boolean;
@@ -74,7 +75,8 @@ export interface OrderTriggerOptions extends OperationCliOptions {
   payloadHash?: string;
   idempotencyKey: string;
   attribution?: string;
-  filePatch?: string;
+  targetStageId?: string;
+  files?: string;
   deadlineSeconds?: string;
 }
 
