@@ -12,6 +12,7 @@ import {
   STAGE_SUPPLIER_PATCH_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
   STAGE_PATCH_MODULE_ABI,
+  buildZhixuRecordTypedData,
 } from '@uvp-eth/protocol-bindings';
 import {
   prepareOperation,
@@ -108,12 +109,12 @@ function registryInput(signer: Address): OperationInput {
   return {
     operation: 'registry.write',
     signer,
-    typedData: {
-      domain: { name: 'UVPZhixuRegistry', version: '1', chainId: 31337 },
-      types: { ZhixuRecord: [{ name: 'planId', type: 'bytes32' }] },
-      primaryType: 'ZhixuRecord',
-      message: { planId: bytes32('01') },
-    },
+    typedData: buildZhixuRecordTypedData({
+      chainId: 31337,
+      planId: bytes32('01'),
+      planHash: bytes32('02'),
+      registeredBy: signer,
+    }),
   };
 }
 

@@ -248,6 +248,45 @@ describe('chain read client', () => {
     });
   });
 
+  it('aborts a response body that outlives the request timeout', async () => {
+    const client = createChainReadClient({
+      baseUrl: BASE_URL,
+      timeoutMs: 10,
+      fetcher: (_url, init) => Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => new Promise<string>((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('body aborted')), { once: true });
+        }),
+      }),
+    });
+
+    await expect(client.listOrders()).rejects.toMatchObject({
+      name: 'ChainReadError',
+      code: 'timeout',
+      retryable: true,
+    });
+  });
+
+  it('times out a body reader that never settles even if it ignores the abort signal', async () => {
+    const client = createChainReadClient({
+      baseUrl: BASE_URL,
+      timeoutMs: 10,
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        text: () => new Promise<string>(() => {
+        }),
+      }),
+    });
+
+    await expect(client.listOrders()).rejects.toMatchObject({
+      name: 'ChainReadError',
+      code: 'timeout',
+      retryable: true,
+    });
+  });
+
   it('keeps timeout, transport, and HTTP failures distinct', async () => {
     const timeoutClient = createChainReadClient({
       baseUrl: BASE_URL,

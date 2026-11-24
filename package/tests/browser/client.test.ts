@@ -27,6 +27,8 @@ function mockProvider(account: ReturnType<typeof privateKeyToAccount>): {
     request: async (args) => {
       requests.push(args);
       switch (args.method) {
+        case 'eth_chainId':
+          return '0x7a69';
         case 'eth_signTypedData_v4':
           return account.signTypedData(JSON.parse(String(args.params?.[1])) as TypedDataDefinition);
         case 'eth_sendTransaction':
@@ -126,10 +128,39 @@ describe('browser and headless operation clients', () => {
     expect(result.txHashes).toEqual([bytes32('aa'), bytes32('aa')]);
     expect(requests.map((request) => request.method)).toEqual([
       'eth_signTypedData_v4',
+      'eth_chainId',
       'eth_sendTransaction',
       'eth_sendTransaction',
     ]);
-    const send = requests[1]?.params as readonly [{ readonly from: string }];
+    const send = requests[2]?.params as readonly [{ readonly from: string }];
     expect(send[0].from).toBe(account.address);
+  });
+
+  it('does not broadcast a direct browser operation when the wallet is on another chain', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const requests: ProviderRequest[] = [];
+    const provider: Eip1193Provider = {
+      request: async (args) => {
+        requests.push(args);
+        switch (args.method) {
+          case 'eth_chainId':
+            return '0x14a34';
+          case 'eth_signTypedData_v4':
+            return account.signTypedData(JSON.parse(String(args.params?.[1])) as TypedDataDefinition);
+          case 'eth_sendTransaction':
+            return bytes32('bb');
+          default:
+            throw new Error(`unexpected provider method ${args.method}`);
+        }
+      },
+    };
+    const browser = createBrowserClient({ provider, signer: account.address, mode: 'direct' });
+
+    await expect(browser.execute(planInput(account.address))).rejects.toMatchObject({
+      operation: 'plan.register',
+      code: 'chain_mismatch',
+      retryable: false,
+    });
+    expect(requests.some((request) => request.method === 'eth_sendTransaction')).toBe(false);
   });
 });

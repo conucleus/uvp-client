@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { encodeAbiParameters, type Hex } from 'viem';
+import { generatePrivateKey } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import { HOOK_READY_TOPIC } from '@uvp-eth/protocol-bindings';
 import { main } from '../../src/cli/index.js';
@@ -45,6 +46,32 @@ describe('executor CLI', () => {
       expect(await readFile(envFile, 'utf8')).toContain('UVP_ETH_DEPLOYER_PRIVATE_KEY=0x');
     } finally {
       console.log = originalLog;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('registry signing gate', () => {
+  it('refuses to sign a non-ZhixuRecord typed data file before touching the key', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'uvp-cli-registry-'));
+    const typedDataPath = join(dir, 'typed-data.json');
+    const envName = 'UVP_CLI_REGISTRY_SIGNING_TEST_KEY';
+    process.env[envName] = generatePrivateKey();
+    try {
+      await writeFile(typedDataPath, JSON.stringify({
+        domain: { name: 'UVPStateMachine', version: '0.20', chainId: 31337 },
+        types: { UVPStateMachineSignal: [{ name: 'submitter', type: 'address' }] },
+        primaryType: 'UVPStateMachineSignal',
+        message: { submitter: '0x0000000000000000000000000000000000000001' },
+      }));
+
+      await expect(main([
+        'node', 'uvp-client', 'registry', 'sign',
+        '--typed-data', typedDataPath,
+        '--private-key-env', envName,
+      ])).rejects.toThrow(/primary-type/u);
+    } finally {
+      delete process.env[envName];
       await rm(dir, { recursive: true, force: true });
     }
   });

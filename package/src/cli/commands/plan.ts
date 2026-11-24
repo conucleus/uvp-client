@@ -19,7 +19,7 @@ import {
   parseSubmitMode,
   signWith,
 } from '../operation.js';
-import { stringifyForTransport } from '../output.js';
+import { stringifyForCli, stringifyForTransport } from '../output.js';
 
 const PLAN_PRIVATE_KEY_ENV = 'UVP_ETH_DEPLOYER_PRIVATE_KEY';
 
@@ -50,7 +50,7 @@ export function registerPlanCommands(program: Command): void {
           planId: compiled.planId,
         })}\n`, 'utf8');
       }
-      console.log(stringifyForTransport({ plan: summary, ...(options.out ? { out: resolve(options.out) } : {}) }));
+      console.log(stringifyForCli({ plan: summary, ...(options.out ? { out: resolve(options.out) } : {}) }));
     });
 
   plan
@@ -87,7 +87,7 @@ export function registerPlanCommands(program: Command): void {
 
       if (options.dryRun) {
         const signed = await signWith(context, input);
-        console.log(stringifyForTransport({
+        console.log(stringifyForCli({
           plan: {
             planId: compiled.planId,
             operation: signed.operation,
@@ -102,6 +102,6 @@ export function registerPlanCommands(program: Command): void {
       }
 
       const result = await executeCliOperation(input, options, PLAN_PRIVATE_KEY_ENV);
-      console.log(stringifyForTransport({ plan: { planId: compiled.planId, ...result } }));
+      console.log(stringifyForCli({ plan: { planId: compiled.planId, ...result } }));
     });
 }

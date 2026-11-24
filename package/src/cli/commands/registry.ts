@@ -9,7 +9,7 @@ import type { TypedDataDefinition } from 'viem';
 import { ValidationError } from '../../core/validation.js';
 import { cliOperationContext, signWith } from '../operation.js';
 import type { RegistrySignOptions } from '../options.js';
-import { stringifyForTransport } from '../output.js';
+import { stringifyForCli } from '../output.js';
 
 const REGISTRY_PRIVATE_KEY_ENV = 'UVP_EXECUTOR_PRIVATE_KEY';
 
@@ -29,7 +29,7 @@ export function registerRegistryCommands(program: Command): void {
         signer: context.signer.address,
         typedData,
       });
-      console.log(stringifyForTransport({
+      console.log(stringifyForCli({
         operation: signed.operation,
         chainId: signed.chainId,
         signer: signed.signer,

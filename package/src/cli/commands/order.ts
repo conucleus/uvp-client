@@ -13,7 +13,7 @@ import type { OperationInput } from '../../core/operations.js';
 import { parsePositiveInteger, ValidationError } from '../../core/validation.js';
 import type { OrderTriggerOptions } from '../options.js';
 import { cliOperationContext, executeCliOperation } from '../operation.js';
-import { stringifyForTransport } from '../output.js';
+import { stringifyForCli } from '../output.js';
 
 const ORDER_PRIVATE_KEY_ENV = 'UVP_EXECUTOR_PRIVATE_KEY';
 const DEFAULT_TRIGGER_DEADLINE_SECONDS = 3_600;
@@ -71,7 +71,7 @@ export function registerOrderCommands(program: Command): void {
         deadline: BigInt(Math.floor(Date.now() / 1_000)) + BigInt(deadlineSeconds),
       };
       const result = await executeCliOperation(input, options, ORDER_PRIVATE_KEY_ENV);
-      console.log(stringifyForTransport({ order: options.dryRun ? { mode: context.mode, ...result } : result }));
+      console.log(stringifyForCli({ order: options.dryRun ? { mode: context.mode, ...result } : result }));
     });
 }
 

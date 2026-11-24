@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { stringifyForTransport } from '../output.js';
+import { stringifyForCli } from '../output.js';
 import { ValidationError } from '../../core/validation.js';
 import {
   addressFromPrivateKey,
@@ -30,7 +30,7 @@ export function registerWalletCommands(program: Command): void {
         addressEnv: options.addressEnv,
         ...(options.overwrite ? { overwrite: true } : {}),
       });
-      console.log(stringifyForTransport({
+      console.log(stringifyForCli({
         wallet: {
           address: result.address,
           envFile: result.envFile,
@@ -50,7 +50,7 @@ export function registerWalletCommands(program: Command): void {
       if (!privateKey) {
         throw new ValidationError(`missing private key env var ${options.privateKeyEnv}`);
       }
-      console.log(stringifyForTransport({
+      console.log(stringifyForCli({
         wallet: {
           address: addressFromPrivateKey(privateKey, options.privateKeyEnv),
           privateKeyEnv: options.privateKeyEnv,
@@ -65,6 +65,6 @@ export function registerWalletCommands(program: Command): void {
     .option('--network <name>', 'testnet name', 'base-sepolia')
     .option('--address <address>', 'optional address to fund')
     .action((options: FaucetInfoOptions) => {
-      console.log(stringifyForTransport({ faucet: getFaucetInfo(options.network, options.address) }));
+      console.log(stringifyForCli({ faucet: getFaucetInfo(options.network, options.address) }));
     });
 }

@@ -47,6 +47,7 @@ export function createHeadlessClient(options: HeadlessClientOptions): HeadlessCl
       },
       transport: createDirectTransport({
         submitter: {
+          readChainId: () => wallet.getChainId(),
           sendCall: async (call): Promise<Hex> => wallet.sendTransaction({
             account,
             to: call.to,

@@ -153,67 +153,71 @@ export function createChainReadClient(
       controller.abort();
     }, timeoutMs);
 
-    let response: ChainReadHttpResponse;
     try {
-      response = await fetcher(`${baseUrl}${pathname}`, {
-        method: "GET",
-        headers: { accept: "application/json" },
-        signal: controller.signal,
-      });
-    } catch (error) {
-      if (timedOut) {
+      let response: ChainReadHttpResponse;
+      try {
+        response = await fetcher(`${baseUrl}${pathname}`, {
+          method: "GET",
+          headers: { accept: "application/json" },
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (timedOut) {
+          throw timeoutError(pathname, timeoutMs, error);
+        }
         throw new ChainReadError(
-          "timeout",
-          `chain read timed out after ${timeoutMs}ms: GET ${pathname}`,
+          "transport",
+          `chain read transport failed: GET ${pathname}`,
           { retryable: true, cause: error },
         );
       }
-      throw new ChainReadError(
-        "transport",
-        `chain read transport failed: GET ${pathname}`,
-        { retryable: true, cause: error },
-      );
+
+      if (response.status === 404) {
+        throw new ChainReadError(
+          "not_found",
+          `chain read resource was not found: GET ${pathname}`,
+          { status: 404, retryable: false },
+        );
+      }
+
+      let text: string;
+      try {
+        text = await readBody(response, controller.signal);
+      } catch (error) {
+        if (timedOut) {
+          throw timeoutError(pathname, timeoutMs, error);
+        }
+        throw new ChainReadError(
+          "transport",
+          `chain read response body could not be read: GET ${pathname}`,
+          { retryable: true, cause: error },
+        );
+      }
+      if (timedOut) {
+        throw timeoutError(pathname, timeoutMs);
+      }
+
+      if (!response.ok) {
+        const serverError = serverErrorCode(text);
+        throw new ChainReadError(
+          "http",
+          `chain read failed with HTTP ${response.status}` +
+            `${serverError === undefined ? "" : ` (${serverError})`}: GET ${pathname}`,
+          { status: response.status, retryable: response.status >= 500 },
+        );
+      }
+
+      try {
+        return JSON.parse(text) as unknown;
+      } catch (error) {
+        throw new ChainReadError(
+          "invalid_response",
+          `chain read returned invalid JSON: GET ${pathname}`,
+          { retryable: false, cause: error },
+        );
+      }
     } finally {
       clearTimeout(timer);
-    }
-
-    if (response.status === 404) {
-      throw new ChainReadError(
-        "not_found",
-        `chain read resource was not found: GET ${pathname}`,
-        { status: 404, retryable: false },
-      );
-    }
-
-    let text: string;
-    try {
-      text = await response.text();
-    } catch (error) {
-      throw new ChainReadError(
-        "transport",
-        `chain read response body could not be read: GET ${pathname}`,
-        { retryable: true, cause: error },
-      );
-    }
-
-    if (!response.ok) {
-      const serverError = serverErrorCode(text);
-      throw new ChainReadError(
-        "http",
-        `chain read failed with HTTP ${response.status}` +
-          `${serverError === undefined ? "" : ` (${serverError})`}: GET ${pathname}`,
-        { status: response.status, retryable: response.status >= 500 },
-      );
-    }
-
-    try {
-      return JSON.parse(text) as unknown;
-    } catch (error) {
-      throw new ChainReadError(
-        "invalid_response",
-        `chain read returned invalid JSON: GET ${pathname}`,
-        { retryable: false, cause: error },
-      );
     }
   }
 
@@ -290,6 +294,34 @@ function parseWireResponse<TValue>(
 }
 
 const fetchChainRead: ChainReadFetcher = (url, init) => fetch(url, init);
+
+function readBody(response: ChainReadHttpResponse, signal: AbortSignal): Promise<string> {
+  if (signal.aborted) {
+    return Promise.reject(new Error("response body read aborted"));
+  }
+  return new Promise<string>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error("response body read aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    response.text().then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function timeoutError(pathname: string, timeoutMs: number, cause?: unknown): ChainReadError {
+  return new ChainReadError(
+    "timeout",
+    `chain read timed out after ${timeoutMs}ms (request or response body): GET ${pathname}`,
+    cause === undefined ? { retryable: true } : { retryable: true, cause },
+  );
+}
 
 function normalizeBaseUrl(raw: string): string {
   const value = raw.trim();

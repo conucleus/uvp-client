@@ -11,7 +11,8 @@ import {
   type StateMachinePollResult,
   type StateMachineSignal,
 } from '../../headless/watcher/index.js';
-import { chainPollExecutionFailed, stringifyForTransport } from '../output.js';
+import { chainPollExecutionFailed, stringifyForCli } from '../output.js';
+import { redactRpcUrlsInText } from '../../core/redact.js';
 import {
   waitForShutdown,
   type ChainSignalOptions,
@@ -49,7 +50,7 @@ export function registerChainCommands(program: Command): void {
       const { watcher, storage, stateLock } = await buildStateMachineWatcher(options, watchCallbacks());
       try {
         const poll = await watcher.pollOnce();
-        console.log(stringifyForTransport({ watcher: watcher.describe(), storage, poll }));
+        console.log(stringifyForCli({ watcher: watcher.describe(), storage, poll }));
         if (chainPollExecutionFailed(poll)) {
           process.exitCode = 1;
         }
@@ -81,7 +82,7 @@ export function registerChainCommands(program: Command): void {
     .action(async (options: ChainWatchOptions) => {
       const { watcher, storage, stateLock } = await buildStateMachineWatcher(options, watchCallbacks());
       try {
-        console.log(stringifyForTransport({ watcher: watcher.describe(), storage }));
+        console.log(stringifyForCli({ watcher: watcher.describe(), storage }));
         const handle = await watcher.start();
         try {
           await Promise.race([
@@ -132,7 +133,7 @@ export function registerChainCommands(program: Command): void {
         ...(options.deadlineSeconds !== undefined ? { deadlineSeconds: options.deadlineSeconds } : {}),
         ...(options.waitForReceipt !== undefined ? { waitForReceipt: options.waitForReceipt } : {}),
       }, signal);
-      console.log(stringifyForTransport({ stateMachineSignal: result }));
+      console.log(stringifyForCli({ stateMachineSignal: result }));
     });
 }
 
@@ -179,13 +180,13 @@ async function readJson<T>(path: string, description: string): Promise<T> {
 function watchCallbacks(): Parameters<typeof buildStateMachineWatcher>[1] {
   return {
     onPoll: (poll: StateMachinePollResult) => {
-      console.log(stringifyForTransport({ poll }));
+      console.log(stringifyForCli({ poll }));
     },
     onError: (error: unknown) => {
-      console.error(error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+      console.error(redactRpcUrlsInText(error instanceof Error ? `${error.name}: ${error.message}` : String(error)));
     },
     onWarning: (message: string) => {
-      console.error(message);
+      console.error(redactRpcUrlsInText(message));
     },
   };
 }

@@ -5,7 +5,7 @@
  */
 import type { Command } from 'commander';
 import { runExecutorDoctor } from '../../headless/doctor.js';
-import { stringifyForTransport } from '../output.js';
+import { stringifyForCli } from '../output.js';
 import { parsePositiveInteger } from '../../core/validation.js';
 import type { DoctorOptions } from '../options.js';
 
@@ -30,7 +30,7 @@ export function registerDoctorCommand(program: Command): void {
         ...(options.privateKeyEnv ? { privateKeyEnv: options.privateKeyEnv } : {}),
         ...(options.timeoutMs ? { timeoutMs: parsePositiveInteger(options.timeoutMs, 'timeoutMs') } : {}),
       });
-      console.log(stringifyForTransport(report));
+      console.log(stringifyForCli(report));
       if (!report.ok) {
         process.exitCode = 1;
       }

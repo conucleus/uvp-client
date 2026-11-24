@@ -14,6 +14,10 @@ export {
   STAGE_DOCK_SUPPLIER_SELECTION_TYPED_DATA_FIELDS,
   STAGE_SUPPLIER_PATCH_PRIMARY_TYPE,
   STAGE_SUPPLIER_PATCH_TYPED_DATA_FIELDS,
+  ZHIXU_RECORD_PRIMARY_TYPE,
+  ZHIXU_RECORD_TYPED_DATA_FIELDS,
+  ZHIXU_REGISTRY_DOMAIN_NAME,
+  ZHIXU_REGISTRY_DOMAIN_VERSION,
   buildDerivedSignalTypedData,
   buildPlanCommitTypedData,
   buildSignalSubmissionTypedData,
@@ -51,4 +55,5 @@ export type {
   UVPOrderFinalizeTypedData,
   UVPStageInviteAcceptTypedData,
   UVPStageInviteCreateTypedData,
+  ZhixuRegistryTypedDataField,
 } from '@uvp-eth/protocol-bindings';

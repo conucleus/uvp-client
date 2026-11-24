@@ -5,7 +5,7 @@ import {
   type Hex,
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { STATE_MACHINE_ABI } from '@uvp-eth/protocol-bindings';
+import { STATE_MACHINE_ABI, buildZhixuRecordTypedData } from '@uvp-eth/protocol-bindings';
 import { prepareOperation, signOperation } from '../../src/core/operations.js';
 import {
   createDirectTransport,
@@ -37,6 +37,19 @@ function txHash(suffix: string): Hex {
   return bytes32(suffix);
 }
 
+function registryOperation(account: Address) {
+  return {
+    operation: 'registry.write' as const,
+    signer: account,
+    typedData: buildZhixuRecordTypedData({
+      chainId: 31337,
+      planId: bytes32('01'),
+      planHash: bytes32('02'),
+      registeredBy: account,
+    }),
+  };
+}
+
 describe('direct transport', () => {
   it('broadcasts the signed calls in order and reports every tx hash', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
@@ -44,6 +57,7 @@ describe('direct transport', () => {
     const sent: DirectCall[] = [];
     const transport = createDirectTransport({
       submitter: {
+        readChainId: async () => 31337,
         sendCall: async (call) => {
           sent.push(call);
           return txHash(`a${sent.length}`);
@@ -67,20 +81,33 @@ describe('direct transport', () => {
     expect(sent.map((call) => call.from)).toEqual([account.address, account.address]);
   });
 
+  it('refuses to broadcast when the direct submitter reports another chain, before sending anything', async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const signed = await signOperation(prepareOperation(planOperation(account.address)), account);
+    let sent = 0;
+    const transport = createDirectTransport({
+      submitter: {
+        readChainId: async () => 84532,
+        sendCall: async () => {
+          sent += 1;
+          return txHash('f1');
+        },
+      },
+    });
+
+    await expect(transport.submit(signed)).rejects.toMatchObject({
+      operation: 'plan.register',
+      code: 'chain_mismatch',
+      retryable: false,
+    });
+    expect(sent).toBe(0);
+  });
+
   it('refuses to deliver an operation that has no chain call', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
-    const signed = await signOperation(prepareOperation({
-      operation: 'registry.write',
-      signer: account.address,
-      typedData: {
-        domain: { name: 'UVPZhixuRegistry', version: '1', chainId: 31337 },
-        types: { ZhixuRecord: [{ name: 'planId', type: 'bytes32' }] },
-        primaryType: 'ZhixuRecord',
-        message: { planId: bytes32('01') },
-      },
-    }), account);
+    const signed = await signOperation(prepareOperation(registryOperation(account.address)), account);
     const transport = createDirectTransport({
-      submitter: { sendCall: async () => txHash('a1') },
+      submitter: { readChainId: async () => 31337, sendCall: async () => txHash('a1') },
     });
 
     await expect(transport.submit(signed)).rejects.toMatchObject({
@@ -96,6 +123,7 @@ describe('direct transport', () => {
     let sent = 0;
     const transport = createDirectTransport({
       submitter: {
+        readChainId: async () => 31337,
         sendCall: async () => {
           sent += 1;
           if (sent === 2) {
@@ -121,6 +149,7 @@ describe('direct transport', () => {
     let sent = 0;
     const transport = createDirectTransport({
       submitter: {
+        readChainId: async () => 31337,
         sendCall: async () => {
           sent += 1;
           if (sent === 2) {
@@ -156,6 +185,7 @@ describe('direct transport', () => {
     const transport = createDirectTransport({
       sender: sender.address,
       submitter: {
+        readChainId: async () => 31337,
         sendCall: async (call) => {
           sent.push(call);
           return txHash('d1');

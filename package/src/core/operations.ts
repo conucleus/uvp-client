@@ -34,6 +34,7 @@ import {
   parseDeadline,
   type StateMachineSignal,
 } from './signal/build.js';
+import { assertRegistryTypedDataForSigning } from './registry-signing.js';
 import { buildRegisterSupplierCall } from './supplier-capability.js';
 import { buildPokeTimerCall } from './timer.js';
 import type { OperationTransport } from './transport.js';
@@ -111,6 +112,7 @@ export interface OperationResult {
 export type OperationErrorCode =
   | 'unsupported_delivery'
   | 'signer_mismatch'
+  | 'chain_mismatch'
   | 'invalid_signature'
   | 'broadcast_failed'
   | 'relay_unreachable'
@@ -128,6 +130,7 @@ export interface OperationErrorInput {
 const RETRYABLE: Readonly<Record<OperationErrorCode, boolean>> = {
   unsupported_delivery: false,
   signer_mismatch: false,
+  chain_mismatch: false,
   invalid_signature: false,
   broadcast_failed: false,
   relay_unreachable: true,
@@ -518,6 +521,7 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
 
     case 'registry.write': {
       const signer = normalizeAddressChecksummed(input.signer, 'signer');
+      assertRegistryTypedDataForSigning(input.typedData, signer);
       const chainId = chainIdOfTypedData(input.typedData, 'registry.write');
       return {
         operation: 'registry.write',

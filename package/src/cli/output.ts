@@ -4,6 +4,12 @@
  * scan errors and failed/dead-letter jobs make the process exit non-zero).
  */
 import type { ClassifiedExecutorKitError } from '../core/errors.js';
+import { redactRpcUrlsInText } from '../core/redact.js';
+
+/** CLI stdout adapter: same bigint-safe JSON, with RPC credentials/keys redacted. */
+export function stringifyForCli(value: unknown): string {
+  return redactRpcUrlsInText(stringifyForTransport(value));
+}
 
 export function stringifyForTransport(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) => {
@@ -14,7 +20,11 @@ export function stringifyForTransport(value: unknown): string {
   });
 }
 
-const BENIGN_SCAN_OUTCOME_ERROR_KINDS = new Set(['missing_handler', 'duplicate_signal']);
+const BENIGN_SCAN_OUTCOME_ERROR_KINDS = new Set([
+  'missing_handler',
+  'duplicate_signal',
+  'duplicate_trigger_key',
+]);
 
 export function chainPollExecutionFailed(poll: {
   readonly results?: readonly {

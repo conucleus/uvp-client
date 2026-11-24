@@ -69,6 +69,7 @@ function browserTransport(
   }
   return createDirectTransport({
     submitter: {
+      readChainId: () => readProviderChainId(options.provider),
       sendCall: async (call): Promise<Hex> => sendProviderTransaction(options.provider, {
         from: signer,
         to: call.to,
@@ -76,4 +77,12 @@ function browserTransport(
       }),
     },
   });
+}
+
+async function readProviderChainId(provider: Eip1193Provider): Promise<number> {
+  const raw = await provider.request({ method: 'eth_chainId' });
+  if (typeof raw !== 'string' || !/^0x[0-9a-f]+$/i.test(raw)) {
+    throw new ValidationError('wallet returned an invalid chain id');
+  }
+  return Number(BigInt(raw));
 }

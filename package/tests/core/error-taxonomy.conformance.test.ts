@@ -79,6 +79,7 @@ function attrsForExecutorKit(code: string): TaxonomyErrorEntry & Record<string, 
 const KIND_TO_TAXONOMY_CODE: Readonly<Record<ExecutorKitErrorKind, string>> = {
   unauthorized: 'unauthorized',
   duplicate_signal: 'duplicate_signal',
+  duplicate_trigger_key: 'duplicate_trigger_key',
   rpc_network: 'rpc_network',
   insufficient_funds: 'insufficient_funds',
   nonce_conflict: 'nonce_conflict',
@@ -91,6 +92,7 @@ const KIND_TO_TAXONOMY_CODE: Readonly<Record<ExecutorKitErrorKind, string>> = {
 const KIND_PROBES: Readonly<Record<ExecutorKitErrorKind, () => { readonly kind: ExecutorKitErrorKind; readonly retryable: boolean }>> = {
   unauthorized: () => classifyExecutorKitError(new CodedExecutorKitError('UNAUTHORIZED', 'AccessControlUnauthorizedAccount')),
   duplicate_signal: () => classifyExecutorKitError(new Error('execution reverted: SignalAlreadyExists()')),
+  duplicate_trigger_key: () => classifyExecutorKitError(new Error('execution reverted: DuplicateTriggerKey(0x01, 0x02, 0x03)')),
   rpc_network: () => classifyExecutorKitError(new Error('fetch failed')),
   insufficient_funds: () => classifyExecutorKitError(new Error('insufficient funds for gas * price + value')),
   nonce_conflict: () => classifyExecutorKitError(new Error('nonce too low')),
@@ -108,7 +110,7 @@ describe('executor-kit classification completeness against the taxonomy', () => 
       expect(classified.retryable, `${kind} -> ${code}.retryable`).toBe(attrs.retryable);
       expect(typeof attrs.dead_letter, `${kind} -> ${code}.dead_letter`).toBe('boolean');
     }
-    expect(Object.keys(KIND_TO_TAXONOMY_CODE)).toHaveLength(9);
+    expect(Object.keys(KIND_TO_TAXONOMY_CODE)).toHaveLength(10);
   });
 
   it('can reach every kind through the real classifier (no dead taxonomy entries)', () => {
@@ -215,7 +217,7 @@ describe('executor-kit classification completeness against the taxonomy', () => 
       .filter((entry) => entry.producers.includes('executor-kit'))
       .filter((entry) => attrsForExecutorKit(entry.code).benign_scan_outcome === true)
       .map((entry) => entry.code);
-    expect(benignCodes.sort()).toEqual(['duplicate_signal', 'missing_handler']);
+    expect(benignCodes.sort()).toEqual(['duplicate_signal', 'duplicate_trigger_key', 'missing_handler']);
   });
 });
 
@@ -227,6 +229,7 @@ describe('executor-kit classification consistency against the taxonomy', () => {
     { code: 'insufficient_funds', run: () => classifyExecutorKitError(new Error('insufficient funds for gas * price + value')) },
     { code: 'duplicate_signal', run: () => classifyExecutorKitError(new Error('Call revert exception: execution reverted: SignalAlreadyExists()')) },
     { code: 'duplicate_signal', run: () => classifyExecutorKitError(new CodedExecutorKitError('DUPLICATE_SIGNAL', 'signal already exists')) },
+    { code: 'duplicate_trigger_key', run: () => classifyExecutorKitError(new Error('Call revert exception: execution reverted: DuplicateTriggerKey()')) },
     { code: 'nonce_conflict', run: () => classifyExecutorKitError(new Error('replacement transaction underpriced')) },
     { code: 'nonce_conflict', run: () => classifyExecutorKitError(new Error('already known')) },
     { code: 'rpc_network', run: () => classifyExecutorKitError(new CodedExecutorKitError('RPC_NETWORK', 'connect ECONNREFUSED 127.0.0.1:8545')) },
@@ -257,6 +260,7 @@ describe('executor-kit classification consistency against the taxonomy', () => {
       ['nonce_conflict', true],
       ['rpc_network', true],
       ['duplicate_signal', false],
+      ['duplicate_trigger_key', false],
       ['unauthorized', false],
       ['missing_handler', false],
       ['malformed_payload', false],
@@ -274,7 +278,7 @@ describe('executor-kit classification consistency against the taxonomy', () => {
 
 describe('executor-kit benign scan outcomes against the taxonomy', () => {
   it('exits success for exactly the taxonomy-benign kinds', () => {
-    const benignKinds = ['missing_handler', 'duplicate_signal'];
+    const benignKinds = ['missing_handler', 'duplicate_signal', 'duplicate_trigger_key'];
     for (const kind of benignKinds) {
       expect(
         chainPollExecutionFailed({ results: [{ error: { kind } }] }),
@@ -285,7 +289,7 @@ describe('executor-kit benign scan outcomes against the taxonomy', () => {
       .filter((entry) => entry.producers.includes('executor-kit'))
       .filter((entry) => attrsForExecutorKit(entry.code).benign_scan_outcome === true)
       .map((entry) => entry.code);
-    expect(benignCodes.sort()).toEqual(['duplicate_signal', 'missing_handler']);
+    expect(benignCodes.sort()).toEqual(['duplicate_signal', 'duplicate_trigger_key', 'missing_handler']);
     for (const kind of ['rpc_network', 'insufficient_funds', 'unauthorized', 'unknown', 'validation_failure'] as const) {
       expect(
         chainPollExecutionFailed({ results: [{ error: { kind } }] }),

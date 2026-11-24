@@ -34,6 +34,8 @@ export interface DirectCall {
 }
 
 export interface DirectCallSubmitter {
+  /** Chain id reported by the RPC/provider that will broadcast the call. */
+  readChainId(): Promise<number>;
   sendCall(call: DirectCall): Promise<Hex>;
 }
 
@@ -68,6 +70,15 @@ export function createDirectTransport(config: DirectTransportConfig): OperationT
           operation: signed.operation,
           code: 'signer_mismatch',
           message: `${signed.operation} is a direct-empty submission: sender ${sender} must equal signer ${signed.signer}`,
+        });
+      }
+      const targetChainId = await readTargetChainId(config.submitter, signed);
+      if (targetChainId !== signed.chainId) {
+        throw new OperationError({
+          operation: signed.operation,
+          code: 'chain_mismatch',
+          message: `${signed.operation} is signed for chain ${signed.chainId} but the direct submitter`
+            + ` reports chain ${targetChainId}; nothing was broadcast`,
         });
       }
       const txHashes: Hex[] = [];
@@ -253,6 +264,28 @@ function invalidRelayResponse(signed: SignedOperation, endpoint: string, detail:
     code: 'invalid_relay_response',
     message: `relay ${endpoint} response for ${signed.operation}: ${detail}`,
   });
+}
+
+async function readTargetChainId(submitter: DirectCallSubmitter, signed: SignedOperation): Promise<number> {
+  let chainId: unknown;
+  try {
+    chainId = await submitter.readChainId();
+  } catch (error) {
+    throw new OperationError({
+      operation: signed.operation,
+      code: 'broadcast_failed',
+      message: `cannot read the direct submitter chain id for ${signed.operation}; nothing was broadcast: ${errorMessage(error)}`,
+      cause: error,
+    });
+  }
+  if (typeof chainId !== 'number' || !Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new OperationError({
+      operation: signed.operation,
+      code: 'broadcast_failed',
+      message: `direct submitter reported an invalid chain id (${String(chainId)}) for ${signed.operation}; nothing was broadcast`,
+    });
+  }
+  return chainId;
 }
 
 async function sendCall(

@@ -8,6 +8,7 @@
 import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { ExecutorKitError } from '../core/validation.js';
+import { redactRpcUrlsInText } from '../core/redact.js';
 import { registerChainCommands } from './commands/chain.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerOrderCommands } from './commands/order.js';
@@ -45,7 +46,7 @@ export async function main(argv = process.argv): Promise<void> {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error: unknown) => {
     if (error instanceof ExecutorKitError) {
-      console.error(`${error.name}: ${error.message}`);
+      console.error(redactRpcUrlsInText(`${error.name}: ${error.message}`));
       process.exitCode = 1;
       return;
     }

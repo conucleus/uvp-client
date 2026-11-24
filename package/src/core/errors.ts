@@ -10,6 +10,7 @@ import { ValidationError } from './validation.js';
 export type ExecutorKitErrorKind =
   | 'unauthorized'
   | 'duplicate_signal'
+  | 'duplicate_trigger_key'
   | 'rpc_network'
   | 'insufficient_funds'
   | 'nonce_conflict'
@@ -56,6 +57,11 @@ const MESSAGE_PATTERNS: readonly ErrorMessagePattern[] = [
   {
     pattern: /SignalAlreadyExists|signal already exists|0xa2e92828/i,
     kind: 'duplicate_signal',
+    retryable: false,
+  },
+  {
+    pattern: /DuplicateTriggerKey/i,
+    kind: 'duplicate_trigger_key',
     retryable: false,
   },
   {

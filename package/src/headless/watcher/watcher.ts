@@ -9,6 +9,7 @@ import {
   parsePositiveInteger,
 } from '../../core/validation.js';
 import { ZERO_BYTES32 } from '../../core/constants.js';
+import { redactRpcUrl } from '../../core/redact.js';
 import { classifyExecutorKitError, type ClassifiedExecutorKitError } from '../../core/errors.js';
 import {
   HOOK_READY_TOPIC,
@@ -187,7 +188,7 @@ export class StateMachineWatcher {
 
   describe(): Record<string, unknown> {
     return {
-      rpcUrl: this.config.rpcUrl,
+      rpcUrl: redactRpcUrl(this.config.rpcUrl),
       stateMachineAddress: this.config.stateMachineAddress,
       stateMachines: this.config.stateMachines,
       chainId: this.config.chainId,

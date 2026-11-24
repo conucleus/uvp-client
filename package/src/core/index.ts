@@ -12,6 +12,8 @@ export * from './errors.js';
 export * from './events.js';
 export * from './evidence.js';
 export * from './operations.js';
+export * from './redact.js';
+export * from './registry-signing.js';
 export * from './registration.js';
 export * from './signal/index.js';
 export * from './status-words.js';
