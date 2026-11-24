@@ -8,7 +8,6 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   PLAN_COMMIT_PRIMARY_TYPE,
   SIGNAL_SUBMISSION_PRIMARY_TYPE,
-  STAGE_DOCK_SUPPLIER_SELECTION_PRIMARY_TYPE,
   STAGE_SUPPLIER_PATCH_PRIMARY_TYPE,
   STATE_MACHINE_ABI,
   STAGE_PATCH_MODULE_ABI,
@@ -158,13 +157,6 @@ describe('operation matrix', () => {
         signer: signerAccount,
       },
       {
-        label: 'stageDock.select',
-        input: stageDockSelectInput(signerAccount.address),
-        primaryType: STAGE_DOCK_SUPPLIER_SELECTION_PRIMARY_TYPE,
-        calls: ['selectStageDockSupplierFor'],
-        signer: signerAccount,
-      },
-      {
         label: 'registry.write',
         input: registryInput(signerAccount.address),
         primaryType: 'ZhixuRecord',
@@ -193,7 +185,7 @@ describe('operation matrix', () => {
     expect((finalize.args as readonly unknown[])[0]).toBe(planRegistrationFixture().planId);
   });
 
-  it('binds the selector signature to the supplier-scoped patch and dock calldata', async () => {
+  it('binds the selector signature to the supplier-scoped patch calldata', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const patch = await signOperation(prepareOperation(stageSupplierPatchInput(account.address)), account);
     const patchCall = decodeFunctionData({ abi: STAGE_PATCH_MODULE_ABI, data: patch.calls[0]!.data });
@@ -206,18 +198,6 @@ describe('operation matrix', () => {
       patchNonce: 3n,
     });
     expect((patchCall.args as readonly unknown[])[5]).toBe(patch.signature);
-
-    const dock = await signOperation(prepareOperation(stageDockSelectInput(account.address)), account);
-    const dockCall = decodeFunctionData({ abi: STAGE_PATCH_MODULE_ABI, data: dock.calls[0]!.data });
-    expect(dockCall.functionName).toBe('selectStageDockSupplierFor');
-    expect((dockCall.args as readonly unknown[])[2]).toEqual({
-      selectorStageId: bytes32('04'),
-      targetStageId: bytes32('05'),
-      dockId: bytes32('06'),
-      supplierId: bytes32('07'),
-      patchNonce: 1n,
-    });
-    expect((dockCall.args as readonly unknown[])[5]).toBe(dock.signature);
   });
 
   it('attaches an EIP-1271 contract signature to a signal.submit envelope', () => {

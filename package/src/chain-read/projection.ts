@@ -155,16 +155,6 @@ export function decodeSnapshotProjection(raw: ChainProjectionSnapshot): Projecti
         "snapshot.stateMachineOrders",
         decodeOrderWire,
       ),
-      stateMachineDocks: decodeRecord(
-        snapshot.stateMachineDocks,
-        "snapshot.stateMachineDocks",
-        decodeDockWire,
-      ),
-      stateMachineDockBindings: decodeRecord(
-        snapshot.stateMachineDockBindings,
-        "snapshot.stateMachineDockBindings",
-        decodeDockBindingWire,
-      ),
       stateMachineTasks: decodeRecord(
         snapshot.stateMachineTasks,
         "snapshot.stateMachineTasks",

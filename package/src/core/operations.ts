@@ -11,13 +11,10 @@
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 import {
   buildApplyStageSupplierPatchForCall,
-  buildSelectStageDockSupplierForCall,
   buildSignalSubmissionTypedData,
-  buildStageDockSupplierSelectionTypedData,
   buildStageSupplierPatchTypedData,
   buildSubmitSignalCall,
   type SelectorBindingPayload,
-  type StageDockSupplierSelectionPayload,
   type StageSupplierPatchCallPatch,
 } from '@uvp-eth/protocol-bindings';
 import { ZERO_BYTES32 } from './constants.js';
@@ -51,7 +48,6 @@ export const OPERATION_NAMES = [
   'order.trigger',
   'signal.submit',
   'stagePatch.submit',
-  'stageDock.select',
   'registry.write',
   'supplier.register',
   'timer.poke',
@@ -356,19 +352,6 @@ export interface StageSupplierPatchOperationInput {
   readonly candidateProof: readonly (Hex | string)[];
 }
 
-export interface StageDockSelectOperationInput {
-  readonly operation: 'stageDock.select';
-  readonly chainId: number;
-  readonly stagePatchModuleAddress: Address | string;
-  /** Selector wallet; signs the dock selection typed data. */
-  readonly signer: Address | string;
-  readonly planId: Hex | string;
-  readonly orderId: Hex | string;
-  readonly deadline: bigint | number | string;
-  readonly selection: StageDockSupplierSelectionPayload;
-  readonly bindingProof: SelectorBindingPayload;
-}
-
 export interface RegistryWriteOperationInput {
   readonly operation: 'registry.write';
   readonly signer: Address | string;
@@ -392,7 +375,6 @@ export type OperationInput =
   | OrderTriggerOperationInput
   | SignalSubmitOperationInput
   | StageSupplierPatchOperationInput
-  | StageDockSelectOperationInput
   | RegistryWriteOperationInput
   | SupplierRegisterOperationInput
   | TimerPokeOperationInput;
@@ -481,39 +463,6 @@ function prepareOperationInput(input: OperationInput): PreparedOperation {
             previousSupplierSignature: input.previousSupplierSignature,
             bindingProof: input.bindingProof,
             candidateProof: input.candidateProof,
-          },
-        ))],
-      };
-    }
-
-    case 'stageDock.select': {
-      const signer = normalizeAddressChecksummed(input.signer, 'signer');
-      const chainId = parsePositiveInteger(input.chainId, 'chainId');
-      const deadline = parseBigNumberish(input.deadline, 'deadline');
-      const typedData = buildStageDockSupplierSelectionTypedData({
-        chainId,
-        verifyingContract: input.stagePatchModuleAddress,
-        planId: input.planId,
-        orderId: input.orderId,
-        selector: signer,
-        deadline,
-        selection: input.selection,
-      });
-      return {
-        operation: 'stageDock.select',
-        chainId,
-        signer,
-        typedData,
-        buildCalls: (signature) => [callOf(buildSelectStageDockSupplierForCall(
-          { stagePatchModuleAddress: input.stagePatchModuleAddress, chainId },
-          {
-            planId: input.planId,
-            orderId: input.orderId,
-            selection: input.selection,
-            bindingProof: input.bindingProof,
-            selector: signer,
-            deadline,
-            signature,
           },
         ))],
       };
