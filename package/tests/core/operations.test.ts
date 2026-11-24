@@ -187,7 +187,7 @@ describe('operation matrix', () => {
     const plan = await signOperation(prepareOperation(registrationInput(account.address)), account);
     const commit = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: plan.calls[0]!.data });
     expect(commit.functionName).toBe('commitPlan');
-    expect((commit.args as readonly unknown[])[4]).toBe(plan.signature);
+    expect((commit.args as readonly unknown[])[3]).toBe(plan.signature);
     const finalize = decodeFunctionData({ abi: STATE_MACHINE_ABI, data: plan.calls[1]!.data });
     expect(finalize.functionName).toBe('finalizePlan');
     expect((finalize.args as readonly unknown[])[0]).toBe(planRegistrationFixture().planId);

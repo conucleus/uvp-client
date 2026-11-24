@@ -1,12 +1,12 @@
 /**
  * Engine contract read surface: typed direct views of UVPStateMachine,
- * UVPStateMachineLens and UVPIdentityRegistry; ABI single source is
+ * UVPPlanMetadataModule and UVPIdentityRegistry; ABI single source is
  * @uvp-eth/protocol-bindings and any failed read is an explicit error.
  */
 import { createPublicClient, http, type Address, type Hex } from 'viem';
 import {
   STATE_MACHINE_ABI,
-  STATE_MACHINE_LENS_ABI,
+  PLAN_METADATA_MODULE_ABI,
   IDENTITY_REGISTRY_ABI,
 } from '@uvp-eth/protocol-bindings';
 import type { StageFilesReadClient } from './signal/files.js';
@@ -105,7 +105,7 @@ export type PlanCapabilitiesRootRead =
   | {
       readonly kind: 'unavailable';
       readonly planId: Hex;
-      readonly reason: 'lens_not_configured';
+      readonly reason: 'plan_metadata_module_not_configured';
     };
 
 export type SupplierRegistrationRead =
@@ -196,18 +196,18 @@ export async function readPlanCapabilitiesRoot(
 ): Promise<PlanCapabilitiesRootRead> {
   const read = normalizeStateMachineRead(config);
   const normalizedPlanId = bytes32Input(planId, 'planId');
-  const lens = await readOf(read, STATE_MACHINE_ABI, 'lens', read.stateMachineAddress, []);
-  const lensAddress = addressOf(lens, 'lens');
-  if (lensAddress === ZERO_ADDRESS) {
-    return { kind: 'unavailable', planId: normalizedPlanId, reason: 'lens_not_configured' };
+  const metadataModule = await readOf(read, STATE_MACHINE_ABI, 'planMetadataModule', read.stateMachineAddress, []);
+  const metadataModuleAddress = addressOf(metadataModule, 'planMetadataModule');
+  if (metadataModuleAddress === ZERO_ADDRESS) {
+    return { kind: 'unavailable', planId: normalizedPlanId, reason: 'plan_metadata_module_not_configured' };
   }
-  const capabilitiesRoot = await readOf(read, STATE_MACHINE_LENS_ABI, 'planCapabilitiesRoot', lensAddress, [
+  const capabilitiesRoot = await readOf(read, PLAN_METADATA_MODULE_ABI, 'capabilitiesRoot', metadataModuleAddress, [
     normalizedPlanId,
   ]);
   return {
     kind: 'available',
     planId: normalizedPlanId,
-    capabilitiesRoot: bytes32Of(capabilitiesRoot, 'planCapabilitiesRoot'),
+    capabilitiesRoot: bytes32Of(capabilitiesRoot, 'capabilitiesRoot'),
   };
 }
 

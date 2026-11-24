@@ -58,7 +58,6 @@ describe('registry.write signing gate', () => {
       hooksHash: bytes32('03'),
       capabilitiesRoot: bytes32('04'),
       supplierBindingsRoot: bytes32('05'),
-      fileWritersHash: bytes32('06'),
       deadline: SIGNAL_DEADLINE,
     });
 
