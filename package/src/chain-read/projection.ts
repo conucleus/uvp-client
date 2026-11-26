@@ -22,9 +22,12 @@ import {
   type ChainDerivedSignal,
   type ChainDock,
   type ChainDockBinding,
+  type ChainDockLinkWindow,
   type ChainHook,
   type ChainHookStatus,
   type ChainModuleProjection,
+  type ChainOrderDockLink,
+  type ChainOrderDockLinks,
   type ChainOrderProjection,
   type ChainOrderStatus,
   type ChainPlanCapabilityEnrichmentStatus,
@@ -79,6 +82,9 @@ export type StateMachineStageFileEntryProjection = RevivedWire<ChainStageFileEnt
 export type StateMachineStageFileMapProjection = RevivedWire<ChainStageFileMap>;
 export type StateMachineDockProjection = RevivedWire<ChainDock>;
 export type StateMachineDockBindingProjection = RevivedWire<ChainDockBinding>;
+export type StateMachineDockLinkWindowProjection = RevivedWire<ChainDockLinkWindow>;
+export type StateMachineOrderDockLinkProjection = RevivedWire<ChainOrderDockLink>;
+export type StateMachineOrderDockLinksProjection = RevivedWire<ChainOrderDockLinks>;
 export type StateMachineHookProjection = RevivedWire<ChainHook>;
 export type StateMachineTaskSubmitSignalProjection = RevivedWire<ChainSubmitSignal>;
 export type StateMachineTaskProjection = RevivedWire<ChainTaskProjection>;

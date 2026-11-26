@@ -7,6 +7,7 @@
  * compiler access in the Node-only /server entry.
  */
 export * from './constants.js';
+export * from './dock-controller.js';
 export * from './engine-read.js';
 export * from './errors.js';
 export * from './events.js';

@@ -11,6 +11,8 @@ import {
   decodeSnapshotProjection,
   decodeSyncStateProjection,
   decodeTaskProjection,
+  type ChainOrderDockLink,
+  type ChainOrderDockLinks,
   type ChainOrderProjection,
   type ChainProof,
   type ChainProjectionSnapshot,
@@ -19,6 +21,7 @@ import {
   type ChainStageSupplierAssignment,
   type ChainSyncState,
   type ChainTaskProjection,
+  type StateMachineOrderDockLinksProjection,
 } from '../../src/chain-read/index.js';
 
 const address = (digit: string): Address => `0x${digit.repeat(40)}` as Address;
@@ -525,5 +528,53 @@ describe('chain read client', () => {
       code: 'invalid_response',
       retryable: false,
     });
+  });
+
+  it('preserves ChainOrderProjection.dockLinks and revives link provenance block numbers', async () => {
+    const link: ChainOrderDockLink = {
+      linkId: bytes32('7'),
+      dkid: bytes32('8'),
+      fromPlanId: PLAN_ID,
+      fromOrderId: bytes32('9'),
+      toPlanId: PLAN_ID,
+      toOrderId: ORDER_ID,
+      toStageId: STAGE_ID,
+      toConsentStageId: STAGE_ID,
+      toConsent: WALLET,
+      boundAt: '1700000000',
+      windows: [
+        {
+          outputIndex: 0,
+          signalId: HOOK_ID,
+          active: true,
+          srcSatisfied: true,
+          srcDueAt: '0',
+          dstAdmissionReady: true,
+          emitted: false,
+        },
+      ],
+      linkedAt: provenanceAt(12),
+      proof: proofAt(12),
+    };
+    const dockLinks: ChainOrderDockLinks = { incoming: [link], outgoing: [] };
+    const orderWithDockLinks: ChainOrderProjection = { ...ORDER, dockLinks };
+
+    const client = createChainReadClient({
+      baseUrl: BASE_URL,
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ orders: [orderWithDockLinks] }),
+      }),
+    });
+
+    const orders = await client.getOrdersByOrderId(ORDER_ID);
+    expect(orders[0]?.dockLinks).toEqual(dockLinks);
+
+    const revived = decodeOrderProjection(orders[0]);
+    const revivedDockLinks: StateMachineOrderDockLinksProjection | undefined = revived.dockLinks;
+    expect(revivedDockLinks?.incoming[0]?.linkedAt.blockNumber).toBe(12n);
+    expect(revivedDockLinks?.incoming[0]?.proof.blockNumber).toBe(12n);
+    expect(revivedDockLinks?.incoming[0]?.windows?.[0]?.dstAdmissionReady).toBe(true);
   });
 });
